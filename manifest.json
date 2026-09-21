@@ -94,7 +94,8 @@
     "https://calendar.google.com/*",
     "https://www.googleapis.com/*",
     "https://trackapi.nutritionix.com/*",
-    "https://api.nal.usda.gov/*"
+    "https://api.nal.usda.gov/*",
+    "https://generativelanguage.googleapis.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

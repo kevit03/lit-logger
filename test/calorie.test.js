@@ -147,6 +147,33 @@ async function run() {
     console.log('[PASS] Cup weights are food-aware and match real-world rice/pasta calorie counts, not a flat liquid weight');
   }
 
+  // 4c. Hotfix: direct weight/volume units (g, kg, lb, ml, l) were not
+  //     recognized at all -- e.g. "200g chicken" fell through to the
+  //     "no unit matched" default, which multiplies the number as a COUNT of
+  //     100g items (200 x 100g = 20,000g, a 100x overestimate) instead of
+  //     treating 200 as the actual gram amount. Also covers the common
+  //     no-space form ("200g", not "200 g"), which a plain \b-boundary regex
+  //     cannot split since a digit and letter are both word characters.
+  {
+    const CT = freshCalorieTracker();
+    assert.strictEqual(CT.estimateGrams('200g chicken'), 200, 'grams, no space, must not multiply as a 100g-item count');
+    assert.strictEqual(CT.estimateGrams('200 g chicken'), 200, 'grams, spaced');
+    assert.strictEqual(CT.estimateGrams('150 grams rice'), 150);
+    assert.strictEqual(CT.estimateGrams('2kg rice'), 2000, 'kilograms convert to grams');
+    assert.strictEqual(CT.estimateGrams('100ml milk'), 100, 'milliliters approximate 1:1 with grams');
+    assert.strictEqual(CT.estimateGrams('1 l milk'), 1000, 'liters convert to grams');
+    assert.ok(Math.abs(CT.estimateGrams('0.5 lb chicken') - 226.8) < 0.1, 'pounds convert to grams');
+
+    const result = await CT.estimateCalories({
+      query: '200g chicken breast',
+      credentials: { usdaApiKey: 'usda-key' },
+      fetchImpl: () => jsonResponse({ foods: [{ description: 'Chicken, breast, roasted', foodNutrients: [{ nutrientId: 1008, value: 165 }] }] })
+    });
+    // 165 kcal/100g x 200g = 330 kcal (not 165 kcal/100g x 20,000g = 33,000 kcal)
+    assert.strictEqual(result.calories, 330);
+    console.log('[PASS] Hotfix: direct weight/volume units (g/kg/lb/ml/l), spaced or not, convert correctly instead of as an item count');
+  }
+
   // 5. Neither provider configured -> manual entry requested, no fetch call made.
   {
     const CT = freshCalorieTracker();
@@ -197,6 +224,44 @@ async function run() {
     assert.strictEqual(noKeyResult.isFood, null);
     assert.strictEqual(called, false, 'no network call without a configured Gemini key');
     console.log('[PASS] AI classify/estimate: known-food detection, food vs. non-food, no-key short circuit');
+  }
+
+  // 5c. Fallback robustness: without generationConfig.responseMimeType (left
+  //     off since it isn't reliably compatible with the search tool), an
+  //     offbeat/"random" input is more likely to make the model wrap its
+  //     JSON in a sentence or a markdown fence instead of returning it bare.
+  //     A plain JSON.parse on the whole response used to break on exactly
+  //     that and silently fall back to manual entry. extractGeminiJson must
+  //     recover the embedded object either way.
+  {
+    const CT = freshCalorieTracker();
+    assert.deepStrictEqual(
+      CT.extractGeminiJson('Sure, here you go: {"isFood": false, "calories": null, "summary": "not edible"} Hope that helps!'),
+      { isFood: false, calories: null, summary: 'not edible' },
+      'JSON wrapped in a sentence must still be recovered'
+    );
+    assert.deepStrictEqual(
+      CT.extractGeminiJson('```json\n{"calories": 120, "summary": "typical serving"}\n```'),
+      { calories: 120, summary: 'typical serving' },
+      'JSON wrapped in a markdown fence must still be recovered'
+    );
+    assert.strictEqual(CT.extractGeminiJson('I cannot help with that request.'), null, 'genuinely non-JSON text returns null, not a throw');
+    assert.strictEqual(CT.extractGeminiJson(''), null);
+    assert.strictEqual(CT.extractGeminiJson(null), null);
+
+    // End-to-end: a "random" input where Gemini answers in prose-wrapped
+    // JSON must still resolve to a usable result, not fall through to the
+    // manual-entry dead end.
+    const messyResult = await CT.estimateCaloriesWithAI({
+      text: 'purple monkey dishwasher',
+      credentials: { geminiApiKey: 'key' },
+      fetchImpl: () => jsonResponse({
+        candidates: [{ content: { parts: [{ text: 'Here is my answer: {"isFood": false, "calories": null, "summary": "not a food or drink"} let me know if you need more!' }] } }]
+      })
+    });
+    assert.strictEqual(messyResult.isFood, false);
+    assert.strictEqual(messyResult.reason, 'not-food');
+    console.log('[PASS] Prose-wrapped or fenced JSON from the AI is still parsed instead of falling through to a dead-end fallback');
   }
 
   // 5c. Leading quantity is parsed off, priced per unit, then multiplied

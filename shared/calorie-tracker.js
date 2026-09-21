@@ -164,7 +164,20 @@ const CalorieTracker = (() => {
 
   const GRAM_ESTIMATES = {
     slice: 30, slices: 30, oz: 28.35, ounce: 28.35, ounces: 28.35,
-    tbsp: 15, tablespoon: 15, tablespoons: 15, piece: 100, pieces: 100, egg: 50, eggs: 50
+    tbsp: 15, tablespoon: 15, tablespoons: 15, piece: 100, pieces: 100, egg: 50, eggs: 50,
+    // Direct weight/volume units: these are a hotfix for a real bug -- when a
+    // food isn't matched by Nutritionix's natural-language parsing (which
+    // handles any unit fine) and falls to this per-clause USDA tier, a plain
+    // gram/kg/lb/ml/l amount was being treated as a COUNT of 100g "items"
+    // instead of the actual weight itself, e.g. "200g chicken" computed as
+    // 200 x 100g = 20,000g (a 100x overestimate) instead of 200g. Grams and
+    // milliliters convert 1:1 (ml approximated as water density, which is
+    // close enough for most foods/drinks at this tier's precision).
+    g: 1, gram: 1, grams: 1,
+    kg: 1000, kilogram: 1000, kilograms: 1000,
+    lb: 453.592, lbs: 453.592, pound: 453.592, pounds: 453.592,
+    ml: 1, milliliter: 1, milliliters: 1,
+    l: 1000, liter: 1000, liters: 1000, litre: 1000, litres: 1000
   };
 
   // "1 cup" is not one weight -- a cup of milk (~240g) is nearly twice a cup
@@ -194,12 +207,19 @@ const CalorieTracker = (() => {
   }
 
   function estimateGrams(term) {
-    const qtyMatch = term.match(/^(\d+(?:\.\d+)?)/);
+    // "\b" doesn't split a digit from an immediately-following letter (both
+    // are word characters), so "200g" alone never matched the unit regex --
+    // only the (rarer) spaced-out "200 g" did. Inserting a space first makes
+    // both forms parse the same way.
+    const normalized = String(term || '').replace(/(\d)([a-zA-Z])/g, '$1 $2');
+    const qtyMatch = normalized.match(/^(\d+(?:\.\d+)?)/);
     const qty = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
-    const unitMatch = term.toLowerCase().match(/\b(slices?|cups?|oz|ounces?|tbsp|tablespoons?|pieces?|eggs?)\b/);
+    const unitMatch = normalized.toLowerCase().match(
+      /\b(slices?|cups?|oz|ounces?|tbsp|tablespoons?|pieces?|eggs?|kilograms?|kg|grams?|g|pounds?|lbs?|milliliters?|ml|liters?|litres?|l)\b/
+    );
     if (!unitMatch) return qty * 100;
     const unit = unitMatch[1].toLowerCase();
-    if (unit === 'cup' || unit === 'cups') return qty * cupGramsFor(term);
+    if (unit === 'cup' || unit === 'cups') return qty * cupGramsFor(normalized);
     return qty * (GRAM_ESTIMATES[unit] || 100);
   }
 
@@ -354,16 +374,7 @@ const CalorieTracker = (() => {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const raw = data && data.candidates && data.candidates[0] && data.candidates[0].content
-      && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
-      && data.candidates[0].content.parts[0].text;
-    if (!raw) return null;
-    let parsed;
-    try {
-      parsed = JSON.parse(String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim());
-    } catch (e) {
-      return null;
-    }
+    const parsed = extractGeminiJson(extractGeminiText(data));
     if (!parsed || !isFinite(Number(parsed.calories))) return null;
     return { calories: Math.round(Number(parsed.calories)), summary: String(parsed.summary || '').trim() };
   }
@@ -373,6 +384,36 @@ const CalorieTracker = (() => {
   // real nutrition data up on the web instead of relying solely on what it
   // already "knows", for foods neither Nutritionix nor USDA recognized.
   const GEMINI_SEARCH_TOOLS = [{ google_search: {} }];
+
+  function extractGeminiText(data) {
+    return (data && data.candidates && data.candidates[0] && data.candidates[0].content
+      && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
+      && data.candidates[0].content.parts[0].text) || null;
+  }
+
+  // The prompt asks for "ONLY strict JSON", but that's not enforced the way
+  // generationConfig.responseMimeType would (that's left off here since it
+  // isn't reliably compatible with the google_search tool). For offbeat or
+  // ambiguous input, the model is more likely to wrap the JSON in a
+  // sentence or a markdown fence instead of returning it bare -- a plain
+  // `JSON.parse` on the whole trimmed string broke on exactly that, which is
+  // what made "random" inputs silently fall through to manual entry more
+  // than they should have. Stripping fences first, then falling back to
+  // pulling out the first {...} block, recovers those cases too.
+  function extractGeminiJson(raw) {
+    if (!raw) return null;
+    const cleaned = String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch (e) { /* fall through to pulling out an embedded {...} block */ }
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (e) {
+      return null;
+    }
+  }
 
   // Used for the known-food path once Nutritionix/USDA have both failed to
   // match `query` (which already states quantity, e.g. "2 slices wheat
@@ -397,16 +438,7 @@ const CalorieTracker = (() => {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const raw = data && data.candidates && data.candidates[0] && data.candidates[0].content
-      && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
-      && data.candidates[0].content.parts[0].text;
-    if (!raw) return null;
-    let parsed;
-    try {
-      parsed = JSON.parse(String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim());
-    } catch (e) {
-      return null;
-    }
+    const parsed = extractGeminiJson(extractGeminiText(data));
     if (!parsed || !isFinite(Number(parsed.calories))) return null;
     return { calories: Math.round(Number(parsed.calories)), summary: String(parsed.summary || '').trim() };
   }
@@ -451,16 +483,7 @@ const CalorieTracker = (() => {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const raw = data && data.candidates && data.candidates[0] && data.candidates[0].content
-      && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
-      && data.candidates[0].content.parts[0].text;
-    if (!raw) return null;
-    let parsed;
-    try {
-      parsed = JSON.parse(String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim());
-    } catch (e) {
-      return null;
-    }
+    const parsed = extractGeminiJson(extractGeminiText(data));
     if (!parsed || typeof parsed.isFood !== 'boolean') return null;
     const perUnitCalories = parsed.isFood ? Math.round(Number(parsed.calories) || 0) : null;
     return { isFood: parsed.isFood, perUnitCalories, summary: String(parsed.summary || '').trim() };
@@ -586,6 +609,7 @@ const CalorieTracker = (() => {
     queryGeminiFoodCheck,
     queryGeminiCalorieLookup,
     queryGeminiArbitrate,
+    extractGeminiJson,
     candidatesAgree,
     splitFoodTerms,
     estimateGrams,

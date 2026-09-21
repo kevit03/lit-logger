@@ -1909,7 +1909,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     questionIndex: 0,
     answers: {},
     initialized: false,
-    logDate: '' // 'YYYY-MM-DD'; defaults to today in initCalorieChatOnce
+    logDate: '', // 'YYYY-MM-DD'; defaults to today in initCalorieChatOnce
+    lastQuery: null,
+    lastResult: null
   };
 
   function calorieMetric() {
@@ -1963,6 +1965,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         'That doesn\'t look like food' + suffix + ' — enter the calories yourself if you want to log it anyway:',
         'Doesn\'t seem to be something edible' + suffix + ' — you can still log a number by hand below:',
         'Not sure that\'s food' + suffix + ' — feel free to enter calories manually if you want it logged:'
+      ]);
+    },
+    // Distinct from the "no key configured" message below: this is for when
+    // Gemini WAS configured and tried, but the call errored or its answer
+    // couldn't be parsed -- telling someone with a working key "no API key
+    // configured" would be actively misleading.
+    aiUnavailable(query) {
+      return pickVariant([
+        'Couldn\'t get an automatic read on "' + query + '" — enter the calories yourself:',
+        'That one stumped the lookup — go ahead and enter the calories for "' + query + '" manually:',
+        'No luck estimating "' + query + '" automatically this time — you can log the calories by hand:'
       ]);
     },
     logged(calVal, dayTotal, budget, remaining, dayLabel) {
@@ -2033,6 +2046,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function showCalorieConfirm(query, result) {
     calorieChat.stage = 'confirming';
+    calorieChat.lastQuery = query;
+    calorieChat.lastResult = result;
     const list = el('calorie-chat-messages');
     if (!list) return;
     const wrap = document.createElement('div');
@@ -2060,6 +2075,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } else if (result.reason === 'not-food') {
       summary.textContent = CALORIE_COPY.notFood(result.summary);
+    } else if (result.reason === 'ai-error') {
+      summary.textContent = CALORIE_COPY.aiUnavailable(query);
     } else {
       summary.textContent = 'Couldn\'t look up "' + query + '" (no API key configured yet, or nothing matched). Enter the calories yourself:';
     }
@@ -2160,6 +2177,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     calorieChat.originalText = trimmed;
     calorieChat.stage = 'working';
     const credentials = await CalorieTracker.CalorieKeys.getCredentials();
+    let aiFailureReason = null;
     if (credentials.geminiApiKey) {
       setCalorieComposerEnabled(false, 'Checking...');
       addCalorieMessage(pickVariant(CALORIE_COPY.checking), 'system');
@@ -2173,13 +2191,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         showCalorieConfirm(trimmed, result);
         return;
       }
-      // AI configured but unavailable/errored this time -- fall through to
-      // the no-key behavior below rather than leaving the user stuck.
+      // AI configured but unavailable/errored this time -- fall through, but
+      // remember why so the eventual manual-entry message doesn't wrongly
+      // tell someone with a working key that "no API key is configured".
+      aiFailureReason = result.reason || 'ai-error';
     }
     if (CalorieTracker.hasKnownFoodRule(trimmed)) {
       startClarifyingFlow(trimmed);
     } else {
-      showCalorieConfirm(trimmed, { calories: null, source: 'manual', reason: 'no-match' });
+      showCalorieConfirm(trimmed, { calories: null, source: 'manual', reason: aiFailureReason || 'no-match' });
     }
   }
 
@@ -2302,12 +2322,176 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderFoodLog();
   }
 
+  // A plain-text snapshot of the current calorie chat, meant to be pasted
+  // straight into a bug report: the visible transcript, the last estimate
+  // this session attempted (source/calories/summary/checkedAgainst -- never
+  // the raw API keys, only whether each is configured), and the date/budget
+  // context so a report doesn't need a screenshot to be actionable.
+  function buildCalorieDebugText() {
+    const lines = [];
+    lines.push('Calorie chat debug dump -- ' + new Date().toISOString());
+    try {
+      lines.push('Extension version: ' + chrome.runtime.getManifest().version);
+    } catch (err) { /* not running as an extension (e.g. dev shim) */ }
+    lines.push('Log date: ' + (calorieChat.logDate || '(unset)'));
+    lines.push('Chat stage: ' + calorieChat.stage);
+
+    const messages = Array.from(document.querySelectorAll('#calorie-chat-messages .calorie-msg'));
+    lines.push('', '--- Transcript (' + messages.length + ' messages) ---');
+    messages.forEach(msgEl => {
+      const role = Array.from(msgEl.classList).find(c => c !== 'calorie-msg') || 'msg';
+      lines.push('[' + role + '] ' + msgEl.textContent.trim());
+    });
+
+    lines.push('', '--- Last estimate attempt ---');
+    if (calorieChat.lastQuery !== null) {
+      lines.push('Query: ' + calorieChat.lastQuery);
+      lines.push('Result: ' + JSON.stringify(calorieChat.lastResult));
+    } else {
+      lines.push('(none yet this session)');
+    }
+
+    lines.push('', '--- Context ---');
+    const m = calorieMetric();
+    if (m && stats) {
+      const budget = goalFor(m);
+      const isToday = calorieChat.logDate === stats.todayStr;
+      const total = (isToday ? stats.today.calories : (stats.dailyMap[calorieChat.logDate] || {}).calories) || 0;
+      lines.push('Budget: ' + budget + ' kcal, logged for that date: ' + total + ' kcal');
+    }
+    return lines.join('\n');
+  }
+
+  // A misbehaving chat can make this very easy to mash; each open GitHub tab
+  // is a real, visible action (and the issue body carries whatever the last
+  // estimate attempt was), so it is rate-limited like any other send action:
+  // at most 2 within a rolling 60s window. The button is disabled for the
+  // remainder of that window and re-enabled automatically, not just left to
+  // silently reject further clicks.
+  const DEBUG_REPORT_MAX_PER_WINDOW = 2;
+  const DEBUG_REPORT_WINDOW_MS = 60000;
+  const DEBUG_REPORT_REPO_URL = 'https://github.com/kevit03/tracker';
+  // Chrome's practical safe ceiling for a GET URL is ~8000 chars; stay well
+  // under it since encodeURIComponent can triple the length of some text.
+  const DEBUG_REPORT_MAX_BODY_CHARS = 6000;
+  let debugReportClicks = [];
+  let debugReportReenableTimer = null;
+
+  function pruneDebugReportClicks() {
+    const now = Date.now();
+    debugReportClicks = debugReportClicks.filter(t => now - t < DEBUG_REPORT_WINDOW_MS);
+    return now;
+  }
+
+  function updateDebugBtnAvailability() {
+    const btn = el('calorie-debug-btn');
+    if (!btn) return;
+    const now = pruneDebugReportClicks();
+    const atLimit = debugReportClicks.length >= DEBUG_REPORT_MAX_PER_WINDOW;
+    btn.disabled = atLimit;
+    clearTimeout(debugReportReenableTimer);
+    if (atLimit) {
+      const waitMs = DEBUG_REPORT_WINDOW_MS - (now - debugReportClicks[0]) + 50;
+      debugReportReenableTimer = setTimeout(updateDebugBtnAvailability, Math.max(0, waitMs));
+    }
+  }
+
+  // Builds the debug dump, copies it to the clipboard (best effort, kept as
+  // a fallback), and opens a pre-filled "new issue" tab on this project's own
+  // GitHub repo so the report is actually sent somewhere a maintainer will
+  // see it rather than left sitting on the clipboard. The user still clicks
+  // Submit on GitHub's page -- this never auto-submits anything on its own.
+  async function sendCalorieDebugReport() {
+    const text = buildCalorieDebugText();
+    // API keys are configured booleans only -- never the actual key values --
+    // appended after the fact so a failed clipboard write above still shows
+    // the rest of the dump was built correctly.
+    let credsLine = 'Keys configured: (unknown)';
+    try {
+      const creds = await CalorieTracker.CalorieKeys.getCredentials();
+      credsLine = 'Keys configured: nutritionix=' + !!(creds.nutritionixAppId && creds.nutritionixApiKey)
+        + ', usda=' + !!creds.usdaApiKey + ', gemini=' + !!creds.geminiApiKey;
+    } catch (err) { /* leave as unknown */ }
+    const fullText = text + '\n' + credsLine + '\n';
+
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(fullText);
+      copied = true;
+    } catch (err) {
+      // Clipboard API can be flaky/permission-gated inside an extension
+      // popup; fall back to the classic hidden-textarea copy trick.
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = fullText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        copied = true;
+      } catch (err2) { /* leave copied = false */ }
+    }
+
+    const truncated = fullText.length > DEBUG_REPORT_MAX_BODY_CHARS;
+    const body = truncated
+      ? fullText.slice(0, DEBUG_REPORT_MAX_BODY_CHARS) + '\n\n...(truncated -- the full report is on your clipboard)'
+      : fullText;
+    const issueUrl = DEBUG_REPORT_REPO_URL + '/issues/new?title=' + encodeURIComponent('Calorie tracker bug report')
+      + '&body=' + encodeURIComponent(body);
+
+    let opened = false;
+    try {
+      if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+        await new Promise((resolve, reject) => {
+          chrome.tabs.create({ url: issueUrl }, (tab) => {
+            if (chrome.runtime.lastError || !tab) reject(chrome.runtime.lastError || new Error('tab not created'));
+            else resolve(tab);
+          });
+        });
+        opened = true;
+      } else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+        opened = !!window.open(issueUrl, '_blank');
+      }
+    } catch (err) {
+      opened = false;
+    }
+
+    if (opened) {
+      showStatus(copied ? 'Report opened on GitHub (and copied to clipboard) -- click Submit there to send it.' : 'Report opened on GitHub -- click Submit there to send it.', 'ok');
+    } else if (copied) {
+      showStatus('Could not open GitHub automatically. Debug info copied to clipboard -- paste it into a new issue.', 'error');
+    } else {
+      showStatus('Could not send or copy the report. Try again in a moment.', 'error');
+    }
+  }
+
+  async function handleDebugReportClick() {
+    const now = pruneDebugReportClicks();
+    if (debugReportClicks.length >= DEBUG_REPORT_MAX_PER_WINDOW) {
+      const waitSeconds = Math.ceil((DEBUG_REPORT_WINDOW_MS - (now - debugReportClicks[0])) / 1000);
+      showStatus('You can send at most ' + DEBUG_REPORT_MAX_PER_WINDOW + ' reports per minute. Try again in ' + waitSeconds + 's.', 'error');
+      return;
+    }
+    debugReportClicks.push(now);
+    updateDebugBtnAvailability();
+    try {
+      await sendCalorieDebugReport();
+    } catch (err) {
+      showStatus('Could not send the report: ' + errMsg(err), 'error');
+    }
+  }
+
   function initCalorieChatOnce() {
     if (calorieChat.initialized) return;
     calorieChat.initialized = true;
     const form = el('calorie-chat-form');
     const input = el('calorie-chat-input');
     if (!form || !input) return;
+
+    const debugBtn = el('calorie-debug-btn');
+    if (debugBtn) debugBtn.addEventListener('click', handleDebugReportClick);
 
     const dateInput = el('calorie-log-date');
     const todayBtn = el('calorie-log-date-today-btn');
