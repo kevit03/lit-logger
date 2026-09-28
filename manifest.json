@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Locked In: Job & LeetCode Tracker",
+  "name": "LIT: Job & LeetCode Tracker",
   "version": "1.3.0",
   "description": "Track job applications, LeetCodes, and daily streaks with a direct visual overlay on Google Calendar. Auto-logs LeetCode and NeetCode solves and ATS job applications.",
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Locked In",
+    "default_title": "LIT",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -92,10 +92,7 @@
   ],
   "host_permissions": [
     "https://calendar.google.com/*",
-    "https://www.googleapis.com/*",
-    "https://trackapi.nutritionix.com/*",
-    "https://api.nal.usda.gov/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://www.googleapis.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

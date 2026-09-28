@@ -265,7 +265,7 @@ async function run() {
     assert.ok(shadow.querySelector('style'), 'styles are scoped inside the shadow root');
     const toasts = shadow.querySelectorAll('.toast');
     assert.strictEqual(toasts.length, 2, 'one toast per logged activity (jobs toast was suppressed)');
-    assert.strictEqual(toasts[0].textContent, 'Locked In:Logged Two Sum (+1)');
+    assert.strictEqual(toasts[0].textContent, 'LIT:Logged Two Sum (+1)');
     assert.strictEqual(toasts[0].getAttribute('role'), 'status');
     const EMOJI = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/u;
     assert.ok(!EMOJI.test(toasts[0].textContent), 'toast text is emoji-free');

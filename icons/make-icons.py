@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Renders the Locked In padlock mark to icons/icon{16,48,128}.png.
+"""Renders the LIT padlock mark to icons/icon{16,48,128}.png.
 
 A closed padlock (shackle engaged: "locked in") in white on a blue rounded
 square, the same mark the popup header and calendar dock draw inline as SVG.

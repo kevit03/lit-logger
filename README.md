@@ -1,6 +1,6 @@
-<p align="center"><img src="icons/icon128.png" width="96" alt="Locked In padlock mark"></p>
+<p align="center"><img src="icons/icon128.png" width="96" alt="LIT padlock mark"></p>
 
-# Locked In Tracker
+# LIT (Locked In Tracker)
 
 A Chrome extension that counts applications sent and problems solved, shows every day's numbers on your calendar, and logs most of it for you automatically. 
 

@@ -1,4 +1,4 @@
-// Google Calendar Content Script — Locked In
+// Google Calendar Content Script — LIT
 //
 // Shows each day's counts over Google Calendar, in a layer of our own that
 // never touches Calendar's DOM, with a quick-add button per day. Everything
@@ -184,7 +184,7 @@
       ]);
     } catch (err) {
       if (isContextError(err)) teardown();
-      else console.warn('Locked In: could not read tracker data', err);
+      else console.warn('LIT: could not read tracker data', err);
       return;
     }
     renderBadges();
@@ -445,7 +445,7 @@
       logs = await TrackerStorage.getLogs({ startDate: dateStr, endDate: dateStr });
     } catch (err) {
       if (isContextError(err)) teardown();
-      else console.warn('Locked In: could not read entries', err);
+      else console.warn('LIT: could not read entries', err);
       return;
     }
     const mMap = metricsMap();
@@ -516,7 +516,7 @@
       } catch (err) {
         backdrop.remove();
         if (isContextError(err)) teardown();
-        else console.warn('Locked In: could not save the entry', err);
+        else console.warn('LIT: could not save the entry', err);
         return;
       }
       backdrop.remove();

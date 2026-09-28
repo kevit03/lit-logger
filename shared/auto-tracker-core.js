@@ -45,7 +45,7 @@
 //     meta?: { difficulty, language, runtime, category, ... }
 //   }
 const AutoTrackerCore = (() => {
-  const TOAST_PREFIX = 'Locked In';
+  const TOAST_PREFIX = 'LIT';
   const TOAST_HOST_ID = 'pt-auto-toast-host';
   const TOAST_DURATION_MS = 4000;
 

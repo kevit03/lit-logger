@@ -117,17 +117,12 @@ async function run() {
   assert.ok(Array.isArray(manifest.host_permissions), 'host_permissions must be an array');
   assert.ok(manifest.host_permissions.some(h => h.includes('calendar.google.com')), 'host_permissions must include Google Calendar');
   assert.ok(manifest.host_permissions.some(h => h.includes('googleapis.com')), 'host_permissions must include Google APIs');
-  // Exact-origin checks: "googleapis.com" above only matched by substring,
-  // which www.googleapis.com already satisfies without actually granting
-  // access to these other subdomains -- each API the calorie tracker fetches
-  // from needs its own explicit host_permissions entry or Chrome blocks it
-  // at runtime even though nothing in a mocked-fetch unit test would catch that.
   [
     'https://trackapi.nutritionix.com/*',
     'https://api.nal.usda.gov/*',
     'https://generativelanguage.googleapis.com/*'
   ].forEach(pattern => {
-    assert.ok(manifest.host_permissions.includes(pattern), `host_permissions must include ${pattern}`);
+    assert.ok(!manifest.host_permissions.includes(pattern), `host_permissions must not include ${pattern}`);
   });
 
   // 6. Icons

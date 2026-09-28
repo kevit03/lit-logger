@@ -13,6 +13,13 @@ function getFreshStorage(initialStore = {}) {
   return { mock, TrackerStorage, TrackerAuth };
 }
 
+function baseMetrics() {
+  return [
+    { id: 'jobs', name: 'Job Applications', unit: 'jobs', dailyGoal: 5, isDefault: true },
+    { id: 'leetcode', name: 'LeetCode', unit: 'problems', dailyGoal: 2, isDefault: true }
+  ];
+}
+
 async function run() {
   console.log('--- Running test/metrics.test.js ---');
 
@@ -181,6 +188,22 @@ async function run() {
     assert.ok(typeof history.dailyAverage === 'number', 'Daily average should be a number');
 
     console.log('[PASS] Daily goal targets and activity history computation');
+    delete global.TrackerAuth;
+    delete global.TrackerStorage;
+    uninstallMockChrome();
+  }
+
+  // Legacy built-in calorie metric saved by older installs stays hidden
+  {
+    const { TrackerStorage } = getFreshStorage({
+      metrics: baseMetrics().concat([
+        { id: 'calories', name: 'Calories', unit: 'kcal', dailyGoal: 2000, isBudget: true, isDefault: true }
+      ])
+    });
+    const metrics = await TrackerStorage.getMetrics();
+    assert.deepStrictEqual(metrics.map(m => m.id).sort(), ['jobs', 'leetcode'], 'legacy calorie metric must not be returned');
+
+    console.log('[PASS] Legacy calorie metric filtered out');
     delete global.TrackerAuth;
     delete global.TrackerStorage;
     uninstallMockChrome();

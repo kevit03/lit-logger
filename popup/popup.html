@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Locked In</title>
+  <title>LIT</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <header class="header">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/></svg></span>
-        <span class="brand-title">Locked In</span>
+        <span class="brand-title">LIT</span>
       </div>
       <div class="header-right">
         <button id="theme-toggle-btn" class="theme-toggle-btn" type="button" title="Toggle theme" aria-label="Toggle light and dark theme">Dark</button>
@@ -62,45 +62,6 @@
           <span class="flow-btn-arrow flow-btn-arrow-out" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
         </button>
         <button id="undo-btn" class="btn-secondary" type="button" title="Undo" aria-label="Remove the most recent entry logged today">-1</button>
-      </div>
-    </div>
-
-    <!-- Calorie tracker tab content. Shown instead of the +1/-1 counter
-         actions when the Calories tab is selected (see renderUI in popup.js);
-         the counter number above still shows today's kcal total generically. -->
-    <div id="calorie-chat-widget" class="calorie-chat-widget hidden">
-      <div class="calorie-chat-header">
-        <span class="calorie-chat-title">Calorie Tracker</span>
-        <span class="calorie-chat-status" id="calorie-chat-status">Ready</span>
-        <button type="button" id="calorie-debug-btn" class="calorie-keys-btn" title="Send a bug report (opens a pre-filled GitHub issue; max 2/minute)" aria-label="Send a bug report">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 9V7a3 3 0 0 1 6 0v2"/><rect x="5" y="9" width="14" height="11" rx="4"/><path d="M5 13H3M21 13h-2M5 17H3M21 17h-2M12 9v11"/></svg>
-        </button>
-        <button type="button" id="calorie-keys-btn" class="calorie-keys-btn" title="Nutrition API keys" aria-label="Nutrition API keys">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="8" cy="15" r="4"/><path d="M11 12l7-7 2 2-1.5 1.5L20 10l-2 2-1.5-1.5L15 12"/></svg>
-        </button>
-      </div>
-      <!-- Lets entries be logged against an earlier day, not just today; the
-           chat/status/food-log below all follow whichever date is picked here. -->
-      <div class="calorie-log-date-row" id="calorie-log-date-row">
-        <label for="calorie-log-date" class="calorie-log-date-label">Logging for</label>
-        <input type="date" id="calorie-log-date" class="calorie-log-date-input" aria-label="Date to log this entry against" />
-        <button type="button" id="calorie-log-date-today-btn" class="calorie-log-date-today-btn hidden">Back to today</button>
-      </div>
-      <div class="calorie-chat-messages" id="calorie-chat-messages" role="log" aria-live="polite"></div>
-      <form id="calorie-chat-form" class="calorie-chat-composer">
-        <textarea id="calorie-chat-input" class="calorie-chat-input" placeholder="What did you eat? e.g. slice of bread" rows="1" aria-label="Describe a food to log" spellcheck="false"></textarea>
-        <button type="submit" class="calorie-chat-send-btn" aria-label="Send">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
-        </button>
-      </form>
-      <!-- Itemized list of what was actually eaten today (the chat above only
-           shows the conversation, not a persistent record) -->
-      <div class="calorie-food-log" id="calorie-food-log-section">
-        <div class="calorie-food-log-header">
-          <span id="calorie-food-log-title">Today's Log</span>
-          <span class="calorie-food-log-total" id="calorie-food-log-total"></span>
-        </div>
-        <ul class="calorie-food-log-list" id="calorie-food-log-list"></ul>
       </div>
     </div>
 
@@ -245,102 +206,9 @@
           <button id="close-settings-modal" class="close-btn" type="button" aria-label="Close tracker settings dialog">&times;</button>
         </div>
         <form id="metric-settings-form">
-          <!-- Plain field: every non-calorie tracker (jobs, leetcode, custom). -->
-          <div class="form-group" id="goal-field-plain">
+          <div class="form-group">
             <label for="metric-settings-goal" id="metric-settings-goal-label">Daily Goal</label>
             <input type="number" id="metric-settings-goal" min="1" step="1" value="5" required />
-          </div>
-
-          <!-- Calorie budget: a tappable stepper number, built from scratch to
-               replace the plain field above only when the Calories tracker's
-               settings are open (see openMetricSettings in popup.js). -->
-          <div class="cal-budget hidden" id="cal-budget-ui">
-            <div class="cal-budget-stepper">
-              <button type="button" class="cal-stepper-btn" id="cal-budget-dec" aria-label="Decrease budget by 50 kcal">
-                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true" focusable="false"><path d="M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </button>
-              <div class="cal-budget-value">
-                <input type="number" id="cal-budget-number" class="cal-budget-number-input" min="200" step="1" inputmode="numeric" aria-label="Daily calorie budget" />
-                <span class="cal-budget-unit">kcal / day</span>
-              </div>
-              <button type="button" class="cal-stepper-btn" id="cal-budget-inc" aria-label="Increase budget by 50 kcal">
-                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              </button>
-            </div>
-
-            <div class="cal-mode-toggle" role="tablist" aria-label="Set budget by">
-              <div class="cal-mode-indicator" id="cal-mode-indicator" aria-hidden="true"></div>
-              <button type="button" class="cal-mode-btn active" id="cal-mode-manual-btn" role="tab" aria-selected="true">Manual</button>
-              <button type="button" class="cal-mode-btn" id="cal-mode-profile-btn" role="tab" aria-selected="false">From profile</button>
-            </div>
-
-            <div class="cal-profile-panel hidden" id="calorie-profile-section">
-              <div class="cal-field-row">
-                <div class="cal-field">
-                  <label for="calorie-profile-weight">Weight</label>
-                  <div class="cal-input-suffix">
-                    <input type="number" id="calorie-profile-weight" min="1" />
-                    <span>lb</span>
-                  </div>
-                </div>
-                <div class="cal-field">
-                  <label for="calorie-profile-height">Height</label>
-                  <div class="cal-input-suffix">
-                    <input type="number" id="calorie-profile-height" min="1" />
-                    <span>in</span>
-                  </div>
-                </div>
-              </div>
-              <div class="cal-field-row">
-                <div class="cal-field">
-                  <label for="calorie-profile-age">Age</label>
-                  <input type="number" id="calorie-profile-age" min="1" />
-                </div>
-                <div class="cal-field">
-                  <label id="calorie-sex-label">Sex</label>
-                  <div class="cal-segmented" id="calorie-sex-segmented" role="radiogroup" aria-labelledby="calorie-sex-label">
-                    <button type="button" class="cal-segment active" data-value="male" role="radio" aria-checked="true">Male</button>
-                    <button type="button" class="cal-segment" data-value="female" role="radio" aria-checked="false">Female</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="cal-field">
-                <label id="calorie-activity-label">Activity level</label>
-                <div class="cal-chip-group" id="calorie-activity-chips" role="radiogroup" aria-labelledby="calorie-activity-label">
-                  <button type="button" class="cal-chip active" data-value="sedentary" data-desc="Little to no exercise" role="radio" aria-checked="true">Sedentary</button>
-                  <button type="button" class="cal-chip" data-value="light" data-desc="Light exercise 1-3 days/week" role="radio" aria-checked="false">Light</button>
-                  <button type="button" class="cal-chip" data-value="moderate" data-desc="Moderate exercise 3-5 days/week" role="radio" aria-checked="false">Moderate</button>
-                  <button type="button" class="cal-chip" data-value="active" data-desc="Hard exercise 6-7 days/week" role="radio" aria-checked="false">Active</button>
-                  <button type="button" class="cal-chip" data-value="veryActive" data-desc="Physical job or twice-daily training" role="radio" aria-checked="false">Very Active</button>
-                </div>
-                <p class="cal-chip-desc" id="calorie-activity-desc">Little to no exercise</p>
-              </div>
-
-              <div class="cal-field">
-                <div class="cal-slider-label">
-                  <label for="calorie-profile-deficit">Daily deficit</label>
-                  <span id="calorie-deficit-value">500 kcal</span>
-                </div>
-                <input type="range" id="calorie-profile-deficit" class="cal-slider" min="0" max="1000" step="50" value="500" />
-              </div>
-
-              <div class="cal-preview" id="calorie-preview">
-                <div class="cal-preview-row">
-                  <span>BMR</span>
-                  <strong id="calorie-preview-bmr">—</strong>
-                </div>
-                <div class="cal-preview-row">
-                  <span>Maintenance</span>
-                  <strong id="calorie-preview-tdee">—</strong>
-                </div>
-                <div class="cal-preview-row cal-preview-highlight">
-                  <span>Suggested budget</span>
-                  <strong id="calorie-preview-budget">—</strong>
-                </div>
-              </div>
-              <button type="button" class="calorie-btn calorie-btn-accent calorie-btn-block" id="calorie-profile-use-btn">Use this budget</button>
-            </div>
           </div>
 
           <div class="form-group">
@@ -348,8 +216,8 @@
           </div>
           <div class="modal-actions">
             <button type="button" id="delete-metric-btn" class="account-signout-btn danger-left hidden">Delete tracker</button>
-            <button type="button" id="cancel-settings-btn" class="calorie-btn calorie-btn-ghost">Cancel</button>
-            <button type="submit" id="metric-settings-save-btn" class="calorie-btn calorie-btn-blue">Save Goal</button>
+            <button type="button" id="cancel-settings-btn" class="btn-cancel">Cancel</button>
+            <button type="submit" id="metric-settings-save-btn" class="btn-submit">Save Goal</button>
           </div>
         </form>
       </div>
@@ -420,58 +288,6 @@
       <ul id="token-popover-list" role="listbox" tabindex="-1"></ul>
     </div>
 
-    <!-- Nutrition API keys for the calorie chat. Stored in chrome.storage.local
-         only (see shared/calorie-tracker.js CalorieKeys) so a personal API key
-         is never carried through the synced tracker/metrics store. -->
-    <div id="calorie-keys-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="calorie-keys-title">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3 id="calorie-keys-title">Nutrition API Keys</h3>
-          <button id="close-calorie-keys-modal" class="close-btn" type="button" aria-label="Close nutrition API keys dialog">&times;</button>
-        </div>
-        <p class="modal-note">Looks up calories through these, tried in order below, and asks you directly when none are configured or nothing matches. Keys stay on this device only.</p>
-        <div class="calorie-provider-list">
-          <div class="calorie-provider-row">
-            <span class="calorie-provider-name">Nutritionix</span>
-            <span class="calorie-provider-desc">Best match for known foods</span>
-            <span class="calorie-provider-link">developer.nutritionix.com/signup</span>
-          </div>
-          <div class="calorie-provider-row">
-            <span class="calorie-provider-name">USDA FoodData Central</span>
-            <span class="calorie-provider-desc">Fallback lookup</span>
-            <span class="calorie-provider-link">fdc.nal.usda.gov/api-key-signup</span>
-          </div>
-          <div class="calorie-provider-row">
-            <span class="calorie-provider-name">Google Gemini</span>
-            <span class="calorie-provider-desc">AI fallback for anything else</span>
-            <span class="calorie-provider-link">aistudio.google.com/apikey</span>
-          </div>
-        </div>
-        <form id="calorie-keys-form">
-          <div class="form-group">
-            <label for="calorie-key-nix-id">Nutritionix App ID</label>
-            <input type="text" id="calorie-key-nix-id" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="form-group">
-            <label for="calorie-key-nix-key">Nutritionix API Key</label>
-            <input type="text" id="calorie-key-nix-key" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="form-group">
-            <label for="calorie-key-usda">USDA API Key</label>
-            <input type="text" id="calorie-key-usda" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="form-group">
-            <label for="calorie-key-gemini">Gemini API Key</label>
-            <input type="text" id="calorie-key-gemini" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="modal-actions">
-            <button type="button" id="cancel-calorie-keys-btn" class="calorie-btn calorie-btn-ghost">Cancel</button>
-            <button type="submit" class="calorie-btn calorie-btn-accent">Save Keys</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
     <!-- Direct email sign-in for unpacked builds with no GCP OAuth client paired -->
     <div id="email-signin-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="email-signin-title">
       <div class="modal-content glass-card">
@@ -500,7 +316,6 @@
   <script src="../shared/auth.js"></script>
   <script src="../shared/storage.js"></script>
   <script src="../shared/widgets.js"></script>
-  <script src="../shared/calorie-tracker.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -62,28 +62,6 @@ const TrackerStorage = (() => {
     }
   ];
 
-  // The calorie tracker is a built-in metric like jobs/leetcode (fixed id,
-  // undeletable), but unlike them it is NOT seeded for every install — most
-  // users never touch it, and every test/caller elsewhere that counts "the 2
-  // defaults" would break if getMetrics() started returning a third for free.
-  // Instead it is created on demand, the first time the calorie chat or
-  // budget widget is added (see ensureCalorieMetric below), same fixed id
-  // every time so a second call is a no-op.
-  const CALORIE_METRIC = {
-    id: 'calories',
-    name: 'Calories',
-    color: '#e8710a',
-    icon: 'flame',
-    unit: 'kcal',
-    dailyGoal: 2000,
-    // The daily "goal" here is a ceiling, not a floor: staying AT OR UNDER it
-    // is the win. goalMetOn/computeStreak take an `under` flag for this
-    // reason instead of assuming ">= goal" everywhere.
-    isBudget: true,
-    isDefault: true,
-    createdAt: '2026-09-01T00:00:00.000Z'
-  };
-
   // Write queue mutex to serialize concurrent writes to chrome.storage.sync
   let writeLock = Promise.resolve();
 
@@ -174,39 +152,32 @@ const TrackerStorage = (() => {
   function defaultGoalFor(metricId) {
     if (metricId === 'jobs') return 5;
     if (metricId === 'leetcode') return 2;
-    if (metricId === 'calories') return 2000;
     return 1;
   }
 
   // A streak day is a day the DAILY GOAL was met, not merely a day with an
   // entry. Logging one application against a goal of five keeps the count
   // moving but does not extend the streak.
-  //
-  // `under` flips the comparison for budget-style trackers (calories): the
-  // day must have a logged total AND that total must be at or below the
-  // goal. A day with no entries at all does not count as "under budget" —
-  // otherwise simply not logging would trivially extend the streak.
-  function goalMetOn(dailyMap, dateStr, metricId, goal, under) {
+  function goalMetOn(dailyMap, dateStr, metricId, goal) {
     const value = ((dailyMap || {})[dateStr] || {})[metricId];
-    if (under) return value !== undefined && value <= Math.max(0, goal || 0);
     return (value || 0) >= Math.max(1, goal || 1);
   }
 
   // Consecutive goal-met days ending today, or ending yesterday when today's
   // goal is still open, so a streak is not shown as broken before the day is.
-  function computeCurrentStreak(dailyMap, metricId, goal, todayStr, under) {
+  function computeCurrentStreak(dailyMap, metricId, goal, todayStr) {
     let check = todayStr || getLocalDateStr();
-    if (!goalMetOn(dailyMap, check, metricId, goal, under)) check = addDays(check, -1);
+    if (!goalMetOn(dailyMap, check, metricId, goal)) check = addDays(check, -1);
     let streak = 0;
-    while (goalMetOn(dailyMap, check, metricId, goal, under)) {
+    while (goalMetOn(dailyMap, check, metricId, goal)) {
       streak++;
       check = addDays(check, -1);
     }
     return streak;
   }
 
-  function computeLongestStreak(dailyMap, metricId, goal, under) {
-    const dates = Object.keys(dailyMap || {}).filter(d => goalMetOn(dailyMap, d, metricId, goal, under)).sort();
+  function computeLongestStreak(dailyMap, metricId, goal) {
+    const dates = Object.keys(dailyMap || {}).filter(d => goalMetOn(dailyMap, d, metricId, goal)).sort();
     let best = 0;
     let run = 0;
     let prev = null;
@@ -487,6 +458,9 @@ const TrackerStorage = (() => {
         const dailyGoal = m.dailyGoal || defaultGoalFor(m.id);
         return { ...m, dailyGoal };
       }).filter(m => {
+        // Installs from before the calorie tracker was removed still have its
+        // built-in metric saved; keep it out of the tab bar.
+        if (m.id === 'calories' && m.isBudget) return false;
         if (m.isDefault || m.id === 'jobs' || m.id === 'leetcode') return true;
         const owner = normalizeEmail(m.userEmail);
         if (!targetEmail) {
@@ -515,25 +489,6 @@ const TrackerStorage = (() => {
           const allMetrics = current.length === 0 ? [...DEFAULT_METRICS] : current;
           const updated = allMetrics.map(m => (m && m.id === metricId ? { ...m, dailyGoal: goal } : m));
           return { write: true, value: updated, verify: hasGoal, result: true };
-        });
-      });
-    },
-
-    // Creates the calorie tracker the first time it's needed (see
-    // CALORIE_METRIC above) and is a no-op on every later call. Returns the
-    // metric either way, so a widget can call this unconditionally on mount.
-    async ensureCalorieMetric() {
-      return enqueueWrite(async () => {
-        const hasIt = list => list.some(m => m && m.id === CALORIE_METRIC.id);
-        return mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
-          const allMetrics = current.length === 0 ? [...DEFAULT_METRICS] : current;
-          if (hasIt(allMetrics)) return { write: false, result: CALORIE_METRIC };
-          return {
-            write: true,
-            value: allMetrics.concat([{ ...CALORIE_METRIC }]),
-            verify: hasIt,
-            result: CALORIE_METRIC
-          };
         });
       });
     },
@@ -868,9 +823,8 @@ const TrackerStorage = (() => {
       const weeklyAverages = {};
       metrics.forEach(m => {
         const goal = m.dailyGoal || defaultGoalFor(m.id);
-        const under = !!m.isBudget;
-        streaks[m.id] = computeCurrentStreak(dailyMap, m.id, goal, todayStr, under);
-        longestStreaks[m.id] = computeLongestStreak(dailyMap, m.id, goal, under);
+        streaks[m.id] = computeCurrentStreak(dailyMap, m.id, goal, todayStr);
+        longestStreaks[m.id] = computeLongestStreak(dailyMap, m.id, goal);
         weeklyAverages[m.id] = parseFloat(((thisWeek[m.id] || 0) / 7).toFixed(1));
       });
       const currentStreak = streaks.jobs || 0;
