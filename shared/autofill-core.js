@@ -199,7 +199,8 @@ const AutofillCore = (() => {
 
   // --- DOM helpers ---------------------------------------------------------------
 
-  const CONTROL_SELECTOR = 'input, select, textarea, [role="combobox"], button[aria-haspopup="listbox"]';
+  const CONTROL_SELECTOR = 'input, select, textarea, [role="combobox"], button[aria-haspopup="listbox"], ' +
+    '[role="radio"], [role="checkbox"]';
   const NEVER_INPUT_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'password']);
   const SKIP_INPUT_TYPES = new Set(['search', 'range', 'color']);
   const SKIP_TEXT_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SELECT', 'OPTION', 'TEXTAREA', 'INPUT', 'BUTTON', 'SVG']);
@@ -436,6 +437,7 @@ const AutofillCore = (() => {
       () => wrappingLabelText(input),
       () => labelledByText(input),
       () => cleanText(attr(input, 'aria-label') || ''),
+      () => (tagOf(input) === 'INPUT' ? '' : cleanText(textOf(input))),
       () => nextSiblingText(input),
       () => cleanText(attr(input, 'value') || '')
     ];
@@ -469,6 +471,14 @@ const AutofillCore = (() => {
       if (type === 'submit' || type === 'reset') return null;
       if (role === 'combobox' || String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return 'combobox';
       return null;
+    }
+    if (role === 'radio' || role === 'checkbox') {
+      // Custom radios and checkboxes: only inside a group or form, so page
+      // chrome toggles (cookie banners, menus) are not taken for questions.
+      try {
+        const scope = role === 'radio' ? '[role="radiogroup"]' : '[role="group"], form';
+        return el.closest(scope) ? role : null;
+      } catch (_) { return null; }
     }
     if (role === 'combobox') {
       // ARIA 1.1 wrapper around a text input: the input is the field.
@@ -508,7 +518,7 @@ const AutofillCore = (() => {
       }
       case 'radio':
       case 'checkbox':
-        return (desc.inputs || [el]).some(i => i.checked === true);
+        return currentValue(desc) !== '';
       case 'file':
         return !!(el.files && el.files.length);
       case 'combobox': {
@@ -611,6 +621,14 @@ const AutofillCore = (() => {
   }
 
   function sameScopeInputs(el, type) {
+    if (tagOf(el) !== 'INPUT') {
+      let group = null;
+      try { group = el.closest(type === 'radio' ? '[role="radiogroup"]' : '[role="group"]'); } catch (_) { group = null; }
+      if (!group) return [el];
+      let members = [];
+      try { members = Array.from(group.querySelectorAll('[role="' + type + '"]')).filter(m => tagOf(m) !== 'INPUT'); } catch (_) { members = []; }
+      return members.length ? members : [el];
+    }
     const name = attr(el, 'name');
     if (!name) return [el];
     let scope = null;
@@ -1149,7 +1167,17 @@ const AutofillCore = (() => {
 
   // Click first: React and most frameworks hang radio / checkbox onChange off
   // the click event. If a handler cancels it, set `checked` directly.
+  function isOn(input) {
+    if (tagOf(input) === 'INPUT') return input.checked === true;
+    return attr(input, 'aria-checked') === 'true' || attr(input, 'aria-pressed') === 'true';
+  }
+
   function setChecked(input, want) {
+    if (tagOf(input) !== 'INPUT') {
+      if (isOn(input) === want) return true;
+      press(input);
+      return isOn(input) === want;
+    }
     if (!!input.checked === want) return true;
     try { if (typeof input.click === 'function') input.click(); } catch (_) { /* ignore */ }
     if (!!input.checked !== want) {
@@ -1225,6 +1253,200 @@ const AutofillCore = (() => {
     return !!(el.files && el.files.length);
   }
 
+  // --- custom widgets ------------------------------------------------------------
+
+  const timing = { comboWait: 1500, comboConfirm: 800, poll: 50 };
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function mouse(el, type) {
+    let ev = null;
+    try {
+      const Ctor = type.startsWith('pointer')
+        ? (typeof PointerEvent === 'function' ? PointerEvent : (typeof MouseEvent === 'function' ? MouseEvent : null))
+        : (typeof MouseEvent === 'function' ? MouseEvent : null);
+      if (Ctor) ev = new Ctor(type, { bubbles: true, cancelable: true, composed: true, button: 0 });
+    } catch (_) { ev = null; }
+    if (!ev) { fire(el, type); return; }
+    try { el.dispatchEvent(ev); } catch (_) { /* a page handler threw */ }
+  }
+
+  // The full pointer sequence: react-select opens on mousedown, Workday and
+  // most listboxes commit on click.
+  function press(el) {
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(t => mouse(el, t));
+    try {
+      if (typeof el.click === 'function') el.click();
+      else mouse(el, 'click');
+    } catch (_) { /* a page handler threw */ }
+  }
+
+  function keyDown(el, key) {
+    let ev = null;
+    try {
+      if (typeof KeyboardEvent === 'function') ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, composed: true });
+    } catch (_) { ev = null; }
+    if (!ev) ev = { type: 'keydown', key, bubbles: true, cancelable: true };
+    try { el.dispatchEvent(ev); } catch (_) { /* a page handler threw */ }
+  }
+
+  // Chosen values a dropdown renders next to its input: react-select's single
+  // and multi values, Workday's selected-item list. Stops at the first
+  // ancestor holding another control so a neighbour's value is never read.
+  const CHOSEN_SELECTOR = '[class*="singleValue"], [class*="single-value"], [class*="multiValue"], [class*="multi-value__label"], ' +
+    '[data-automation-id="selectedItemList"] li, [data-automation-id="selectedItem"]';
+  function controlCount(node) {
+    return Array.from(node.querySelectorAll('input, select, textarea, button')).filter(c => {
+      const tag = tagOf(c);
+      if (tag === 'INPUT') return String(attr(c, 'type') || '').toLowerCase() !== 'hidden';
+      if (tag === 'BUTTON') return String(attr(c, 'aria-haspopup') || '').toLowerCase() === 'listbox';
+      return true;
+    }).length;
+  }
+
+  function chosenNear(el) {
+    let n = el.parentElement;
+    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+      try {
+        if (controlCount(n) > 1) break;
+        const texts = Array.from(n.querySelectorAll(CHOSEN_SELECTOR)).map(v => collapse(textOf(v))).filter(Boolean);
+        if (texts.length) return Array.from(new Set(texts)).join(', ');
+      } catch (_) { break; }
+    }
+    return '';
+  }
+
+  function comboboxValue(el) {
+    if (tagOf(el) === 'INPUT') return chosenNear(el) || collapse(el.value);
+    const t = collapse(comboboxText(el));
+    return PLACEHOLDER_RE.test(norm(t)) ? '' : t;
+  }
+
+  // Ashby-style yes/no: a hidden checkbox beside a pair of toggle buttons.
+  // null when the checkbox has no such buttons.
+  function pressedButtonText(input) {
+    const box = input && input.parentElement;
+    if (!box || tagOf(input) !== 'INPUT') return null;
+    const buttons = Array.from(box.children || []).filter(c => tagOf(c) === 'BUTTON' && c.hasAttribute && c.hasAttribute('aria-pressed'));
+    if (buttons.length < 2) return null;
+    const on = buttons.find(b => attr(b, 'aria-pressed') === 'true');
+    return on ? cleanText(textOf(on)) : '';
+  }
+
+  // What a field shows right now, as text, "" when empty: the chosen option
+  // for selects, radios, and dropdowns, the checked labels of a checkbox
+  // group, "Yes" for a lone checked box. Learning reads fields through this,
+  // so custom widgets that never fire `change` read the same as native ones.
+  function currentValue(desc) {
+    const d = desc && desc.el ? desc : null;
+    if (!d) return '';
+    const el = d.el;
+    try {
+      switch (d.kind) {
+        case 'select': {
+          const opts = selectOptions(el);
+          return opts.filter((o, i) => (o.selected || i === el.selectedIndex) && !isPlaceholderOption(o))
+            .map(optionText).filter(Boolean).join(', ');
+        }
+        case 'radio': {
+          const on = descElements(d).find(isOn);
+          return on ? (optionLabel(on, makeCtx()) || 'Yes') : '';
+        }
+        case 'checkbox': {
+          const inputs = descElements(d);
+          if (inputs.length === 1) {
+            const pressed = pressedButtonText(inputs[0]);
+            if (pressed !== null) return pressed;
+            return isOn(inputs[0]) ? 'Yes' : '';
+          }
+          const ctx = makeCtx();
+          return inputs.filter(isOn).map(i => optionLabel(i, ctx)).filter(Boolean).join(', ');
+        }
+        case 'file':
+          return el.files && el.files.length ? String(el.files[0].name || '') : '';
+        case 'combobox':
+          return comboboxValue(el);
+        default:
+          return collapse(el.value) || chosenNear(el);
+      }
+    } catch (_) {
+      return '';
+    }
+  }
+
+  // Open options of a dropdown: its aria-controls / aria-owns list, or any
+  // rendered listbox (portaled menus rarely link back to their input).
+  function listOptions(el) {
+    const doc = el.ownerDocument || defaultDocument();
+    if (!doc) return [];
+    const ids = String(attr(el, 'aria-controls') || attr(el, 'aria-owns') || '').split(/\s+/).filter(Boolean);
+    let lists = ids.map(id => byId(rootNodeOf(el), id) || byId(doc, id)).filter(Boolean);
+    if (!lists.length) {
+      try { lists = Array.from(doc.querySelectorAll('[role="listbox"]')).filter(isRendered); } catch (_) { lists = []; }
+    }
+    const seen = new Set();
+    const out = [];
+    lists.forEach(list => {
+      let opts = [];
+      try { opts = Array.from(list.querySelectorAll('[role="option"]')); } catch (_) { opts = []; }
+      opts.forEach(o => {
+        if (seen.has(o) || attr(o, 'aria-disabled') === 'true' || !isRendered(o)) return;
+        seen.add(o);
+        out.push(o);
+      });
+    });
+    return out;
+  }
+
+  async function waitForOptions(el, ms) {
+    const end = Date.now() + ms;
+    for (;;) {
+      const opts = listOptions(el);
+      if (opts.length || Date.now() >= end) return opts;
+      await sleep(timing.poll);
+    }
+  }
+
+  // Any ARIA dropdown without a site adapter: open it (typing the value into
+  // a searchable one), pick the best option, and confirm it took.
+  async function fillCombobox(desc, value) {
+    const el = desc.el;
+    const want = collapse(Array.isArray(value) ? value[0] : value);
+    if (!el || !want) return false;
+    if (scoreOption(comboboxValue(el), want) >= 0.9) return true;
+    const isInput = tagOf(el) === 'INPUT';
+    try { if (typeof el.focus === 'function') el.focus(); } catch (_) { /* ignore */ }
+    press(el);
+    if (isInput) { nativeSet(el, 'value', want); fire(el, 'input'); }
+    let opts = await waitForOptions(el, timing.comboWait);
+    if (!opts.length && isInput) {
+      // Some menus only open on an empty query or ArrowDown.
+      nativeSet(el, 'value', '');
+      fire(el, 'input');
+      keyDown(el, 'ArrowDown');
+      opts = await waitForOptions(el, timing.comboWait);
+    }
+    const best = bestOption(want, opts.map(o => collapse(textOf(o))));
+    if (!best) {
+      if (isInput) { nativeSet(el, 'value', ''); fire(el, 'input'); }
+      keyDown(el, 'Escape');
+      return false;
+    }
+    const opt = opts[best.index];
+    const text = collapse(textOf(opt));
+    press(opt);
+    const end = Date.now() + timing.comboConfirm;
+    for (;;) {
+      const now = comboboxValue(el);
+      if (scoreOption(now, text) >= 0.65 || scoreOption(now, want) >= 0.65) return true;
+      if (attr(opt, 'aria-selected') === 'true') return true;
+      if (Date.now() >= end) break;
+      await sleep(timing.poll);
+    }
+    // Clicked, and the menu closed, but the widget shows the value somewhere
+    // unreadable: trust the click.
+    return opt.isConnected === false;
+  }
+
   async function setValue(desc, value) {
     try {
       const d = desc && desc.el ? desc : describeField(desc);
@@ -1237,7 +1459,8 @@ const AutofillCore = (() => {
         case 'radio': return fillRadio(d, value);
         case 'checkbox': return fillCheckbox(d, value);
         case 'file': return fillFile(d.el, value);
-        default: return false; // comboboxes need a site adapter
+        case 'combobox': return fillCombobox(d, value);
+        default: return false;
       }
     } catch (_) {
       return false;
@@ -1355,6 +1578,9 @@ const AutofillCore = (() => {
     findAnswer,
     dictionaryLookup,
     isFilled,
+    currentValue,
+    refindField: (desc, root) => refind(desc, root || defaultDocument()),
+    timing,
     PROFILE_KEYS: PROFILE_KEYS.slice(),
     DERIVED_KEYS: DERIVED_KEYS.slice(),
 

@@ -13,7 +13,10 @@ const ROOT = path.resolve(__dirname, '..');
 function freshCore() {
   const full = path.join(ROOT, 'shared/autofill-core.js');
   delete require.cache[require.resolve(full)];
-  return require(full);
+  const C = require(full);
+  // Short widget waits so dropdowns with no menu fail fast.
+  Object.assign(C.timing, { comboWait: 60, comboConfirm: 60, poll: 5 });
+  return C;
 }
 
 const PROFILE = {
@@ -428,7 +431,7 @@ async function run() {
     const reasons = Object.fromEntries(report.skipped.map(s => [s.desc.id, s.reason]));
     assert.strictEqual(reasons.em, 'already-filled');
     assert.strictEqual(reasons.gen, 'eeo-disabled');
-    assert.strictEqual(reasons.custom, 'unsupported-widget', 'comboboxes need an adapter');
+    assert.strictEqual(reasons.custom, 'unsupported-widget', 'a dropdown with no menu to pick from');
     assert.strictEqual(doc.querySelector('#gen').selectedIndex, 0);
     assert.deepStrictEqual(report.unmatched.map(d => d.id).sort(), ['cl', 'col']);
     assert.strictEqual(report.filled.find(f => f.desc.id === 'fn').desc.required, true);
@@ -489,6 +492,111 @@ async function run() {
     assert.deepStrictEqual(again.skipped.map(s => s.reason).sort(), ['already-filled', 'error'], 'defaults work with no rules / answers');
     restore();
     console.log('[PASS] Adapter errors are contained per field');
+  }
+
+  // ARIA radios and checkboxes, currentValue across widgets, and the generic
+  // dropdown fill for sites without an adapter
+  {
+    const { doc, h, restore } = installAutofillDom({ href: 'https://x.test/' });
+    const C = freshCore();
+    // A role=radio group: clicking a radio checks it and unchecks the rest.
+    const ariaRadio = text => h('div', { role: 'radio', 'aria-checked': 'false' }, text);
+    const yes = ariaRadio('Yes');
+    const no = ariaRadio('No');
+    const group = h('div', { role: 'radiogroup', 'aria-label': 'Are you over 18?' }, yes, no);
+    [yes, no].forEach(r => r.addEventListener('click', () => {
+      [yes, no].forEach(o => o.setAttribute('aria-checked', o === r ? 'true' : 'false'));
+    }));
+    // A lone role=checkbox outside any group or form is page chrome.
+    const chrome = h('div', { role: 'checkbox', 'aria-checked': 'false', 'aria-label': 'Accept cookies' });
+    doc.body.appendChild(h('div', {}, group, chrome));
+    let fields = C.scanFields(doc);
+    const radio = only(fields.filter(f => f.kind === 'radio'), 'one ARIA radio group');
+    assert.strictEqual(radio.label, 'Are you over 18?');
+    assert.deepStrictEqual(radio.options, ['Yes', 'No']);
+    assert.ok(!fields.some(f => f.el === chrome), 'a role=checkbox outside a group or form is not a field');
+    assert.strictEqual(C.currentValue(radio), '');
+    assert.strictEqual(await C.setValue(radio, 'No'), true);
+    assert.strictEqual(no.getAttribute('aria-checked'), 'true', 'the ARIA radio was clicked');
+    assert.strictEqual(C.currentValue(radio), 'No');
+    assert.ok(C.isFilled(radio));
+
+    // currentValue for native controls and custom widgets.
+    const sel = h('select', { id: 'sel' }, h('option', { value: '' }, 'Select...'), h('option', {}, 'Canada'), h('option', {}, 'Mexico'));
+    const langs = h('fieldset', {}, h('legend', {}, 'Languages'),
+      h('label', {}, h('input', { type: 'checkbox', name: 'lang', id: 'en', value: 'en' }), 'English'),
+      h('label', {}, h('input', { type: 'checkbox', name: 'lang', id: 'es', value: 'es' }), 'Spanish'),
+      h('label', {}, h('input', { type: 'checkbox', name: 'lang', id: 'fr', value: 'fr' }), 'French'));
+    const agree = h('input', { type: 'checkbox', id: 'agree' });
+    const yesNo = h('div', {}, h('button', { type: 'button', 'aria-pressed': 'false' }, 'Yes'),
+      h('button', { type: 'button', 'aria-pressed': 'true' }, 'No'), h('input', { type: 'checkbox', id: 'yn' }));
+    const rsInput = h('input', { id: 'rs', role: 'combobox' });
+    const reactSelect = h('div', { class: 'select__control' },
+      h('div', { class: 'select__value-container' }, h('div', { class: 'select__single-value' }, 'He/him'), h('div', {}, rsInput)));
+    const wdInput = h('input', { type: 'text', id: 'wd', 'data-automation-id': 'searchBox' });
+    const workday = h('div', { 'data-automation-id': 'multiSelectContainer' },
+      h('ul', { 'data-automation-id': 'selectedItemList' }, h('li', {}, 'LinkedIn')),
+      h('div', {}, wdInput));
+    const wdButton = h('button', { type: 'button', id: 'wdb', 'aria-haspopup': 'listbox' }, 'Select One');
+    doc.body.appendChild(h('form', {}, sel, langs, agree, yesNo, reactSelect, workday, wdButton));
+    const d = el => C.describeField(el);
+    assert.strictEqual(C.currentValue(d(sel)), '', 'placeholder option reads empty');
+    sel.selectedIndex = 2;
+    assert.strictEqual(C.currentValue(d(sel)), 'Mexico');
+    doc.querySelector('#en').checked = true;
+    doc.querySelector('#fr').checked = true;
+    assert.strictEqual(C.currentValue(d(doc.querySelector('#en'))), 'English, French', 'checkbox group: checked labels');
+    assert.strictEqual(C.currentValue(d(agree)), '');
+    agree.checked = true;
+    assert.strictEqual(C.currentValue(d(agree)), 'Yes', 'lone checkbox');
+    assert.strictEqual(C.currentValue(d(doc.querySelector('#yn'))), 'No', 'Ashby-style yes/no reads the pressed button');
+    assert.ok(C.isFilled(d(doc.querySelector('#yn'))), 'a pressed No counts as answered');
+    assert.strictEqual(C.currentValue(d(rsInput)), 'He/him', 'react-select single value');
+    assert.strictEqual(C.currentValue(d(wdInput)), 'LinkedIn', 'Workday selected items');
+    assert.strictEqual(C.currentValue(d(wdButton)), '', 'Workday "Select One" is a placeholder');
+    wdButton.ownText = 'Canada';
+    assert.strictEqual(C.currentValue(d(wdButton)), 'Canada');
+
+    // Generic dropdown fill: a listbox button whose menu mounts on click.
+    const country = h('button', { type: 'button', id: 'country', 'aria-haspopup': 'listbox' }, 'Select One');
+    doc.body.appendChild(h('div', {}, h('label', { for: 'country' }, 'Country'), country));
+    let menu = null;
+    country.addEventListener('click', () => {
+      if (menu) return;
+      menu = h('ul', { role: 'listbox' }, ...['Canada', 'United States', 'Mexico'].map(t => h('li', { role: 'option' }, t)));
+      Array.from(menu.children).forEach(o => o.addEventListener('click', () => {
+        country.ownText = o.ownText;
+        menu.remove();
+        menu = null;
+      }));
+      doc.body.appendChild(menu);
+    });
+    const cDesc = d(country);
+    assert.strictEqual(cDesc.kind, 'combobox');
+    assert.strictEqual(await C.setValue(cDesc, 'United States'), true);
+    assert.strictEqual(country.ownText, 'United States', 'the matching option was clicked');
+    assert.strictEqual(menu, null, 'the menu closed');
+    assert.strictEqual(await C.setValue(cDesc, 'United States'), true, 'already showing the value: nothing to do');
+    assert.strictEqual(await C.setValue(cDesc, 'Narnia'), false, 'no matching option');
+
+    // A searchable input whose menu (aria-controls) filters on typing.
+    const search = h('input', { id: 'school', role: 'combobox', 'aria-controls': 'school-list' });
+    const list = h('ul', { role: 'listbox', id: 'school-list' });
+    doc.body.appendChild(h('div', {}, h('label', { for: 'school' }, 'School'), h('div', {}, search), list));
+    search.addEventListener('input', () => {
+      Array.from(list.children).forEach(c => c.remove());
+      ['University of London', 'University of Leeds', 'Imperial College']
+        .filter(t => search.value && t.toLowerCase().includes(search.value.toLowerCase().slice(0, 5)))
+        .forEach(t => {
+          const o = h('li', { role: 'option' }, t);
+          o.addEventListener('click', () => { search.value = t; Array.from(list.children).forEach(c => c.remove()); });
+          list.appendChild(o);
+        });
+    });
+    assert.strictEqual(await C.setValue(d(search), 'University of London'), true);
+    assert.strictEqual(search.value, 'University of London');
+    restore();
+    console.log('[PASS] ARIA radio groups, currentValue for native and custom widgets, generic dropdown fill');
   }
 
   console.log('--- autofill-core: all tests passed ---');

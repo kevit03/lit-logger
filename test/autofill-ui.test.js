@@ -585,8 +585,8 @@ async function run() {
     cleanup(ctx);
   }
 
-  // 7g. Fields the run did not report are never learned from, and edits made
-  // before any run teach nothing.
+  // 7g. Edits made before any run teach nothing, and a field no scan finds
+  // is not learned from.
   {
     const ctx = await learningPage(doc => ({ other: mock.field(doc, 'text', { attrs: { name: 'other' } }) }));
     userTypes(ctx, ctx.fields.city, 'London');
@@ -596,6 +596,85 @@ async function run() {
     userTypes(ctx, ctx.fields.other, 'London');
     await settle();
     assert.strictEqual(ctx.store.calls.learnRule.length, 0, 'untracked field');
+    cleanup(ctx);
+  }
+
+  // 7h. Fields the run did not report (already filled, or rendered later by a
+  // multi-step form) are tracked without an outline and learned from.
+  {
+    let late = null;
+    const ctx = await learningPage(doc => ({ prefilled: mock.field(doc, 'text', { attrs: { name: 'q_school' }, value: 'Somewhere' }) }));
+    const scanned = () => [mock.descFor(ctx.fields.prefilled, 'text', 'School')]
+      .concat(late ? [mock.descFor(late, 'text', 'Current company')] : []);
+    ctx.core.scanFields = () => scanned();
+    await ctx.api.fill();
+    assert.ok(!ctx.fields.prefilled.classList.contains('lit-af-unmatched'), 'no outline on a field the run left alone');
+    userTypes(ctx, ctx.fields.prefilled, 'University of London');
+    await settle();
+    assert.deepStrictEqual(ctx.store.calls.learnRule.pop(), { host: HOST, labelKey: 'school', profileKey: 'school' });
+    // Next step of the form renders; the mutation check tracks it.
+    late = mock.field(ctx.doc, 'text', { attrs: { name: 'q_company' } });
+    ctx.doc.body.appendChild(late);
+    ctx.api.check();
+    userTypes(ctx, late, 'Hooli');
+    await settle();
+    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Current company'?", 'a late field asks like any other');
+    cleanup(ctx);
+  }
+
+  // 7i. Custom dropdowns never fire change: a click re-reads every tracked
+  // field, and a pick that is a profile value is learned.
+  {
+    let button = null;
+    const ctx = await learningPage(doc => {
+      button = doc.createElement('button');
+      button.setAttribute('aria-haspopup', 'listbox');
+      button.textContent = 'Select One';
+      return { button };
+    });
+    ctx.core.currentValue = desc => (desc.kind === 'combobox'
+      ? (desc.el.textContent === 'Select One' ? '' : desc.el.textContent)
+      : String(desc.el.value || ''));
+    ctx.extraUnmatched = () => [mock.descFor(button, 'combobox', 'Which school do you attend?')];
+    await ctx.api.fill();
+    assert.ok(button.classList.contains('lit-af-unmatched'));
+    button.textContent = 'University of London';  // the page commits the pick
+    mock.fire(ctx.doc, ctx.win, ctx.doc.body, 'click'); // the click landed on a portaled option
+    await wait(300);
+    assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'which school do you attend', profileKey: 'school' }]);
+    // Further clicks with no change learn nothing more.
+    mock.fire(ctx.doc, ctx.win, ctx.doc.body, 'click');
+    await wait(300);
+    assert.strictEqual(ctx.store.calls.learnRule.length, 1);
+    cleanup(ctx);
+  }
+
+  // 7j. A checkbox group: the checked labels are remembered as one answer.
+  {
+    let en = null;
+    let es = null;
+    let box = null;
+    const ctx = await learningPage(doc => {
+      box = doc.createElement('fieldset');
+      en = mock.field(doc, 'checkbox', { attrs: { name: 'lang', value: 'English' } });
+      es = mock.field(doc, 'checkbox', { attrs: { name: 'lang', value: 'Spanish' } });
+      box.appendChild(en);
+      box.appendChild(es);
+      return { box };
+    });
+    ctx.core.currentValue = desc => (desc.kind === 'checkbox'
+      ? (desc.inputs || [desc.el]).filter(i => i.checked).map(i => i.getAttribute('value')).join(', ')
+      : String(desc.el.value || ''));
+    ctx.extraUnmatched = () => [mock.descFor(en, 'checkbox', 'Languages', { group: box, inputs: [en, es], options: ['English', 'Spanish'] })];
+    await ctx.api.fill();
+    en.checked = true;
+    es.checked = true;
+    mock.fire(ctx.doc, ctx.win, es, 'change');
+    await settle();
+    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Languages'?");
+    clickPrompt(ctx.doc, 'Everywhere');
+    await settle();
+    assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: '*', labelKey: 'languages', value: 'English, Spanish' }]);
     cleanup(ctx);
   }
 

@@ -10,8 +10,13 @@
 // outlines filled fields green and the ones that still need the user amber,
 // and reports "Filled 14 fields, 3 need you." Outlines clear on focus.
 //
-// Learning (settings.autoLearn): after a run, edits to the fields that run
-// touched are watched through one document-level listener per event type.
+// Learning (settings.autoLearn): after a run, edits to every field on the
+// form are watched through one document-level listener per event type: text
+// boxes, selects, radios, checkboxes, and custom dropdowns and button groups
+// (react-select, Workday listboxes, Ashby yes/no). Custom widgets never fire
+// `change`, so clicks and keys also trigger a re-read of every tracked field.
+// Fields the run left alone (already filled, or rendered later by a
+// multi-step form) are tracked too, without an outline.
 //   - A missed short field filled with a profile value learns label -> key.
 //   - Any other value asks "Remember this for '<label>'?" and saves a literal.
 //   - Overwriting a filled field with another profile value moves the rule.
@@ -52,7 +57,11 @@
   const SENSITIVE = /password|ssn|social security|card|cvv|iban|routing/i;
   const FILLABLE_SELECTOR = 'input, textarea, select, [role="combobox"], [aria-haspopup="listbox"]';
   const SKIP_INPUT_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'password']);
-  const LEARNABLE_KINDS = new Set(['text', 'email', 'tel', 'url', 'textarea', 'select', 'radio', 'combobox']);
+  const LEARNABLE_KINDS = new Set(['text', 'email', 'tel', 'url', 'textarea', 'select', 'radio', 'checkbox', 'combobox']);
+  const TYPED_KINDS = new Set(['text', 'email', 'tel', 'url', 'textarea']);
+  // Re-reads after a click or key: once for instant widgets, once more for
+  // ones that commit after an animation or re-render (Workday).
+  const SWEEP_DELAYS_MS = [250, 900];
   const URL_KEYS = new Set(['linkedin', 'github', 'portfolio', 'website']);
 
   // The host element can still be hit by page selectors such as `#id` or a
@@ -170,6 +179,7 @@
   let byEl = new Map();   // field element -> entry
   let byGroup = new Map();// radio/checkbox group container -> entry
   let outlined = new Set();
+  let sweepTimers = [];
   let inlineOutlines = new Map();
 
   // --- small helpers ---------------------------------------------------------
@@ -282,9 +292,28 @@
   }
 
   // --- shadow UI ---------------------------------------------------------------
+  // Other job extensions (Jobright, Simplify) pin their panels at the maximum
+  // z-index over the same corner. The top layer draws above any z-index, so
+  // the host goes there when the browser supports popovers. HOST_STYLE's
+  // `all: initial !important` overrides the popover UA styles.
+  function raise(host) {
+    try {
+      if (typeof host.showPopover !== 'function') return;
+      if (!host.hasAttribute('popover')) host.setAttribute('popover', 'manual');
+      if (!host.matches(':popover-open')) host.showPopover();
+    } catch (e) {
+      // Not in a document yet, or no top layer here; z-index still applies.
+    }
+  }
+
+  function attachHost(host) {
+    if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
+    raise(host);
+  }
+
   function ensureUi() {
     if (ui) {
-      if (!ui.host.isConnected) (document.body || document.documentElement).appendChild(ui.host);
+      attachHost(ui.host);
       return ui;
     }
     // A host left by an orphaned copy (extension reloaded under the page)
@@ -318,7 +347,7 @@
     wrap.appendChild(stack);
     wrap.appendChild(fab);
     shadow.appendChild(wrap);
-    (document.body || document.documentElement).appendChild(host);
+    attachHost(host);
     ui = { host, shadow, wrap, stack, fab };
     return ui;
   }
@@ -475,19 +504,21 @@
 
   // --- tracking ------------------------------------------------------------------
   function resetTracking() {
+    clearSweeps();
     closePrompt();
     clearAllOutlines();
     byEl = new Map();
     byGroup = new Map();
   }
 
-  function track(desc, state, match) {
+  function track(desc, state, match, silent) {
     if (!desc || !desc.el) return;
     const target = desc.group || desc.el;
-    outline(target, state === 'filled' ? FILLED_CLASS : UNMATCHED_CLASS);
+    if (!silent) outline(target, state === 'filled' ? FILLED_CLASS : UNMATCHED_CLASS);
     const value = readValue(desc);
     const entry = { desc, state, match: match || null, target, initial: value, value, offered: '' };
     byEl.set(desc.el, entry);
+    (desc.inputs || []).forEach(i => byEl.set(i, entry));
     if (desc.group) byGroup.set(desc.group, entry);
   }
 
@@ -522,6 +553,9 @@
   function readValue(desc) {
     const el = desc.el;
     if (!el) return '';
+    if (typeof core.currentValue === 'function') {
+      try { return String(core.currentValue(desc) || '').replace(/\s+/g, ' ').trim(); } catch (e) { return ''; }
+    }
     try {
       if (desc.kind === 'radio') {
         const root = desc.group || (tagOf(el) === 'input' ? (el.form || el.parentElement) : el) || document;
@@ -698,6 +732,85 @@
     offerAnswer(entry, value);
   }
 
+  // Every field on the form, not only the ones the run reported: fields the
+  // user filled first, and steps or follow-up questions rendered later. EEO
+  // questions are left out while EEO filling is off.
+  function isTracked(desc) {
+    return [desc.el].concat(desc.inputs || []).some(el => byEl.has(el)) || (desc.group && byGroup.has(desc.group));
+  }
+
+  function eeoBlocked(desc) {
+    if (settings && settings.fillEeo) return false;
+    try {
+      const hit = typeof core.dictionaryLookup === 'function' ? core.dictionaryLookup(desc) : null;
+      return !!(hit && /^eeo\./.test(hit.key));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function scanRoot() {
+    try {
+      const adapter = typeof core.getSiteAdapter === 'function' ? core.getSiteAdapter(location.href) : null;
+      const root = adapter && typeof adapter.scanRoot === 'function' ? adapter.scanRoot(document) : null;
+      if (root) return root;
+    } catch (e) { /* fall back to the document */ }
+    return document;
+  }
+
+  function trackPage() {
+    if (!learningOn() || typeof core.scanFields !== 'function') return;
+    let descs = [];
+    try { descs = core.scanFields(scanRoot(), { includeFilled: true }) || []; } catch (e) { descs = []; }
+    descs.forEach(desc => {
+      if (!desc || !desc.el || isTracked(desc) || !LEARNABLE_KINDS.has(desc.kind)) return;
+      if (isSensitive(desc) || eeoBlocked(desc)) return;
+      track(desc, 'seen', null, true);
+    });
+  }
+
+  // A re-rendered field (Workday swaps nodes after every edit) is looked up
+  // again so its new node is read, not the detached one.
+  function refresh(entry) {
+    const el = entry.desc.el;
+    if (!el || el.isConnected !== false || typeof core.refindField !== 'function') return entry;
+    let fresh = null;
+    try { fresh = core.refindField(entry.desc, document); } catch (e) { fresh = null; }
+    if (!fresh || !fresh.el) return entry;
+    byEl.delete(el);
+    (entry.desc.inputs || []).forEach(i => byEl.delete(i));
+    if (entry.desc.group) byGroup.delete(entry.desc.group);
+    entry.desc = fresh;
+    entry.target = fresh.group || fresh.el;
+    byEl.set(fresh.el, entry);
+    (fresh.inputs || []).forEach(i => byEl.set(i, entry));
+    if (fresh.group) byGroup.set(fresh.group, entry);
+    return entry;
+  }
+
+  // Re-read every tracked field and learn from the ones that changed. A text
+  // box still being typed in is left to its change and blur events.
+  function sweep() {
+    if (!learningOn()) return;
+    const active = document.activeElement;
+    Array.from(new Set(byEl.values())).forEach(entry => {
+      refresh(entry);
+      if (TYPED_KINDS.has(entry.desc.kind) && entry.desc.el === active) return;
+      handleChange(entry);
+    });
+  }
+
+  function scheduleSweep() {
+    if (!learningOn()) return;
+    sweepTimers.forEach(clearTimeout);
+    sweepTimers = SWEEP_DELAYS_MS.map(ms => setTimeout(sweep, ms));
+  }
+
+  function clearSweeps() {
+    sweepTimers.forEach(clearTimeout);
+    sweepTimers = [];
+  }
+
   // --- document listeners --------------------------------------------------------
   function onFocusIn(event) {
     const entry = entryFor(event && event.target);
@@ -708,12 +821,23 @@
     if (!learningOn()) return;
     const entry = entryFor(event && event.target);
     if (entry) handleChange(entry);
+    scheduleSweep();
   }
 
   function onFocusOut(event) {
     if (!learningOn()) return;
     const entry = entryFor(event && event.target);
     if (entry) handleBlur(entry);
+    scheduleSweep();
+  }
+
+  // Custom dropdowns and button groups commit on click or Enter and never
+  // fire `change`.
+  function onPointerCommit() { scheduleSweep(); }
+
+  function onKeyCommit(event) {
+    const key = event && event.key;
+    if (key === 'Enter' || key === ' ' || key === 'Tab' || key === 'Escape') scheduleSweep();
   }
 
   function onKeyDown(event) {
@@ -780,6 +904,8 @@
       unmatched.forEach(desc => track(desc, 'unmatched', null));
       skipped.forEach(item => { if (item) track(item.desc, 'unmatched', null); });
       hasRun = true;
+      running = false;
+      trackPage();
       const need = unmatched.length + skipped.length;
       const text = filled.length === 0 && profileIsEmpty(profile)
         ? 'Your Autofill profile is empty. Open LIT and choose Autofill profile to set it up.'
@@ -804,6 +930,7 @@
     if (!started) return;
     if (!alive()) { destroy(); return; }
     eligible = countFillable(document) >= MIN_FIELDS;
+    trackPage();
     const show = eligible && !!settings && settings.showButton !== false;
     if (show) {
       ensureUi();
@@ -855,6 +982,8 @@
     document.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('change', onChange, true);
     document.addEventListener('focusout', onFocusOut, true);
+    document.addEventListener('click', onPointerCommit, true);
+    document.addEventListener('keyup', onKeyCommit, true);
     window.addEventListener('keydown', onKeyDown, true);
     subscribeStore();
     loadSettings();
@@ -871,7 +1000,10 @@
     document.removeEventListener('focusin', onFocusIn, true);
     document.removeEventListener('change', onChange, true);
     document.removeEventListener('focusout', onFocusOut, true);
+    document.removeEventListener('click', onPointerCommit, true);
+    document.removeEventListener('keyup', onKeyCommit, true);
     window.removeEventListener('keydown', onKeyDown, true);
+    clearSweeps();
     if (storeUnsub) {
       try { storeUnsub(); } catch (e) { /* storage gone */ }
       storeUnsub = null;
@@ -911,6 +1043,7 @@
     isSensitive,
     profileKeyFor,
     formatResult,
+    sweep,
     state: () => ({ started, eligible, running, hasRun, buttonShown: !!ui && !ui.fab.classList.contains('hidden'), tracked: byEl.size })
   };
 
