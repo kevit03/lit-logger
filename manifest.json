@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LIT: Job & LeetCode Tracker",
-  "version": "1.3.0",
-  "description": "Track job applications, LeetCodes, and daily streaks with a direct visual overlay on Google Calendar. Auto-logs LeetCode and NeetCode solves and ATS job applications.",
+  "version": "1.4.0",
+  "description": "Track job applications, LeetCodes, and streaks on Google Calendar. Auto-logs LeetCode, NeetCode, and applications on Greenhouse, Lever, Workday, and other career sites.",
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "LIT",
@@ -82,18 +82,67 @@
       ],
       "all_frames": true,
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.workable.com/*",
+        "*://*.bamboohr.com/*",
+        "*://*.rippling-ats.com/*",
+        "https://ats.rippling.com/*",
+        "*://*.icims.com/*",
+        "*://*.taleo.net/*",
+        "*://*.smartrecruiters.com/*",
+        "*://*.jobvite.com/*",
+        "*://*.applytojob.com/*",
+        "*://*.breezy.hr/*",
+        "*://*.recruitee.com/*",
+        "*://*.pinpointhq.com/*"
+      ],
+      "js": [
+        "shared/auth.js",
+        "shared/storage.js",
+        "shared/auto-tracker-core.js",
+        "shared/job-meta.js",
+        "content/adapters/ats/universal.js",
+        "content/auto-tracker.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
     }
   ],
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "identity",
     "alarms",
-    "notifications"
+    "notifications",
+    "contextMenus",
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
     "https://calendar.google.com/*",
     "https://www.googleapis.com/*"
   ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "commands": {
+    "increment-active": {
+      "suggested_key": {
+        "default": "Alt+Shift+A",
+        "mac": "Alt+Shift+A"
+      },
+      "description": "Log +1 to the tracker selected in LIT"
+    },
+    "open-search": {
+      "suggested_key": {
+        "default": "Alt+Shift+J",
+        "mac": "Alt+Shift+J"
+      },
+      "description": "Open LIT with search focused"
+    }
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

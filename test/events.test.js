@@ -30,7 +30,9 @@ async function run() {
     assert.ok(capturedChanges.length >= 1, 'Should capture at least 1 change event');
     const lastChange = capturedChanges[capturedChanges.length - 1];
     assert.ok(lastChange.logs, 'Change event should contain logs');
-    assert.strictEqual(lastChange.logs.newValue.length, 1);
+    assert.strictEqual(lastChange.logs.op, 'add');
+    assert.deepStrictEqual(lastChange.logs.ids, [log.id], 'the event names the entry, not the whole history');
+    assert.strictEqual(lastChange.logs.newValue, undefined, 'the history is never shipped with the event');
 
     // Mutation 2: Add metric
     const customMetric = await TrackerStorage.addMetric({ name: 'Event Custom', color: '#990099' });
@@ -45,7 +47,16 @@ async function run() {
 
     const undoChange = capturedChanges[capturedChanges.length - 1];
     assert.ok(undoChange.logs, 'Undo should emit logs change');
-    assert.strictEqual(undoChange.logs.newValue.length, 0);
+    assert.strictEqual(undoChange.logs.op, 'delete');
+    assert.deepStrictEqual(undoChange.logs.ids, [log.id]);
+
+    // Status changes and edits are events too.
+    const job = await TrackerStorage.addLog({ metricId: 'jobs', company: 'Status Corp' });
+    await TrackerStorage.setLogStatus(job.id, 'interviewing');
+    await new Promise(r => setTimeout(r, 20));
+    const statusChange = capturedChanges[capturedChanges.length - 1];
+    assert.strictEqual(statusChange.logs.op, 'update');
+    assert.deepStrictEqual(statusChange.logs.ids, [job.id]);
 
     console.log('[PASS] Storage event firing on mutations');
     uninstallMockChrome();

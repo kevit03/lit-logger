@@ -238,6 +238,17 @@ function createMockChrome(initialStore = {}) {
     return baseSyncSet(items, callback);
   };
 
+  // chrome.runtime messaging: sendMessage reaches every onMessage listener
+  // with a sender naming this extension. A listener that returns true keeps
+  // the channel open for an async sendResponse, as in MV3.
+  const messageListeners = new Set();
+  const onMessage = {
+    addListener(cb) { messageListeners.add(cb); },
+    removeListener(cb) { messageListeners.delete(cb); },
+    hasListener(cb) { return messageListeners.has(cb); },
+    listenerCount() { return messageListeners.size; }
+  };
+
   const mock = {
     storage: {
       local: localStorageArea,
@@ -251,6 +262,33 @@ function createMockChrome(initialStore = {}) {
       id: 'job-tracker-mock-extension-id',
       getURL(path) {
         return 'chrome-extension://' + this.id + '/' + (path || '').replace(/^\//, '');
+      },
+      onMessage,
+      sentMessages: [],
+      sendMessage(message, callback) {
+        const runtime = mock.runtime;
+        const payload = deepClone(message);
+        runtime.sentMessages.push(payload);
+        const sender = { id: runtime.id, tab: { id: 1 }, frameId: 0 };
+        let answered = false;
+        let keepOpen = false;
+        const respond = response => {
+          if (answered) return;
+          answered = true;
+          process.nextTick(() => { if (typeof callback === 'function') callback(deepClone(response)); });
+        };
+        process.nextTick(() => {
+          for (const listener of Array.from(messageListeners)) {
+            const ret = listener(payload, sender, respond);
+            if (ret === true) keepOpen = true;
+            if (answered) break;
+          }
+          if (!answered && !keepOpen) {
+            runtime.lastError = { message: 'Could not establish connection. Receiving end does not exist.' };
+            if (typeof callback === 'function') callback(undefined);
+            runtime.lastError = null;
+          }
+        });
       }
     }
   };

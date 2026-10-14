@@ -51,6 +51,50 @@ function tick() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
+// Lets chained storage promises (session reads, probes) finish.
+async function settle(n = 12) {
+  for (let i = 0; i < n; i++) await tick();
+}
+
+function loadJobMeta() {
+  const full = path.join(ROOT, 'shared/job-meta.js');
+  delete require.cache[require.resolve(full)];
+  global.JobMeta = require(full);
+  return global.JobMeta;
+}
+
+// Buttons inside a closed-shadow toast, found through the mock's handle.
+function toastButtons(doc, core) {
+  const host = doc.getElementById(core.TOAST_HOST_ID);
+  return host ? host._shadow.querySelectorAll('button') : [];
+}
+
+function clickToastButton(doc, core, label) {
+  const btn = toastButtons(doc, core).find(b => b.textContent === label);
+  assert.ok(btn, 'toast button "' + label + '" is shown');
+  btn.dispatchEvent(dom.makeEvent('click', btn));
+}
+
+function toastTexts(doc, core) {
+  const host = doc.getElementById(core.TOAST_HOST_ID);
+  return host ? host._shadow.querySelectorAll('.toast').map(t => t.querySelector('.body').textContent) : [];
+}
+
+// A job page the way the tests describe one: URL, title, meta tags, JSON-LD,
+// and body children.
+function jobPage(spec) {
+  const doc = dom.installDom();
+  doc.title = spec.title || '';
+  (spec.meta || []).forEach(([prop, content]) => {
+    doc.documentElement.appendChild(dom.el(doc, 'meta[property="' + prop + '"]', { attrs: { content } }));
+  });
+  if (spec.jsonLd) {
+    doc.documentElement.appendChild(dom.el(doc, 'script[type="application/ld+json"]', { text: JSON.stringify(spec.jsonLd) }));
+  }
+  (spec.body || []).forEach(node => doc.body.appendChild(typeof node === 'function' ? node(doc) : node));
+  return doc;
+}
+
 async function run() {
   console.log('--- Running test/autotracker.test.js ---');
 
@@ -850,9 +894,13 @@ async function run() {
     // No polling anywhere in the auto-tracker sources.
     const sources = [
       'shared/auto-tracker-core.js',
+      'shared/job-meta.js',
       'content/auto-tracker.js',
+      'content/quick-log.js',
+      'content/universal-bootstrap.js',
       'content/adapters/leetcode.js',
-      'content/adapters/neetcode.js'
+      'content/adapters/neetcode.js',
+      'content/adapters/ats/universal.js'
     ].concat(ATS_ADAPTERS);
     for (const file of sources) {
       const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -861,6 +909,561 @@ async function run() {
 
     uninstallMockChrome();
     console.log('[PASS] Core helpers: cleanup aggregation, scoped waitFor, tracked-observer cap, no setInterval in sources');
+  }
+
+  // -------------------------------------------------------------------------
+  // 10. JobMeta: company and role extraction, job-page scoring
+  // -------------------------------------------------------------------------
+  {
+    installMockChrome();
+    const meta = loadJobMeta();
+    const cases = [
+      ['https://careers.airbnb.com/positions/123', 'Airbnb'],
+      ['https://stripe.com/jobs/listing/backend-engineer/5521', 'Stripe'],
+      ['https://jobs.netflix.com/jobs/31337', 'Netflix'],
+      ['https://www.acme.co.uk/careers/', 'Acme'],
+      ['https://apply.workable.com/acme-labs/j/4F2C9A1B7D/', 'Acme Labs'],
+      ['https://acme.workable.com/jobs/12', 'Acme'],
+      ['https://careers-globex.icims.com/jobs/4821/software-engineer/job', 'Globex'],
+      ['https://jobs.smartrecruiters.com/Pendant/743999-logistics', 'Pendant'],
+      ['https://ats.rippling.com/foo-bar/jobs/1', 'Foo Bar'],
+      ['https://acme.rippling-ats.com/job/1', 'Acme'],
+      ['https://kramerica.breezy.hr/p/abc-marketing-lead', 'Kramerica'],
+      ['https://initech.bamboohr.com/careers/112', 'Initech'],
+      ['https://vandelay.applytojob.com/apply/xyz', 'Vandelay'],
+      ['https://jobs.jobvite.com/soylent/job/o1', 'Soylent'],
+      ['https://hooli.recruitee.com/o/data-scientist', 'Hooli'],
+      ['https://pied-piper.pinpointhq.com/jobs/77', 'Pied Piper'],
+      ['https://acme.taleo.net/careersection/2/jobapply.ftl?job=1', 'Acme'],
+      ['https://boards.greenhouse.io/embed/job_app?for=acme', 'Acme'],
+      ['https://jobs.smartrecruiters.com/', ''],
+      ['http://localhost:8080/apply', '']
+    ];
+    for (const [href, expected] of cases) {
+      assert.strictEqual(meta.companyFromUrl(href), expected, 'company for ' + href);
+    }
+
+    assert.strictEqual(meta.cleanRole('Senior Engineer - Careers | Airbnb', 'Airbnb'), 'Senior Engineer');
+    assert.strictEqual(meta.cleanRole('Job Application for Designer at Acme', 'Acme'), 'Designer');
+    assert.strictEqual(meta.cleanRole('Acme Careers - Backend Engineer', 'Acme'), 'Backend Engineer');
+    assert.strictEqual(meta.cleanRole('Data Analyst | Globex Jobs', ''), 'Data Analyst');
+    assert.strictEqual(meta.cleanRole('Thank you for applying', 'Acme'), '', 'generic headings are not roles');
+    assert.strictEqual(meta.cleanCompany('Vandelay Industries Careers'), 'Vandelay Industries');
+    assert.strictEqual(meta.cleanCompany('Workable'), '', 'an ATS name is never the employer');
+
+    const doc = jobPage({
+      title: 'Careers',
+      meta: [['og:site_name', 'Workable'], ['og:title', 'Platform Engineer - Umbrella']],
+      jsonLd: { '@context': 'https://schema.org', '@graph': [{ '@type': 'WebPage' }, { '@type': 'JobPosting', title: 'Platform Engineer', hiringOrganization: { '@type': 'Organization', name: 'Umbrella Corp' }, identifier: { value: 'UMB-9' } }] },
+      body: [d => dom.el(d, 'h1', { text: 'Apply now' })]
+    });
+    const ex = meta.extract(doc, 'https://apply.workable.com/umbrella/j/ZZZ/apply');
+    assert.deepStrictEqual(
+      { company: ex.company, companySource: ex.companySource, role: ex.role, roleSource: ex.roleSource, sourceId: ex.sourceId },
+      { company: 'Umbrella Corp', companySource: 'json-ld', role: 'Platform Engineer', roleSource: 'json-ld', sourceId: 'apply.workable.com:UMB-9' },
+      'JSON-LD inside @graph wins; the ATS site name is ignored'
+    );
+    const bare = meta.extract(jobPage({ title: 'Data Analyst - Acme Careers', meta: [['og:title', 'Data Analyst - Acme Careers']] }), 'https://acme.taleo.net/careersection/2/jobapply.ftl?job=12345');
+    assert.strictEqual(bare.company, 'Acme');
+    assert.strictEqual(bare.role, 'Data Analyst');
+    assert.strictEqual(bare.sourceId, 'acme.taleo.net:job=12345', 'a job id in the query is part of the listing id');
+    const broken = jobPage({ body: [d => dom.el(d, 'script[type="application/ld+json"]', { text: '{not json' })] });
+    assert.deepStrictEqual(meta.readJsonLd(broken), [], 'malformed JSON-LD is skipped');
+
+    const apply = jobPage({ body: [d => dom.el(d, 'label', { text: 'Resume / CV' }), d => dom.el(d, 'input[type="file"][name="resume"]'), d => dom.el(d, 'label', { text: 'LinkedIn profile' })] });
+    assert.ok(meta.jobSignals(apply, 'https://example.com/join').isJob, 'a resume upload plus application wording is a job page');
+    const blog = jobPage({ body: [d => dom.el(d, 'h1', { text: 'My interview story' })] });
+    assert.ok(!meta.jobSignals(blog, 'https://example.com/blog/careers-advice').isJob, 'a blog post is not a job page');
+    assert.ok(meta.jobSignals(jobPage({}), 'https://jobs.lever.co/acme/1').isJob, 'an ATS host alone qualifies');
+
+    assert.ok(meta.isSuccessText('Thank you for applying!'));
+    assert.ok(meta.isSuccessText('Your application was sent successfully'));
+    assert.ok(meta.isSuccessText('We have received your application for Data Scientist.'));
+    assert.ok(!meta.isSuccessText('Thanks! Your application has been received and you are subscribed to our newsletter.'), 'newsletter wording vetoes a match');
+    assert.ok(!meta.isSuccessText('Thank you for your order'));
+    assert.ok(!meta.isSuccessText('Your credit card application was submitted'));
+    assert.ok(meta.isConfirmationUrl('https://x.com/careers/apply/7/thank-you'));
+    assert.ok(meta.isConfirmationUrl('https://x.com/jobs/1#/application-submitted'));
+    assert.ok(!meta.isConfirmationUrl('https://x.com/successful-teams/jobs'));
+    assert.ok(meta.looksLikeJobUrl('https://careers.acme.com/'));
+    assert.ok(meta.looksLikeJobUrl('https://acme.com/en/jobs/12'));
+    assert.ok(!meta.looksLikeJobUrl('https://acme.com/pricing'));
+
+    delete global.JobMeta;
+    uninstallMockChrome();
+    console.log('[PASS] JobMeta: 20 company-from-URL cases, role cleanup, JSON-LD @graph, job scoring, success and negative wording');
+  }
+
+  // -------------------------------------------------------------------------
+  // 11. Universal adapter: ten career-site layouts
+  // -------------------------------------------------------------------------
+  {
+    const chrome = installMockChrome();
+    const core = fresh('shared/auto-tracker-core.js');
+    loadJobMeta();
+    const load = () => {
+      core.clearAdapters();
+      loadAdapters(core, ['content/adapters/ats/universal.js']);
+      return core.getActiveAdapter('https://example.com/');
+    };
+    let adapter = load();
+    assert.strictEqual(adapter.id, 'universal');
+    assert.strictEqual(core.getActiveAdapter('chrome://extensions/'), null, 'only web pages');
+    let now = 9000000;
+    core._setClock(() => now);
+    const MO = dom.FakeMutationObserver;
+    const click = node => node.dispatchEvent(dom.makeEvent('click', node));
+
+    // 1. Workable: in-place heading after the Submit click.
+    {
+      const button = dom.el(dom.installDom(), 'button', { text: 'Submit application' });
+      const doc = jobPage({
+        title: 'Senior Robotics Engineer - Acme Robotics',
+        body: [
+          d => dom.el(d, 'h1', { text: 'Senior Robotics Engineer' }),
+          d => dom.el(d, 'form', { children: [dom.el(d, 'label', { text: 'Resume' }), dom.el(d, 'input[type="file"][name="resume"]'), button] })
+        ]
+      });
+      const href = 'https://apply.workable.com/acme-robotics/j/4F2C9A1B7D/apply/';
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      assert.strictEqual(MO.activeCount(), 0, 'nothing is observed before the user acts');
+      click(button);
+      assert.ok(MO.activeCount() >= 1, 'submitting arms the watchers');
+      const done = dom.el(doc, 'div', { children: [dom.el(doc, 'h2', { text: 'Thank you for applying!' })] });
+      doc.body.appendChild(done);
+      dom.emitAdded(done);
+      assert.strictEqual(onSuccess.calls.length, 1);
+      const p = onSuccess.calls[0];
+      assert.strictEqual(p.company, 'Acme Robotics');
+      assert.strictEqual(p.role, 'Senior Robotics Engineer');
+      assert.strictEqual(p.id, 'apply.workable.com:4f2c9a1b7d');
+      assert.strictEqual(p.url, 'https://apply.workable.com/acme-robotics/j/4F2C9A1B7D/apply/');
+      assert.strictEqual(p.notes, 'Auto-logged from Workable | Senior Robotics Engineer at Acme Robotics');
+      assert.strictEqual(MO.activeCount(), 0, 'fired adapter disconnects everything');
+      teardown();
+      assert.strictEqual(doc.body.listenerCount(), 0);
+    }
+
+    // 2. Taleo: an existing alert region fills in after the form submits.
+    {
+      const form = dom.el(dom.installDom(), 'form#applyFlow');
+      const alertBox = dom.el(dom.installDom(), 'div[role="alert"]');
+      const doc = jobPage({ title: 'Data Analyst - Acme Careers', meta: [['og:title', 'Data Analyst - Acme Careers']], body: [form, alertBox] });
+      const href = 'https://acme.taleo.net/careersection/2/jobapply.ftl?job=12345&lang=en';
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      form.dispatchEvent(dom.makeEvent('submit', form));
+      dom.setText(alertBox, 'Your application has been submitted.');
+      assert.strictEqual(onSuccess.calls.length, 1, 'an in-place update to a live region counts');
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id], ['Acme', 'Data Analyst', 'acme.taleo.net:job=12345']);
+      teardown();
+    }
+
+    // 3. iCIMS: JSON-LD metadata, an input[type=submit] labelled by value.
+    {
+      const submit = dom.el(dom.installDom(), 'input[type="submit"]', { attrs: { value: 'Submit' } });
+      const doc = jobPage({
+        jsonLd: { '@type': 'JobPosting', title: 'Software Engineer II', hiringOrganization: { name: 'Globex Corporation' } },
+        body: [d => dom.el(d, 'div.iCIMS_Forms', { children: [submit] })]
+      });
+      const href = 'https://careers-globex.icims.com/jobs/4821/software-engineer/job?mode=apply&iis=Indeed';
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      click(submit);
+      const msg = dom.el(doc, 'div.iCIMS_InfoMsg', { children: [dom.el(doc, 'p', { text: 'Thank you for your application. A recruiter will be in touch.' })] });
+      doc.body.appendChild(msg);
+      dom.emitAdded(msg);
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id], ['Globex Corporation', 'Software Engineer II', 'careers-globex.icims.com:4821']);
+      teardown();
+    }
+
+    // 4. BambooHR: a React dialog appears after "Submit Application".
+    {
+      const button = dom.el(dom.installDom(), 'button[type="button"]', { text: 'Submit Application' });
+      const doc = jobPage({ meta: [['og:site_name', 'Initech']], body: [d => dom.el(d, 'h1', { text: 'Product Manager' }), button] });
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, 'https://initech.bamboohr.com/careers/112'));
+      click(button);
+      const dialog = dom.el(doc, 'div[role="dialog"]', { children: [dom.el(doc, 'h2', { text: 'Application Submitted' }), dom.el(doc, 'p', { text: 'We will be in touch.' })] });
+      doc.body.appendChild(dialog);
+      dom.emitAdded(dialog);
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role], ['Initech', 'Product Manager']);
+      teardown();
+    }
+
+    // 5. Custom React modal on a company's own domain.
+    {
+      const button = dom.el(dom.installDom(), 'button', { text: 'Send application' });
+      const doc = jobPage({
+        body: [
+          d => dom.el(d, 'h1', { text: 'Data Scientist' }),
+          d => dom.el(d, 'input[type="file"][accept=".pdf,.doc,.docx"]'),
+          button
+        ]
+      });
+      const href = 'https://www.hooli.com/careers/jobs/5521-data-scientist/apply';
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      click(button);
+      const modal = dom.el(doc, 'div[class="Modal_root__x1"]', { children: [dom.el(doc, 'div[class="Modal_body__x2"]', { text: 'We have received your application for Data Scientist.' })] });
+      doc.body.appendChild(modal);
+      dom.emitAdded(modal);
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id], ['Hooli', 'Data Scientist', 'hooli.com:5521-data-scientist']);
+      teardown();
+    }
+
+    // 6. Web component: the form and the success message live in an open
+    // shadow root; the click reaches the document retargeted to the host.
+    {
+      const doc = jobPage({
+        jsonLd: { '@type': 'JobPosting', title: 'Field Researcher', hiringOrganization: 'Umbrella' },
+        body: [d => dom.el(d, 'apply-flow')]
+      });
+      const hostEl = doc.body.children[0];
+      const shadow = hostEl.attachShadow({ mode: 'open' });
+      const button = dom.el(doc, 'button', { text: 'Apply' });
+      shadow.appendChild(dom.el(doc, 'form', { children: [button] }));
+      const onSuccess = collect();
+      const teardown = adapter.init(onSuccess, makeCtx(doc, 'https://careers.umbrella.example/positions/77/apply'));
+      hostEl.dispatchEvent(dom.makeEvent('click', hostEl, { composedPath: () => [button, button.parentElement, shadow, hostEl, doc.body] }));
+      assert.ok(MO.observing(shadow).length >= 1, 'the open shadow root is watched once the user acts');
+      const msg = dom.el(doc, 'p.success', { text: 'Thank you for your application!' });
+      shadow.appendChild(msg);
+      dom.emitAdded(msg);
+      assert.strictEqual(onSuccess.calls.length, 1, 'a message inside a shadow root counts');
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id], ['Umbrella', 'Field Researcher', 'careers.umbrella.example:77']);
+      teardown();
+      assert.strictEqual(MO.activeCount(), 0);
+    }
+
+    // 7. SPA: pushState to /thank-you remounts the adapter; the intent from
+    // the form carries over in memory and the richer form details win.
+    {
+      const button = dom.el(dom.installDom(), 'button', { text: 'Submit' });
+      const doc = jobPage({
+        title: 'Growth Lead | Soylent',
+        meta: [['og:site_name', 'Soylent']],
+        jsonLd: { '@type': 'JobPosting', title: 'Growth Lead', hiringOrganization: { name: 'Soylent' }, identifier: 'SOY-31' },
+        body: [d => dom.el(d, 'h1', { text: 'Growth Lead' }), button]
+      });
+      const onSuccess = collect();
+      const first = adapter.init(onSuccess, makeCtx(doc, 'https://jobs.soylent.io/careers/apply/31'));
+      click(button);
+      first();
+      // The route changes and the page re-renders into a bare thank-you view.
+      doc.body.children.slice().forEach(c => c.remove());
+      doc.documentElement.children.filter(c => c.tagName !== 'BODY').forEach(c => c.remove());
+      doc.title = 'Thank you';
+      doc.body.appendChild(dom.el(doc, 'h1', { text: 'Thanks!' }));
+      const second = adapter.init(onSuccess, makeCtx(doc, 'https://jobs.soylent.io/careers/apply/31/thank-you'));
+      assert.strictEqual(onSuccess.calls.length, 1, 'the confirmation route fires on remount');
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id, onSuccess.calls[0].meta.detection], ['Soylent', 'Growth Lead', 'jobs.soylent.io:SOY-31', 'url']);
+      second();
+    }
+
+    // 8. Full page load: a POST redirect lands on /application-submitted in a
+    // new document. The intent persisted to chrome.storage.session.
+    {
+      const form = dom.el(dom.installDom(), 'form');
+      const doc = jobPage({ meta: [['og:site_name', 'Vandelay Industries Careers']], body: [d => dom.el(d, 'h1', { text: 'Import Export Analyst' }), form] });
+      const onSuccess = collect();
+      const td = adapter.init(onSuccess, makeCtx(doc, 'https://careers.vandelay.com/jobs/909/apply'));
+      form.dispatchEvent(dom.makeEvent('submit', form));
+      await settle();
+      td();
+      const stored = chrome.storage.session.store[adapter._internals.ARM_STORE_KEY];
+      assert.ok(stored && stored['https://careers.vandelay.com'], 'intent persisted per site');
+
+      adapter = load(); // a new document gets a fresh copy of the script
+      const next = jobPage({ title: 'Submitted', body: [d => dom.el(d, 'p', { text: 'All set.' })] });
+      const onNext = collect();
+      const td2 = adapter.init(onNext, makeCtx(next, 'https://careers.vandelay.com/application-submitted?ref=909'));
+      await settle();
+      assert.strictEqual(onNext.calls.length, 1, 'the redirect target fires from the persisted intent');
+      assert.deepStrictEqual([onNext.calls[0].company, onNext.calls[0].role, onNext.calls[0].id], ['Vandelay Industries', 'Import Export Analyst', 'careers.vandelay.com:909']);
+      assert.ok(!chrome.storage.session.store[adapter._internals.ARM_STORE_KEY]['https://careers.vandelay.com'], 'the intent is consumed');
+      td2();
+    }
+
+    // 9. SmartRecruiters: loaded straight at a confirmation URL with the
+    // message on screen and JSON-LD; no intent needed.
+    {
+      const doc = jobPage({
+        jsonLd: { '@type': 'JobPosting', title: 'Logistics Coordinator', hiringOrganization: { name: 'Pendant Publishing' }, identifier: { value: '743999' } },
+        body: [d => dom.el(d, 'h1', { text: 'Thank you for applying!' })]
+      });
+      const onSuccess = collect();
+      const td = adapter.init(onSuccess, makeCtx(doc, 'https://jobs.smartrecruiters.com/Pendant/743999-logistics-coordinator/confirmation'));
+      await settle();
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id, onSuccess.calls[0].meta.detection], ['Pendant Publishing', 'Logistics Coordinator', 'jobs.smartrecruiters.com:743999', 'url+message']);
+      td();
+    }
+
+    // 10. Breezy: a status toast after "Submit Application", role from
+    // og:title with the company suffix stripped.
+    {
+      const button = dom.el(dom.installDom(), 'a[role="button"]', { text: 'Submit Application' });
+      const doc = jobPage({ meta: [['og:title', 'Marketing Lead | Kramerica']], body: [d => dom.el(d, 'label', { text: 'Resume' }), button] });
+      const onSuccess = collect();
+      const td = adapter.init(onSuccess, makeCtx(doc, 'https://kramerica.breezy.hr/p/8a7b6c5d4e3f-marketing-lead/apply'));
+      click(button);
+      const toast = dom.el(doc, 'div[role="status"]', { text: 'Your application was sent successfully' });
+      doc.body.appendChild(toast);
+      dom.emitAdded(toast);
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual([onSuccess.calls[0].company, onSuccess.calls[0].role, onSuccess.calls[0].id], ['Kramerica', 'Marketing Lead', 'kramerica.breezy.hr:8a7b6c5d4e3f-marketing-lead']);
+      td();
+    }
+
+    core._setClock(null);
+    core.clearAdapters();
+    delete global.JobMeta;
+    uninstallMockChrome();
+    console.log('[PASS] Universal adapter: Workable, Taleo, iCIMS, BambooHR, React modal, shadow root, SPA route, cross-page redirect, SmartRecruiters, Breezy');
+  }
+
+  // -------------------------------------------------------------------------
+  // 12. Universal adapter: negative cases never log
+  // -------------------------------------------------------------------------
+  {
+    installMockChrome();
+    const core = fresh('shared/auto-tracker-core.js');
+    loadJobMeta();
+    loadAdapters(core, ['content/adapters/ats/universal.js']);
+    const adapter = core.getActiveAdapter('https://example.com/');
+    let now = 12000000;
+    core._setClock(() => now);
+    const MO = dom.FakeMutationObserver;
+    const click = node => node.dispatchEvent(dom.makeEvent('click', node));
+
+    async function scenario(name, href, build, act) {
+      adapter._internals.reset();
+      const doc = dom.installDom();
+      const parts = build(doc);
+      const onSuccess = collect();
+      const td = adapter.init(onSuccess, makeCtx(doc, href));
+      await settle();
+      await act(doc, parts);
+      await settle();
+      assert.strictEqual(onSuccess.calls.length, 0, name + ' must not log');
+      td();
+      assert.strictEqual(MO.activeCount(), 0, name + ' leaves no observer');
+    }
+
+    const add = (doc, spec, text) => {
+      const n = dom.el(doc, spec, { text });
+      doc.body.appendChild(n);
+      dom.emitAdded(n);
+    };
+
+    await scenario('Newsletter signup on a careers page', 'https://www.acme.com/careers/', doc => {
+      const form = dom.el(doc, 'form', { children: [dom.el(doc, 'input[type="email"]'), dom.el(doc, 'button', { text: 'Subscribe' })] });
+      doc.body.appendChild(dom.el(doc, 'h2', { text: 'Join our talent newsletter' }));
+      doc.body.appendChild(form);
+      return { form };
+    }, (doc, { form }) => {
+      form.dispatchEvent(dom.makeEvent('submit', form));
+      add(doc, 'p', 'Thanks! Your application has been received and you are now subscribed to our newsletter.');
+    });
+
+    await scenario('eCommerce checkout thank-you page', 'https://shop.example.com/checkout/thank-you', doc => {
+      doc.body.appendChild(dom.el(doc, 'h1', { text: 'Thank you! Your application was submitted.' }));
+      doc.body.appendChild(dom.el(doc, 'p', { text: 'Order #4411 ships soon.' }));
+      return {};
+    }, async () => {});
+
+    await scenario('Password reset', 'https://app.example.com/account/password/reset/success', doc => {
+      const button = dom.el(doc, 'button', { text: 'Submit' });
+      doc.body.appendChild(button);
+      return { button };
+    }, (doc, { button }) => {
+      click(button);
+      add(doc, 'p', 'Your request has been submitted. Check your email for a reset link.');
+    });
+
+    await scenario('Blog comment', 'https://blog.example.com/posts/how-i-got-my-job', doc => {
+      const button = dom.el(doc, 'button', { text: 'Submit' });
+      doc.body.appendChild(dom.el(doc, 'h1', { text: 'How I prepared for my interview' }));
+      doc.body.appendChild(dom.el(doc, 'form', { children: [dom.el(doc, 'textarea'), button] }));
+      return { button };
+    }, (doc, { button }) => {
+      click(button);
+      add(doc, 'p', 'Thank you for applying my advice, great post!');
+    });
+
+    await scenario('Volunteer signup with no job signals', 'https://volunteer.example.org/signup', doc => {
+      const button = dom.el(doc, 'button', { text: 'Submit' });
+      doc.body.appendChild(button);
+      return { button };
+    }, (doc, { button }) => {
+      click(button);
+      add(doc, 'h2', 'Thank you for applying to volunteer!');
+    });
+
+    await scenario('A stale confirmation already on screen, no intent', 'https://apply.workable.com/acme/j/ABC123/', doc => {
+      doc.body.appendChild(dom.el(doc, 'h2', { text: 'Thank you for applying' }));
+      return {};
+    }, doc => add(doc, 'h2', 'Thank you for applying'));
+
+    await scenario('Confirmation after the intent window lapsed', 'https://apply.workable.com/acme/j/ABC123/apply', doc => {
+      const button = dom.el(doc, 'button', { text: 'Submit application' });
+      doc.body.appendChild(dom.el(doc, 'input[type="file"][name="resume"]'));
+      doc.body.appendChild(button);
+      return { button };
+    }, (doc, { button }) => {
+      click(button);
+      now += adapter._internals.ARM_WINDOW_MS + 1;
+      add(doc, 'h2', 'Thank you for applying!');
+    });
+
+    await scenario('Clicking a non-submit control', 'https://apply.workable.com/acme/j/ABC123/apply', doc => {
+      const button = dom.el(doc, 'button', { text: 'Save draft' });
+      doc.body.appendChild(button);
+      return { button };
+    }, (doc, { button }) => {
+      click(button);
+      assert.strictEqual(MO.activeCount(), 0, 'a non-submit click arms nothing');
+      add(doc, 'h2', 'Thank you for applying!');
+    });
+
+    await scenario('Order confirmation URL after a checkout submit', 'https://store.example.com/order/confirmation', doc => {
+      const button = dom.el(doc, 'button', { text: 'Place order' });
+      doc.body.appendChild(dom.el(doc, 'h1', { text: 'Thank you for your order' }));
+      doc.body.appendChild(button);
+      return { button };
+    }, async () => {});
+
+    core._setClock(null);
+    core.clearAdapters();
+    delete global.JobMeta;
+    uninstallMockChrome();
+    console.log('[PASS] Universal adapter negatives: newsletter, checkout, password reset, blog comment, volunteer form, stale page, lapsed window, non-submit click, order URL');
+  }
+
+  // -------------------------------------------------------------------------
+  // 13. Job toasts: Edit details and Undo; the 90-day duplicate prompt
+  // -------------------------------------------------------------------------
+  {
+    installMockChrome();
+    const core = fresh('shared/auto-tracker-core.js');
+    const storage = fresh('shared/storage.js');
+    const doc = dom.installDom();
+    const adapter = { id: 'universal', label: 'Career site', metricId: 'jobs', matches: () => true, init: () => () => {} };
+    const payload = { id: 'hooli.com:5521', title: 'Data Scientist at Hooli', company: 'Hooli', role: 'Data Scientist', url: 'https://hooli.com/careers/jobs/5521' };
+
+    const first = await core.dispatch(adapter, payload, { document: doc, storage });
+    assert.strictEqual(first.logged, true);
+    assert.strictEqual(first.log.source, 'auto');
+    assert.strictEqual(first.log.sourceId, 'universal:hooli-com-5521');
+    assert.strictEqual(first.log.url, 'https://hooli.com/careers/jobs/5521');
+    assert.deepStrictEqual(toastTexts(doc, core), ['Logged application at Hooli — Data Scientist']);
+    assert.deepStrictEqual(toastButtons(doc, core).map(b => b.textContent), ['Edit details', 'Undo']);
+
+    clickToastButton(doc, core, 'Edit details');
+    assert.ok(first.toast.submitForm({ company: 'Hooli XYZ', role: 'Senior Data Scientist' }));
+    await settle();
+    const edited = (await storage.getLogs({ metricId: 'jobs' }))[0];
+    assert.strictEqual(edited.company, 'Hooli XYZ', 'the inline edit reached storage');
+    assert.strictEqual(edited.role, 'Senior Data Scientist');
+    assert.deepStrictEqual(toastTexts(doc, core), ['Updated application at Hooli XYZ — Senior Data Scientist']);
+
+    clickToastButton(doc, core, 'Undo');
+    await settle();
+    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 0, 'Undo removed the entry');
+    assert.deepStrictEqual(toastTexts(doc, core), ['Removed application at Hooli XYZ — Senior Data Scientist']);
+    assert.strictEqual(await core.getDedupeCache().has(first.key), false, 'Undo releases the dedupe claim');
+
+    // Applied to the same company 24 days ago: ask before logging again.
+    const today = storage.getLocalDateStr();
+    await storage.addLog({ metricId: 'jobs', company: 'Globex Corporation', role: 'SRE', date: storage.addDays(today, -24) });
+    const doc2 = dom.installDom();
+    core._resetSharedCache();
+    const dup = await core.dispatch(adapter, { id: 'globex:77', title: 'Platform Engineer at Globex', company: 'Globex', role: 'Platform Engineer' }, { document: doc2, storage });
+    assert.strictEqual(dup.logged, false);
+    assert.strictEqual(dup.reason, 'possible-duplicate');
+    assert.strictEqual(dup.prior.daysAgo, 24);
+    const text = toastTexts(doc2, core)[0];
+    assert.ok(/^Note: You applied to Globex Corporation 24 days ago on [A-Z][a-z]{2} \d{1,2}, \d{4}\. Log again anyway\?$/.test(text), text);
+    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 1, 'nothing logged until the user answers');
+    clickToastButton(doc2, core, 'Log anyway');
+    await settle(20);
+    const all = await storage.getLogs({ metricId: 'jobs' });
+    assert.strictEqual(all.length, 2, 'Log anyway logs it');
+    assert.strictEqual(all[0].company, 'Globex');
+
+    // Skip leaves storage alone.
+    const doc3 = dom.installDom();
+    core._resetSharedCache();
+    const skipped = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'GLOBEX corp' }, { document: doc3, storage });
+    assert.strictEqual(skipped.reason, 'possible-duplicate');
+    clickToastButton(doc3, core, 'Skip');
+    await settle();
+    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 2);
+    assert.strictEqual(toastTexts(doc3, core).length, 0, 'Skip dismisses the prompt');
+
+    const EMOJI = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/u;
+    assert.ok(!EMOJI.test(text + toastButtons(doc2, core).map(b => b.textContent).join('')), 'toast text is emoji-free');
+    uninstallMockChrome();
+    console.log('[PASS] Job toasts: inline Edit details and Undo; 90-day duplicate prompt with Log anyway and Skip');
+  }
+
+  // -------------------------------------------------------------------------
+  // 14. "Log application from this page" card
+  // -------------------------------------------------------------------------
+  {
+    installMockChrome();
+    const core = fresh('shared/auto-tracker-core.js');
+    global.AutoTrackerCore = core;
+    loadJobMeta();
+    const storage = fresh('shared/storage.js');
+    // An https: page would route storage through the service worker; the
+    // proxy has its own suite (test/pipeline.test.js), so stay local here.
+    storage._setMode('local');
+    global.TrackerStorage = storage;
+    const doc = jobPage({
+      meta: [['og:site_name', 'Pied Piper'], ['og:title', 'Compression Engineer - Pied Piper']],
+      body: [d => dom.el(d, 'h1', { text: 'Compression Engineer' })]
+    });
+    global.document = doc;
+    global.location = new URL('https://careers.piedpiper.com/jobs/42');
+    global.window = {};
+
+    fresh('content/quick-log.js');
+    await settle(80);
+    assert.deepStrictEqual(toastTexts(doc, core), ['Log application from this page']);
+    const host = doc.getElementById(core.TOAST_HOST_ID)._shadow;
+    const inputs = host.querySelectorAll('input');
+    assert.deepStrictEqual(inputs.map(i => i.value), ['Pied Piper', 'Compression Engineer'], 'company and role are pre-filled from the page');
+    const form = host.querySelector('form');
+    inputs[1].value = 'Senior Compression Engineer';
+    form.dispatchEvent({ type: 'submit', target: form, preventDefault() {} });
+    await settle(80);
+    const logs = await storage.getLogs({ metricId: 'jobs' });
+    assert.strictEqual(logs.length, 1);
+    assert.deepStrictEqual([logs[0].company, logs[0].role, logs[0].source, logs[0].url], ['Pied Piper', 'Senior Compression Engineer', 'quick', 'https://careers.piedpiper.com/jobs/42']);
+    assert.deepStrictEqual(toastTexts(doc, core), ['Logged application at Pied Piper — Senior Compression Engineer']);
+    assert.strictEqual(typeof global.window.__ptQuickLog, 'function', 'later clicks reuse the injected script');
+
+    // A second run on the same company warns first.
+    global.window.__ptQuickLog();
+    await settle(80);
+    const texts = host.querySelectorAll('.detail').map(d => d.textContent);
+    assert.ok(texts.some(t => /^Note: You already logged this Pied Piper listing earlier today on /.test(t)), texts.join(' / '));
+    assert.ok(host.querySelectorAll('button').some(b => b.textContent === 'Log anyway'));
+
+    delete global.document;
+    delete global.location;
+    delete global.window;
+    delete global.TrackerStorage;
+    delete global.AutoTrackerCore;
+    delete global.JobMeta;
+    uninstallMockChrome();
+    console.log('[PASS] Quick log: pre-filled card, editable fields, duplicate note on a repeat, reusable entry point');
   }
 
   console.log('--- test/autotracker.test.js COMPLETED SUCCESSFULLY ---\n');

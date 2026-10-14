@@ -35,6 +35,22 @@ async function run() {
   assert.ok(Array.isArray(manifest.permissions), 'Permissions must be an array');
   assert.ok(manifest.permissions.includes('storage'), 'Permissions must include "storage"');
   assert.ok(manifest.permissions.includes('identity'), 'Permissions must include "identity"');
+  assert.ok(manifest.permissions.includes('unlimitedStorage'), 'Permissions must include "unlimitedStorage" so history is never rejected by the default quota');
+  assert.ok(manifest.permissions.includes('contextMenus'), 'Permissions must include "contextMenus" for "Log application from this page"');
+  assert.ok(manifest.permissions.includes('scripting'), 'Permissions must include "scripting" for on-demand injection');
+  assert.ok(manifest.permissions.includes('activeTab'), 'Permissions must include "activeTab" so quick log needs no host permission');
+
+  // 3a. All-sites access is optional and only requested from the settings
+  //     toggle; it must never be an install-time host permission.
+  assert.ok(Array.isArray(manifest.optional_host_permissions) && manifest.optional_host_permissions.includes('*://*/*'), 'universal tracking asks for all sites as an optional permission');
+  assert.ok(!(manifest.host_permissions || []).some(h => /^(\*|https?):\/\/\*\/\*$/.test(h) || h === '<all_urls>'), 'all-sites access must not be requested at install');
+
+  // 3c. Keyboard shortcuts.
+  assert.ok(manifest.commands, 'commands must be declared');
+  assert.strictEqual(manifest.commands['increment-active'].suggested_key.default, 'Alt+Shift+A');
+  assert.strictEqual(manifest.commands['increment-active'].suggested_key.mac, 'Alt+Shift+A', 'Option+Shift+A on a Mac');
+  assert.strictEqual(manifest.commands['open-search'].suggested_key.default, 'Alt+Shift+J');
+  Object.values(manifest.commands).forEach(c => assert.ok(c.description, 'every command has a description'));
 
   // 3b. Background service worker. The solve timers persist as deadlines and
   //     rely on this worker to mirror them into chrome.alarms, so a missing
@@ -95,8 +111,30 @@ async function run() {
         adapterIdxs.filter(i => js[i].startsWith('content/adapters/ats/') && i !== atsIdx)
           .forEach(i => assert.ok(i > atsIdx, `ATS adapter ${js[i]} must load after ats/confirmation.js`));
       }
+      const universalIdx = js.indexOf('content/adapters/ats/universal.js');
+      if (universalIdx >= 0) {
+        const metaIdx = js.indexOf('shared/job-meta.js');
+        assert.ok(metaIdx > coreIdx && metaIdx < universalIdx, `content_scripts[${idx}] must load shared/job-meta.js after the core and before the universal adapter`);
+      }
     }
   });
+
+  // 4c. Files the service worker injects on demand must exist.
+  [
+    'shared/auth.js',
+    'shared/db.js',
+    'shared/storage.js',
+    'shared/auto-tracker-core.js',
+    'shared/job-meta.js',
+    'shared/exporters.js',
+    'content/quick-log.js',
+    'content/universal-bootstrap.js',
+    'content/adapters/ats/universal.js',
+    'content/auto-tracker.js'
+  ].forEach(rel => assert.ok(fs.existsSync(path.join(rootDir, rel)), `on-demand script must exist: ${rel}`));
+  const swSource = fs.readFileSync(swPath, 'utf8');
+  assert.ok(/importScripts\('\.\.\/shared\/auth\.js', '\.\.\/shared\/db\.js', '\.\.\/shared\/storage\.js'\)/.test(swSource), 'the worker loads auth, db, then storage');
+  assert.ok(/TrackerStorage\.serveRemote\(\)/.test(swSource), 'the worker answers content-script storage calls');
 
   const allMatches = manifest.content_scripts.flatMap(cs => cs.matches);
   [
@@ -106,12 +144,23 @@ async function run() {
     'https://job-boards.greenhouse.io/*',
     'https://jobs.lever.co/*',
     'https://jobs.ashbyhq.com/*',
-    'https://*.myworkdayjobs.com/*'
+    'https://*.myworkdayjobs.com/*',
+    '*://*.workable.com/*',
+    '*://*.bamboohr.com/*',
+    '*://*.rippling-ats.com/*',
+    '*://*.icims.com/*',
+    '*://*.taleo.net/*',
+    '*://*.smartrecruiters.com/*',
+    '*://*.jobvite.com/*',
+    '*://*.applytojob.com/*',
+    '*://*.breezy.hr/*',
+    '*://*.recruitee.com/*',
+    '*://*.pinpointhq.com/*'
   ].forEach(pattern => {
     assert.ok(allMatches.includes(pattern), `content_scripts must match ${pattern}`);
   });
   assert.ok(!allMatches.includes('<all_urls>'), 'auto-tracker must not request <all_urls>');
-  assert.ok(!allMatches.some(m => /^https?:\/\/\*\/\*$/.test(m)), 'auto-tracker must not request all hosts');
+  assert.ok(!allMatches.some(m => /^(\*|https?):\/\/\*\//.test(m)), 'static content scripts must not match every host; that is opt-in');
 
   // 5. Host Permissions
   assert.ok(Array.isArray(manifest.host_permissions), 'host_permissions must be an array');

@@ -1,13 +1,17 @@
 // Cross-context concurrency tests.
 //
 // The write mutex inside shared/storage.js only serializes writers within one
-// JS context. The popup and the Google Calendar content script each load their
-// own copy of the module against a single shared chrome.storage.sync, so a
-// read-modify-write in one can clobber the other. These tests load two
-// independent module instances and widen the read/write window so the race is
-// actually provoked rather than merely asserted away.
+// JS context. Two contexts that each load their own copy of the module can
+// still race: trackers live in one shared chrome.storage.sync, and when
+// IndexedDB is unavailable, logs live in chrome.storage.local month shards.
+// Neither has compare-and-swap, so a read-modify-write in one context can
+// clobber the other. These tests load two independent module instances and
+// widen the read/write window so the race is actually provoked rather than
+// merely asserted away. With IndexedDB, transactions do the serializing; the
+// last case checks two contexts sharing one database.
 const assert = require('assert');
 const { installMockChrome, uninstallMockChrome } = require('./mock_chrome');
+const { installMockIDB, uninstallMockIDB } = require('./mock_idb');
 
 // Widen the gap between a read and its matching write so concurrent
 // read-modify-write cycles reliably interleave.
@@ -23,6 +27,7 @@ function freshEnvironment(getDelayMs = 8, setDelayMs = 1) {
   const mock = installMockChrome();
   const realArea = mock.storage.sync;
   mock.storage.sync = withLatency(realArea, getDelayMs, setDelayMs);
+  mock.storage.local = withLatency(mock.storage.local, getDelayMs, setDelayMs);
   return { mock, realArea };
 }
 
@@ -31,6 +36,7 @@ function freshEnvironment(getDelayMs = 8, setDelayMs = 1) {
 function loadStorageContext() {
   delete require.cache[require.resolve('../shared/auth')];
   delete require.cache[require.resolve('../shared/storage')];
+  delete require.cache[require.resolve('../shared/db')];
   global.TrackerAuth = require('../shared/auth');
   return require('../shared/storage');
 }
@@ -38,6 +44,7 @@ function loadStorageContext() {
 function teardown() {
   delete global.TrackerAuth;
   delete global.TrackerStorage;
+  uninstallMockIDB();
   uninstallMockChrome();
 }
 
@@ -363,6 +370,42 @@ async function run() {
     assert.strictEqual(store.formatTimeHMS(-5), '0s');
 
     console.log('[PASS] Cumulative solve-time stats are per-account and ignore untimed entries');
+    teardown();
+  }
+
+  // 10. Two contexts on one IndexedDB (the popup and the service worker
+  //     answering a content script): 50 writes each, interleaved with
+  //     deletes and undos, lose nothing and keep the aggregates exact.
+  {
+    installMockChrome();
+    installMockIDB();
+    const popup = loadStorageContext();
+    const worker = loadStorageContext();
+    const today = popup.getLocalDateStr();
+
+    const seeded = [];
+    for (let i = 0; i < 6; i++) seeded.push(await worker.addLog({ metricId: 'jobs', company: 'Seed ' + i }));
+
+    const ops = [];
+    for (let i = 0; i < 50; i++) {
+      ops.push(popup.addLog({ metricId: 'jobs', company: 'Popup ' + i }));
+      ops.push(worker.addLog({ metricId: 'leetcode', company: 'Worker ' + i }));
+    }
+    ops.push(popup.deleteLog(seeded[0].id), worker.deleteLog(seeded[1].id), popup.undoLastLog('jobs', today));
+    const results = await Promise.all(ops);
+    assert.strictEqual(results[100], true);
+    assert.strictEqual(results[101], true);
+    assert.strictEqual(results[102], true);
+
+    const logs = await popup.getLogs();
+    assert.strictEqual(logs.length, 6 + 100 - 3, 'every add survives and exactly three entries were removed, got ' + logs.length);
+    const stats = await worker.getStats();
+    const jobs = logs.filter(l => l.metricId === 'jobs').length;
+    assert.strictEqual(stats.totals.jobs, jobs, 'jobs aggregate matches the surviving entries');
+    assert.strictEqual(stats.totals.leetcode, 50);
+    assert.strictEqual(stats.totalLogs, logs.length);
+
+    console.log('[PASS] Two contexts on one IndexedDB: 100 interleaved writes plus deletes stay exact');
     teardown();
   }
 
