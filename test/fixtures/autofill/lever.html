@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+  Trimmed from live jobs.lever.co /apply pages (fetched 2026-10). Server-
+  rendered, so this is the markup the content script sees. The required-field
+  marker (a dingbat asterisk on the live site) is written as a plain "*" here
+  because the repo enforces a no-emoji rule. The urls[Other] row comes from a
+  second posting; most forms show a subset of the urls[...] fields. Company
+  text, SVG icons, and the large hidden card JSON were removed. No personal
+  data.
+-->
+<html>
+<head><title>Example Co - Software Engineer</title></head>
+<body>
+<div class="content-wrapper posting-page">
+<form id="application-form" enctype="multipart/form-data" method="POST">
+  <input type="hidden" name="origin" value="">
+  <input type="hidden" name="referer" value="">
+  <input type="hidden" name="source" value="">
+  <div class="section page-centered application-form">
+    <h4>Submit your application</h4>
+    <ul>
+      <li class="application-question resume">
+        <label>
+          <div class="application-label">Resume/CV<span class="required">*</span></div>
+          <div class="application-field">
+            <a class="postings-btn template-btn-utility visible-resume-upload"><span class="filename"></span><span class="default-label">ATTACH RESUME/CV</span><input class="application-file-input invisible-resume-upload" data-qa="input-resume" id="resume-upload-input" name="resume" tabindex="-1" type="file"></a>
+            <span class="resume-upload-failure"><div class="resume-upload-label">Couldn't auto-read resume.</div></span>
+          </div>
+        </label>
+      </li>
+      <li class="application-question"><label><div class="application-label">Full name<span class="required">*</span></div><div class="application-field"><input type="text" data-qa="name-input" name="name" required></div></label></li>
+      <li class="application-question"><div class="application-label multiple-select">Pronouns</div><div class="application-field"><ul data-qa="candidatePronounsCheckboxes" id="candidatePronounsCheckboxes"><li class="column"><label><input type="checkbox" name="pronouns" value="He/him" class="standardPronounsOption" /><span class="application-answer-alternative">He/him</span></label></li><li class="column"><label><input type="checkbox" name="pronouns" value="She/her" class="standardPronounsOption" /><span class="application-answer-alternative">She/her</span></label></li></ul></div></li>
+      <li class="application-question"><label><div class="application-label">Email<span class="required">*</span></div><div class="application-field"><input name="email" data-qa="email-input" type="email" required></div></label></li>
+      <li class="application-question"><label><div class="application-label">Phone </div><div class="application-field"><input type="text" data-qa="phone-input" name="phone"></div></label></li>
+      <li class="application-question" data-qa="structured-contact-location-question"><label><div class="application-label">Current location <span class="required" data-qa="SCL-question-required-asterisk">*</span></div><div class="application-field"><input class="location-input" data-qa="location-input" id="location-input" type="text" maxlength="100" name="location" required><input id="selected-location" type="hidden" name="selectedLocation"><div class="dropdown-container"><div class="dropdown-results"></div><div class="dropdown-no-results">No location found. Try entering a different location</div></div></div></label></li>
+      <li class="application-question"><label><div class="application-label">Current company </div><div class="application-field"><input type="text" data-qa="org-input" name="org"></div></label></li>
+    </ul>
+  </div>
+  <div class="section page-centered application-form">
+    <h4>Links</h4>
+    <ul>
+      <li class="application-question"><label><div class="application-label">LinkedIn URL</div><div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label></li>
+      <li class="application-question"><label><div class="application-label">GitHub URL</div><div class="application-field"><input type="text" name="urls[GitHub]"></div></label></li>
+      <li class="application-question"><label><div class="application-label">Portfolio URL</div><div class="application-field"><input type="text" name="urls[Portfolio]"></div></label></li>
+      <li class="application-question"><label><div class="application-label">Other website</div><div class="application-field"><input type="text" name="urls[Other]"></div></label></li>
+    </ul>
+  </div>
+  <div class="section page-centered application-form" data-qa="additional-cards">
+    <h4 data-qa="card-name">Supplementary Questions</h4>
+    <ul>
+      <li class="application-question custom-question">
+        <div><div class="application-label full-width dropdown"><div class="text">Which university are you currently attending or did you last attend?<span class="required">*</span></div></div>
+        <div class="application-field full-width required-field"><div class="application-dropdown"><select name="cards[00000000-0000-4000-8000-000000000001][field0]" required><option value="">Select...</option><option value="Example State University">Example State University</option><option value="Other - School Not Listed">Other - School Not Listed</option></select></div></div></div>
+      </li>
+      <li class="application-question custom-question">
+        <div><div class="application-label full-width multiple-select"><div class="text">Language Skill(s) (Check all that apply)<span class="required">*</span></div></div>
+        <div class="application-field full-width required-field"><ul data-qa="checkboxes">
+          <li><label><input type="checkbox" name="cards[00000000-0000-4000-8000-000000000002][field0]" value="English" required /><span class="application-answer-alternative">English</span></label></li>
+          <li><label><input type="checkbox" name="cards[00000000-0000-4000-8000-000000000002][field0]" value="Spanish" required /><span class="application-answer-alternative">Spanish</span></label></li>
+          <li><label><input type="checkbox" name="cards[00000000-0000-4000-8000-000000000002][field0]" value="Choose not to disclose" required /><span class="application-answer-alternative">Choose not to disclose</span></label></li>
+        </ul></div></div>
+      </li>
+      <li class="application-question custom-question">
+        <div><div class="application-label full-width text"><div class="text">Tell us about a project you are proud of.</div></div>
+        <div class="application-field full-width"><textarea class="card-field-input" name="cards[00000000-0000-4000-8000-000000000003][field0]"></textarea></div></div>
+      </li>
+    </ul>
+  </div>
+  <div class="section page-centered application-form">
+    <h4>Additional information</h4>
+    <textarea placeholder="Add a cover letter or anything else you want to share." name="comments" id="additional-information"></textarea>
+  </div>
+  <div class="section page-centered last-section-apply"><button type="submit" class="postings-btn template-btn-submit" data-qa="btn-submit">Submit application</button></div>
+</form>
+</div>
+</body>
+</html>

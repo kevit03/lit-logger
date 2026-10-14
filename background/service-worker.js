@@ -79,6 +79,22 @@ const SHARED_FILES = [
   ['JobMeta', 'shared/job-meta.js']
 ];
 
+// Autofill rides along with the universal tracker. The store and core define
+// top-level consts and get the same one-copy guard; the site adapters and the
+// button script are safe to load twice.
+const AUTOFILL_SHARED = [
+  ['AutofillStore', 'shared/autofill-store.js'],
+  ['AutofillCore', 'shared/autofill-core.js']
+];
+const AUTOFILL_FILES = [
+  'content/autofill/sites/greenhouse.js',
+  'content/autofill/sites/lever.js',
+  'content/autofill/sites/ashby.js',
+  'content/autofill/sites/workday.js',
+  'content/autofill/autofill-ui.js'
+];
+const AUTOFILL_CSS = ['content/autofill/autofill-ui.css'];
+
 function alarmNameFor(key) {
   return TIMER_SURFACES[key] ? TIMER_SURFACES[key].alarm : null;
 }
@@ -317,6 +333,8 @@ async function probeFrame(target) {
       TrackerStorage: typeof TrackerStorage !== 'undefined',
       AutoTrackerCore: typeof AutoTrackerCore !== 'undefined',
       JobMeta: typeof JobMeta !== 'undefined',
+      AutofillStore: typeof AutofillStore !== 'undefined',
+      AutofillCore: typeof AutofillCore !== 'undefined',
       quickLog: typeof window.__ptQuickLog === 'function',
       mounted: !!window.__ptAutoTrackerMounted
     })
@@ -370,10 +388,16 @@ async function injectUniversal(sender) {
   try {
     const have = await probeFrame(target);
     if (have.mounted) return false;
+    const autofill = AUTOFILL_SHARED.filter(([name]) => !have[name]).map(([, file]) => file).concat(AUTOFILL_FILES);
     await chrome.scripting.executeScript({
       target,
-      files: missingShared(have).concat(['content/adapters/ats/universal.js', 'content/auto-tracker.js'])
+      files: missingShared(have).concat(['content/adapters/ats/universal.js', 'content/auto-tracker.js'], autofill)
     });
+    // executeScript does not apply CSS. The button script falls back to
+    // inline outlines, so a failure here is not a failed injection.
+    if (typeof chrome.scripting.insertCSS === 'function') {
+      await chrome.scripting.insertCSS({ target, files: AUTOFILL_CSS }).catch(() => {});
+    }
     return true;
   } catch (err) {
     return false;

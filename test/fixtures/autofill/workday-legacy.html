@@ -1,0 +1,79 @@
+<!doctype html>
+<!--
+  Workday "My Information" step, older markup generation keyed by
+  data-automation-id (legalNameSection_*, addressSection_*, phone-number,
+  phone-device-type, countryDropdown, formField-sourcePrompt).
+
+  NOT captured from a live page: Workday application steps sit behind a
+  candidate sign-in and render client-side. This was built by hand from the
+  automation ids named in the spec and the ones open-source fillers target
+  (formField-*, multiSelectContainer, selectedItemList, promptOption,
+  file-upload-input-ref, wd-popup). Treat every id here as unverified. No
+  personal data. Listbox and prompt popups mount on interaction, which
+  test/mock_autofill_4.js simulates.
+-->
+<html>
+<head><title>Apply - Example Co Careers</title></head>
+<body>
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="progressBar"><div data-automation-id="progressBarActiveStep"><span>current step</span><span>2 of 6</span><span>My Information</span></div></div>
+  <div data-automation-id="applyFlowMyInfoPage">
+    <div data-automation-id="formField-sourcePrompt">
+      <label data-automation-id="formLabel">How Did You Hear About Us?<abbr title="required">*</abbr></label>
+      <div data-automation-id="multiSelectContainer" id="sourcePrompt-container" data-uxi-widget-type="multiselect">
+        <ul data-automation-id="selectedItemList" role="listbox" aria-label="items selected"></ul>
+        <div data-automation-id="multiselectInputContainer"><input type="text" data-automation-id="searchBox" placeholder="Search" aria-label="How Did You Hear About Us?" value=""></div>
+      </div>
+    </div>
+    <div data-automation-id="formField-countryDropdown">
+      <label data-automation-id="formLabel">Country<abbr title="required">*</abbr></label>
+      <button type="button" aria-haspopup="listbox" data-automation-id="countryDropdown" aria-controls="country-listbox" aria-label="Country Select One Required" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-legalNameSection_firstName">
+      <label data-automation-id="formLabel" for="input-1">Given Name(s)<abbr title="required">*</abbr></label>
+      <input type="text" id="input-1" data-automation-id="legalNameSection_firstName" aria-required="true" value="">
+    </div>
+    <div data-automation-id="formField-legalNameSection_lastName">
+      <label data-automation-id="formLabel" for="input-2">Family Name<abbr title="required">*</abbr></label>
+      <input type="text" id="input-2" data-automation-id="legalNameSection_lastName" aria-required="true" value="">
+    </div>
+    <div data-automation-id="formField-addressSection_addressLine1">
+      <label data-automation-id="formLabel" for="input-3">Address Line 1</label>
+      <input type="text" id="input-3" data-automation-id="addressSection_addressLine1" value="">
+    </div>
+    <div data-automation-id="formField-addressSection_addressLine2">
+      <label data-automation-id="formLabel" for="input-4">Address Line 2</label>
+      <input type="text" id="input-4" data-automation-id="addressSection_addressLine2" value="">
+    </div>
+    <div data-automation-id="formField-addressSection_city">
+      <label data-automation-id="formLabel" for="input-5">City</label>
+      <input type="text" id="input-5" data-automation-id="addressSection_city" value="">
+    </div>
+    <div data-automation-id="formField-addressSection_countryRegion">
+      <label data-automation-id="formLabel">State</label>
+      <button type="button" aria-haspopup="listbox" data-automation-id="addressSection_countryRegion" aria-controls="region-listbox" aria-label="State Select One" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-addressSection_postalCode">
+      <label data-automation-id="formLabel" for="input-6">Postal Code</label>
+      <input type="text" id="input-6" data-automation-id="addressSection_postalCode" value="">
+    </div>
+    <div data-automation-id="formField-email">
+      <label data-automation-id="formLabel" for="input-7">Email Address</label>
+      <input type="text" id="input-7" data-automation-id="email" value="">
+    </div>
+    <div data-automation-id="formField-phone-device-type">
+      <label data-automation-id="formLabel">Phone Device Type<abbr title="required">*</abbr></label>
+      <button type="button" aria-haspopup="listbox" data-automation-id="phone-device-type" aria-controls="device-listbox" aria-label="Phone Device Type Select One Required" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-phone-number">
+      <label data-automation-id="formLabel" for="input-8">Phone Number<abbr title="required">*</abbr></label>
+      <input type="text" id="input-8" data-automation-id="phone-number" aria-required="true" value="">
+    </div>
+  </div>
+  <div data-automation-id="formField-resume">
+    <div data-automation-id="file-upload-drop-zone"><input type="file" data-automation-id="file-upload-input-ref" multiple></div>
+  </div>
+  <div data-automation-id="pageFooter"><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></div>
+</div>
+</body>
+</html>

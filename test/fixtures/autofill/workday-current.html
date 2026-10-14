@@ -1,0 +1,66 @@
+<!doctype html>
+<!--
+  Workday "My Information" step, newer markup generation where controls carry
+  section-scoped ids and names ("name--legalName--firstName",
+  "address--city", "phoneNumber--phoneType", "source--source") instead of
+  per-field data-automation-ids. The "<section>--<field>" id convention is
+  what open-source fillers query on current tenants (e.g.
+  "education-4--fieldOfStudy"); the specific ids below follow that pattern.
+
+  NOT captured from a live page: Workday application steps sit behind a
+  candidate sign-in and render client-side. Treat every id here as
+  unverified. No personal data.
+-->
+<html>
+<head><title>Apply - Example Co Careers</title></head>
+<body>
+<div data-automation-id="applyFlowPage">
+  <div data-automation-id="applyFlowMyInfoPage">
+    <div data-automation-id="formField-source">
+      <label for="source--source">How Did You Hear About Us?<abbr title="required">*</abbr></label>
+      <div data-automation-id="multiSelectContainer" id="source--source-container" data-uxi-widget-type="multiselect">
+        <ul data-automation-id="selectedItemList" role="listbox" aria-label="items selected"></ul>
+        <div data-automation-id="multiselectInputContainer"><input type="text" id="source--source" name="source" data-automation-id="searchBox" placeholder="Search" value=""></div>
+      </div>
+    </div>
+    <div data-automation-id="formField-country">
+      <label for="country--country">Country<abbr title="required">*</abbr></label>
+      <button type="button" id="country--country" name="country" aria-haspopup="listbox" aria-label="Country Select One Required" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-legalName--firstName">
+      <label for="name--legalName--firstName">First Name<abbr title="required">*</abbr></label>
+      <input type="text" id="name--legalName--firstName" name="legalName--firstName" aria-required="true" value="">
+    </div>
+    <div data-automation-id="formField-legalName--lastName">
+      <label for="name--legalName--lastName">Last Name<abbr title="required">*</abbr></label>
+      <input type="text" id="name--legalName--lastName" name="legalName--lastName" aria-required="true" value="">
+    </div>
+    <div data-automation-id="formField-addressLine1">
+      <label for="address--addressLine1">Address Line 1</label>
+      <input type="text" id="address--addressLine1" name="addressLine1" value="">
+    </div>
+    <div data-automation-id="formField-city">
+      <label for="address--city">City</label>
+      <input type="text" id="address--city" name="city" value="">
+    </div>
+    <div data-automation-id="formField-countryRegion">
+      <label for="address--countryRegion">State</label>
+      <button type="button" id="address--countryRegion" name="countryRegion" aria-haspopup="listbox" aria-label="State Select One" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-postalCode">
+      <label for="address--postalCode">Postal Code</label>
+      <input type="text" id="address--postalCode" name="postalCode" value="">
+    </div>
+    <div data-automation-id="formField-phoneType">
+      <label for="phoneNumber--phoneType">Phone Device Type<abbr title="required">*</abbr></label>
+      <button type="button" id="phoneNumber--phoneType" name="phoneType" aria-haspopup="listbox" aria-label="Phone Device Type Select One Required" value="">Select One</button>
+    </div>
+    <div data-automation-id="formField-phoneNumber">
+      <label for="phoneNumber--phoneNumber">Phone Number<abbr title="required">*</abbr></label>
+      <input type="text" id="phoneNumber--phoneNumber" name="phoneNumber" aria-required="true" value="">
+    </div>
+  </div>
+  <div data-automation-id="pageFooter"><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></div>
+</div>
+</body>
+</html>

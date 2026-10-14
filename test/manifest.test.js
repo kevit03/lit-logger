@@ -130,8 +130,37 @@ async function run() {
     'content/quick-log.js',
     'content/universal-bootstrap.js',
     'content/adapters/ats/universal.js',
-    'content/auto-tracker.js'
+    'content/auto-tracker.js',
+    'content/autofill/autofill-ui.css'
   ].forEach(rel => assert.ok(fs.existsSync(path.join(rootDir, rel)), `on-demand script must exist: ${rel}`));
+
+  // 4d. Autofill. Every ATS and universal entry loads the store, then the
+  //     core, then the site adapters, then the button script, with its CSS.
+  //     The universal injection path loads the same files.
+  assert.strictEqual(manifest.version, '1.5.0', 'version is 1.5.0');
+  const AUTOFILL_JS = [
+    'shared/autofill-store.js',
+    'shared/autofill-core.js',
+    'content/autofill/sites/greenhouse.js',
+    'content/autofill/sites/lever.js',
+    'content/autofill/sites/ashby.js',
+    'content/autofill/sites/workday.js',
+    'content/autofill/autofill-ui.js'
+  ];
+  const atsEntries = manifest.content_scripts.filter(e => (e.js || []).some(f => f.startsWith('content/adapters/ats/')));
+  assert.strictEqual(atsEntries.length, 2, 'the ATS and universal entries both exist');
+  atsEntries.forEach(entry => {
+    const idxs = AUTOFILL_JS.map(f => entry.js.indexOf(f));
+    idxs.forEach((i, n) => assert.ok(i >= 0, `ATS entry must load ${AUTOFILL_JS[n]}`));
+    idxs.slice(1).forEach((i, n) => assert.ok(i > idxs[n], `${AUTOFILL_JS[n + 1]} must load after ${AUTOFILL_JS[n]}`));
+    assert.ok(idxs[0] > entry.js.indexOf('content/auto-tracker.js'), 'autofill loads after the auto-tracker');
+    assert.ok((entry.css || []).includes('content/autofill/autofill-ui.css'), 'ATS entry must include the autofill CSS');
+    assert.ok(entry.all_frames, 'autofill needs every frame (the Greenhouse embed is an iframe)');
+  });
+  assert.ok(!manifest.content_scripts.some(e => !atsEntries.includes(e) && (e.js || []).some(f => /autofill/.test(f))), 'autofill runs only on application sites');
+  const swText = fs.readFileSync(swPath, 'utf8');
+  AUTOFILL_JS.forEach(f => assert.ok(swText.includes(`'${f}'`), `the universal injection path loads ${f}`));
+  assert.ok(manifest.options_ui && fs.existsSync(path.join(rootDir, manifest.options_ui.page)), 'the autofill profile page exists');
   const swSource = fs.readFileSync(swPath, 'utf8');
   assert.ok(/importScripts\('\.\.\/shared\/auth\.js', '\.\.\/shared\/db\.js', '\.\.\/shared\/storage\.js'\)/.test(swSource), 'the worker loads auth, db, then storage');
   assert.ok(/TrackerStorage\.serveRemote\(\)/.test(swSource), 'the worker answers content-script storage calls');

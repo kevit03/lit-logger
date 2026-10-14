@@ -237,7 +237,10 @@ async function run() {
     assert.deepStrictEqual(ok, { ok: true });
     const files = mock.scripting.executions.filter(e => e.files).pop();
     assert.strictEqual(files.key, '1:0');
-    assert.deepStrictEqual(files.files, ['shared/auth.js', 'shared/storage.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/adapters/ats/universal.js', 'content/auto-tracker.js']);
+    assert.deepStrictEqual(files.files, ['shared/auth.js', 'shared/storage.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/adapters/ats/universal.js', 'content/auto-tracker.js',
+      'shared/autofill-store.js', 'shared/autofill-core.js',
+      'content/autofill/sites/greenhouse.js', 'content/autofill/sites/lever.js', 'content/autofill/sites/ashby.js', 'content/autofill/sites/workday.js',
+      'content/autofill/autofill-ui.js']);
 
     assert.strictEqual(await sw.injectUniversal({ tab: { id: 1 }, frameId: 0 }), false, 'a frame with a mounted tracker is left alone');
     assert.strictEqual(await sw.injectUniversal({ tab: { id: 2 }, frameId: 3 }), true);

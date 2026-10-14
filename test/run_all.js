@@ -17,6 +17,10 @@ const SUITES = [
   { name: 'Service Worker Suite', file: './service-worker.test.js' },
   { name: 'Popup Widget Layout Suite', file: './widgets.test.js' },
   { name: 'Calendar Overlay Suite', file: './calendar.test.js' },
+  { name: 'Autofill Engine Suite', file: './autofill-core.test.js' },
+  { name: 'Autofill Store Suite', file: './autofill-store.test.js' },
+  { name: 'Autofill Button & Learning Suite', file: './autofill-ui.test.js' },
+  { name: 'Autofill Site Adapter Suite', file: './autofill-sites.test.js' },
   { name: 'Zero-Emoji Compliance Suite', file: './emoji.test.js' },
   { name: 'Manifest V3 Validation Suite', file: './manifest.test.js' }
 ];

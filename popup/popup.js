@@ -3177,6 +3177,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (chrome.tabs) chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
   });
 
+  el('autofill-profile-btn').addEventListener('click', () => {
+    if (chrome.tabs) chrome.tabs.create({ url: chrome.runtime.getURL('options/autofill.html') });
+  });
+
   // ---------------------------------------------------------------------------
   // Exports
   // ---------------------------------------------------------------------------

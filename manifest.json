@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LIT: Job & LeetCode Tracker",
-  "version": "1.4.0",
-  "description": "Track job applications, LeetCodes, and streaks on Google Calendar. Auto-logs LeetCode, NeetCode, and applications on Greenhouse, Lever, Workday, and other career sites.",
+  "version": "1.5.0",
+  "description": "Track job applications, LeetCodes, and streaks on Google Calendar. Auto-logs LeetCode, NeetCode, and applications, and autofills application forms on Greenhouse, Lever, Ashby, Workday, and other career sites.",
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "LIT",
@@ -14,6 +14,10 @@
   },
   "background": {
     "service_worker": "background/service-worker.js"
+  },
+  "options_ui": {
+    "page": "options/autofill.html",
+    "open_in_tab": true
   },
   "content_scripts": [
     {
@@ -78,7 +82,17 @@
         "content/adapters/ats/lever.js",
         "content/adapters/ats/ashby.js",
         "content/adapters/ats/workday.js",
-        "content/auto-tracker.js"
+        "content/auto-tracker.js",
+        "shared/autofill-store.js",
+        "shared/autofill-core.js",
+        "content/autofill/sites/greenhouse.js",
+        "content/autofill/sites/lever.js",
+        "content/autofill/sites/ashby.js",
+        "content/autofill/sites/workday.js",
+        "content/autofill/autofill-ui.js"
+      ],
+      "css": [
+        "content/autofill/autofill-ui.css"
       ],
       "all_frames": true,
       "run_at": "document_idle"
@@ -104,7 +118,17 @@
         "shared/auto-tracker-core.js",
         "shared/job-meta.js",
         "content/adapters/ats/universal.js",
-        "content/auto-tracker.js"
+        "content/auto-tracker.js",
+        "shared/autofill-store.js",
+        "shared/autofill-core.js",
+        "content/autofill/sites/greenhouse.js",
+        "content/autofill/sites/lever.js",
+        "content/autofill/sites/ashby.js",
+        "content/autofill/sites/workday.js",
+        "content/autofill/autofill-ui.js"
+      ],
+      "css": [
+        "content/autofill/autofill-ui.css"
       ],
       "all_frames": true,
       "run_at": "document_idle"

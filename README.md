@@ -82,6 +82,15 @@ Hit **+** to add a widget. Drag to reorder. Pin two Activity Charts to two track
 
 LIT draws its badges in a layer of its own, never inside Google Calendar's cells, so your events and tasks stay exactly where they were. Works in Day, Week, and Month view, and adapts to narrow columns. Hover any day for a quick **+** to backfill.
 
+### Autofill: fill applications in one click
+
+Fill in your profile once (open LIT, **Settings > Autofill profile**). On Greenhouse, Lever, Ashby, Workday, and the other supported career sites, an **Autofill** button appears at the bottom right of any page with an application form. Click it, or press **Alt+Shift+F**. Filled fields get a green outline and fields that need you get an amber one.
+
+- **No AI and no servers.** Fields are matched by rules: site-specific selectors first, then rules you taught it, then the page's `autocomplete` hints, then a dictionary of common phrasings ("legal first name", "will you now or in the future require sponsorship").
+- **It learns.** Fill a field it missed and LIT offers to remember it for that site or everywhere. Long answers can go into an answer bank and get suggested the next time a similar question shows up.
+- **You stay in control.** Autofill never clicks Submit. EEO questions are left blank unless you turn them on. LIT never learns from password, card, or SSN fields.
+- **Your data stays on this device**, in `chrome.storage.local`. Export and import it as JSON from the profile page.
+
 ### Privacy and accounts
 
 Logs are scoped to the signed-in account, so two Google accounts never see each other's data. No backend and no third-party servers: your data lives in your own Chrome sync storage.
@@ -120,6 +129,12 @@ core.registerAdapter({
 
 The core handles deduping, toasts, and teardown, so a double-fired submit never double-counts.
 
+### Autofill engine
+
+`shared/autofill-core.js` scans the form, reads each field's label (`label[for]`, wrapping label, `aria-labelledby`, `aria-label`, nearby question text, placeholder, name), and matches it against the profile. Matching tries site adapter fields, then learned rules (this site before global), then `autocomplete`, then the synonym dictionary, then the answer bank. Values are set through the native value setter so React-controlled inputs notice.
+
+Site adapters in `content/autofill/sites/` cover what the generic engine can't: react-select menus on Greenhouse, yes/no button pairs on Ashby, and Workday's listbox and multiselect widgets, which re-render after every edit. `shared/autofill-store.js` keeps the profile, resume, rules, and answers under `af_` keys, and `content/autofill/autofill-ui.js` draws the button inside a closed shadow root.
+
 ### Calendar overlay
 
 `content/content.js` finds day cells and reconciles badges into them, re-rendering only what changed. Dates come from Calendar's own `data-datekey` attribute:
@@ -144,7 +159,7 @@ Logs, trackers, theme, widget layout (`pt_widgets`), and the signed-in account a
 
 ### Tested
 
-A suite covering storage, concurrency, account isolation, auto-tracking, the calendar overlay, widgets, timers, and metrics, plus adversarial storage and stress tests in `tests/`.
+A suite covering storage, concurrency, account isolation, auto-tracking, autofill, the calendar overlay, widgets, timers, and metrics, plus adversarial storage and stress tests in `tests/`.
 
 ```
 node test/run_all.js
