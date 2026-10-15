@@ -63,12 +63,25 @@
   // ones that commit after an animation or re-render (Workday).
   const SWEEP_DELAYS_MS = [250, 900];
   const URL_KEYS = new Set(['linkedin', 'github', 'portfolio', 'website']);
+  const FIELD_TAGS = new Set(['input', 'textarea', 'select']);
+  // Where the widget sits, per site, in chrome.storage.local.
+  const POS_KEY = 'lit_af_ui_pos';
+  const POS_HOSTS_MAX = 60;
+  const DEFAULT_POS = { h: 'right', v: 'bottom', x: 16, y: 16 };
+  const EDGE_MIN = 6;
+  const DRAG_THRESHOLD_PX = 4;
+  const AVOID_MARGIN_PX = 8;
+  const PRESS_SAFETY_MS = 1500;
 
   // The host element can still be hit by page selectors such as `#id` or a
   // universal rule, so its own box is pinned inline with !important.
   const HOST_STYLE = 'all: initial !important; position: fixed !important; width: 0 !important; height: 0 !important; ' +
     'right: 0 !important; bottom: 0 !important; z-index: 2147483646 !important; display: block !important;';
 
+  // The widget: one dock (grip, Autofill button, hide) and a stack of cards
+  // that opens away from the screen edge the dock is pinned to. The wrap's
+  // left/right/top/bottom are set from the saved position; `at-top` and
+  // `at-left` flip the stacking and alignment so cards never hang offscreen.
   const UI_CSS = `
     :host { all: initial; }
     .wrap {
@@ -83,8 +96,15 @@
       pointer-events: none;
       font-family: "Google Sans", Inter, Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       -webkit-font-smoothing: antialiased;
+      color: #ecedee;
+      transition: opacity 160ms ease;
     }
-    .stack { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+    .wrap.at-top { flex-direction: column-reverse; }
+    .wrap.at-left { align-items: flex-start; }
+    .wrap.dragging, .wrap.dragging * { cursor: grabbing !important; user-select: none; }
+    .wrap.dragging .card, .wrap.dragging .dock { box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.25); }
+    .stack { display: flex; flex-direction: column; gap: 8px; align-items: inherit; }
+    .wrap.at-top .stack { flex-direction: column-reverse; }
     button {
       all: unset;
       box-sizing: border-box;
@@ -93,11 +113,12 @@
       font-weight: 600;
       font-size: 12px;
       line-height: 1;
-      padding: 7px 10px;
+      padding: 7px 11px;
       border-radius: 8px;
       color: #ecedee;
       background: rgba(255, 255, 255, 0.07);
       border: 1px solid rgba(255, 255, 255, 0.1);
+      white-space: nowrap;
       transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     button:hover { background: rgba(255, 255, 255, 0.14); }
@@ -105,14 +126,45 @@
     button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 2px; }
     button.primary { background: #8ab4f8; color: #111316; border-color: transparent; }
     button.primary:hover { background: #aecbfa; }
-    .fab {
+    button.quiet { background: transparent; border-color: transparent; color: #9aa0a6; }
+    button.quiet:hover { background: rgba(255, 255, 255, 0.08); color: #ecedee; }
+    .hidden { display: none !important; }
+
+    .grip {
+      flex: none;
+      width: 18px;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #7c8086;
+      cursor: grab;
+      touch-action: none;
+      border-radius: 6px;
+    }
+    .grip:hover { color: #ecedee; }
+    .grip svg { display: block; }
+
+    .dock {
       pointer-events: auto;
-      font-size: 13px;
-      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
       border-radius: 999px;
       background: rgba(24, 25, 28, 0.94);
       border: 1px solid rgba(255, 255, 255, 0.12);
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.2);
+      transition: box-shadow 160ms ease;
+    }
+    .dock .grip { width: 16px; margin-left: 4px; }
+    .fab {
+      font-size: 13px;
+      padding: 8px 14px 8px 12px;
+      border-radius: 999px;
+      background: transparent;
+      border-color: transparent;
+      touch-action: none;
     }
     .fab::before {
       content: "";
@@ -124,24 +176,40 @@
       background: #8ab4f8;
       vertical-align: 1px;
     }
-    .fab:hover { background: rgba(40, 42, 46, 0.96); }
+    .fab:hover { background: rgba(255, 255, 255, 0.1); }
     .fab.busy { opacity: 0.7; cursor: progress; }
-    .hidden { display: none !important; }
+    .fab.busy::before { animation: lit-pulse 900ms ease-in-out infinite; }
+    .x {
+      flex: none;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: transparent;
+      border-color: transparent;
+      color: #7c8086;
+    }
+    .x:hover { background: rgba(255, 255, 255, 0.1); color: #ecedee; }
+    .x svg { display: block; }
+
     .card {
       pointer-events: auto;
       box-sizing: border-box;
-      max-width: 340px;
-      min-width: 200px;
-      padding: 11px 14px 11px 16px;
+      width: 300px;
+      max-width: calc(100vw - 24px);
+      padding: 8px 8px 12px 12px;
       border-radius: 12px;
-      background: rgba(24, 25, 28, 0.96);
-      color: #ecedee;
+      background: rgba(24, 25, 28, 0.97);
       font-size: 13px;
       line-height: 1.45;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
       position: relative;
       overflow: hidden;
+      animation: lit-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     .card::before {
       content: "";
@@ -152,14 +220,63 @@
     }
     .card.success::before { background: #34a853; }
     .card.warn::before { background: #fbbc04; }
-    .body { word-break: break-word; }
-    .actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
-    .prompt { position: fixed; z-index: 2147483647; font-family: inherit; }
-    .prompt.docked { right: 16px; bottom: 64px; }
+    .head { display: flex; align-items: center; gap: 4px; margin: 0 0 2px -4px; }
+    .head .grip { height: 22px; }
+    .title {
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #9aa0a6;
+    }
+    .body { word-break: break-word; padding-right: 4px; }
+    .prompt .body { font-weight: 600; }
+    .value {
+      margin-top: 6px;
+      margin-right: 4px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #c8cbd0;
+      font-size: 12px;
+      line-height: 1.4;
+      max-height: 54px;
+      overflow: hidden;
+      word-break: break-word;
+    }
+    .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .bar {
+      position: absolute;
+      left: 0; bottom: 0;
+      height: 2px;
+      width: 100%;
+      background: rgba(138, 180, 248, 0.55);
+      transform-origin: left center;
+      animation: lit-drain var(--life, 20000ms) linear forwards;
+    }
+    .card.paused .bar { animation-play-state: paused; }
+    @keyframes lit-drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    @keyframes lit-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    @keyframes lit-pulse { 50% { opacity: 0.3; } }
     @media (prefers-reduced-motion: reduce) {
-      button { transition: none; }
+      button, .wrap, .dock { transition: none; }
+      .card, .fab.busy::before { animation: none; }
+      .bar { display: none; }
     }
   `;
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const GRIP_SVG = {
+    attrs: { width: '8', height: '14', viewBox: '0 0 8 14', fill: 'currentColor' },
+    children: [[2, 2], [6, 2], [2, 7], [6, 7], [2, 12], [6, 12]].map(([cx, cy]) => ['circle', { cx: String(cx), cy: String(cy), r: '1.3' }])
+  };
+  const X_SVG = {
+    attrs: { width: '10', height: '10', viewBox: '0 0 10 10', fill: 'none' },
+    children: [['path', { d: 'M1.5 1.5l7 7M8.5 1.5l-7 7', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }]]
+  };
 
   // --- state ---------------------------------------------------------------
   let started = false;
@@ -173,9 +290,17 @@
   let running = false;
   let hasRun = false;
   let lastProfile = null;
-  let ui = null;          // { host, shadow, wrap, stack, fab }
-  let toast = null;       // { el, timer }
-  let prompt = null;      // { el, timer, entry }
+  let ui = null;          // { host, shadow, wrap, stack, dock, fab }
+  let toast = null;       // { el, timer, remaining, startedAt, held }
+  let prompt = null;      // same, plus entry
+  let pos = Object.assign({}, DEFAULT_POS); // saved corner + offsets
+  let dodge = null;       // a mirror of pos while the edited field is under it
+  let drag = null;
+  let suppressClick = false;
+  let hiddenForPage = false;
+  let viewportTimer = null;
+  let pointerDown = false;
+  let pendingPrompt = null; // { show, timer } held until the press ends
   let byEl = new Map();   // field element -> entry
   let byGroup = new Map();// radio/checkbox group container -> entry
   let outlined = new Set();
@@ -311,6 +436,59 @@
     raise(host);
   }
 
+  function swallow(event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+  }
+
+  // Icons are built node by node: no innerHTML, so a page's Trusted Types
+  // policy has nothing to object to.
+  function svgIcon(spec) {
+    if (typeof document.createElementNS !== 'function') return null;
+    try {
+      const svg = document.createElementNS(SVG_NS, 'svg');
+      Object.keys(spec.attrs).forEach(k => svg.setAttribute(k, spec.attrs[k]));
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('focusable', 'false');
+      spec.children.forEach(([tag, attrs]) => {
+        const node = document.createElementNS(SVG_NS, tag);
+        Object.keys(attrs).forEach(k => node.setAttribute(k, attrs[k]));
+        svg.appendChild(node);
+      });
+      return svg;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function svgSpan(cls, spec) {
+    const span = document.createElement('span');
+    span.className = cls;
+    const icon = svgIcon(spec);
+    if (icon) span.appendChild(icon);
+    return span;
+  }
+
+  function makeGrip() {
+    const grip = svgSpan('grip', GRIP_SVG);
+    grip.setAttribute('title', 'Drag to move');
+    grip.setAttribute('aria-hidden', 'true');
+    grip.addEventListener('pointerdown', startDrag);
+    return grip;
+  }
+
+  function makeClose(label, onClick) {
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.setAttribute('type', 'button');
+    x.setAttribute('aria-label', label);
+    x.setAttribute('title', label);
+    const icon = svgIcon(X_SVG);
+    if (icon) x.appendChild(icon);
+    x.addEventListener('click', event => { swallow(event); onClick(); });
+    return x;
+  }
+
   function ensureUi() {
     if (ui) {
       attachHost(ui.host);
@@ -333,28 +511,40 @@
     wrap.className = 'wrap';
     const stack = document.createElement('div');
     stack.className = 'stack';
+
+    const dock = document.createElement('div');
+    dock.className = 'dock hidden';
     const fab = document.createElement('button');
     fab.className = 'fab hidden';
     fab.setAttribute('type', 'button');
-    fab.setAttribute('title', 'Autofill this form (Alt+Shift+F)');
+    fab.setAttribute('title', 'Autofill this form (Alt+Shift+F). Drag to move.');
     fab.setAttribute('aria-label', 'Autofill this form');
     fab.textContent = 'Autofill';
+    // The button drags too; a press that moves is a drag, not a click.
+    fab.addEventListener('pointerdown', startDrag);
     fab.addEventListener('click', event => {
-      if (event && typeof event.preventDefault === 'function') event.preventDefault();
-      if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+      swallow(event);
+      if (suppressClick) { suppressClick = false; return; }
       fill();
     });
+    dock.appendChild(makeGrip());
+    dock.appendChild(fab);
+    dock.appendChild(makeClose('Hide on this page (Alt+Shift+F still fills)', hideForPage));
+
     wrap.appendChild(stack);
-    wrap.appendChild(fab);
+    wrap.appendChild(dock);
     shadow.appendChild(wrap);
     attachHost(host);
-    ui = { host, shadow, wrap, stack, fab };
+    ui = { host, shadow, wrap, stack, dock, fab };
+    applyPos();
+    loadPos();
     return ui;
   }
 
   function setFabVisible(show) {
     if (!ui) return;
     ui.fab.classList.toggle('hidden', !show);
+    ui.dock.classList.toggle('hidden', !show);
   }
 
   function setFabBusy(busy) {
@@ -363,6 +553,260 @@
     ui.fab.textContent = busy ? 'Filling...' : (hasRun ? 'Fill again' : 'Autofill');
   }
 
+  function hideForPage() {
+    hiddenForPage = true;
+    setFabVisible(false);
+    showToast('Autofill is hidden on this page. Alt+Shift+F or "Autofill this page" in the LIT menu still fills it.', { variant: 'info' });
+  }
+
+  // --- position, dragging, and staying out of the way ---------------------------
+  function viewport() {
+    return { w: window.innerWidth || 1024, h: window.innerHeight || 768 };
+  }
+
+  function clampNum(n, lo, hi) {
+    return Math.max(lo, Math.min(hi, n));
+  }
+
+  function validPos(p) {
+    return !!p && (p.h === 'left' || p.h === 'right') && (p.v === 'top' || p.v === 'bottom') &&
+      Number.isFinite(p.x) && Number.isFinite(p.y);
+  }
+
+  function rectOf(el) {
+    try {
+      const r = el.getBoundingClientRect();
+      return r && (r.width > 0 || r.height > 0) ? r : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // The widget's box if it sat at `p`, from its current size.
+  function boxAt(p, size) {
+    const vp = viewport();
+    const left = p.h === 'left' ? p.x : vp.w - p.x - size.w;
+    const top = p.v === 'top' ? p.y : vp.h - p.y - size.h;
+    return { left, top, right: left + size.w, bottom: top + size.h };
+  }
+
+  function overlaps(a, b, margin) {
+    return a.left < b.right + margin && a.right > b.left - margin && a.top < b.bottom + margin && a.bottom > b.top - margin;
+  }
+
+  function sizeOf() {
+    const r = ui ? rectOf(ui.wrap) : null;
+    return r ? { w: r.width, h: r.height } : { w: 0, h: 0 };
+  }
+
+  // Keeps the widget on screen after a resize or with a position saved on a
+  // larger window.
+  function clampPos(p, size) {
+    const vp = viewport();
+    return {
+      h: p.h,
+      v: p.v,
+      x: clampNum(p.x, EDGE_MIN, Math.max(EDGE_MIN, vp.w - size.w - EDGE_MIN)),
+      y: clampNum(p.y, EDGE_MIN, Math.max(EDGE_MIN, vp.h - size.h - EDGE_MIN))
+    };
+  }
+
+  function applyPos() {
+    if (!ui || drag) return;
+    const p = clampPos(dodge || pos, sizeOf());
+    const s = ui.wrap.style;
+    s.left = p.h === 'left' ? p.x + 'px' : 'auto';
+    s.right = p.h === 'right' ? p.x + 'px' : 'auto';
+    s.top = p.v === 'top' ? p.y + 'px' : 'auto';
+    s.bottom = p.v === 'bottom' ? p.y + 'px' : 'auto';
+    ui.wrap.classList.toggle('at-top', p.v === 'top');
+    ui.wrap.classList.toggle('at-left', p.h === 'left');
+  }
+
+  function storageArea() {
+    try {
+      return alive() && chrome.storage && chrome.storage.local ? chrome.storage.local : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function loadPos() {
+    const area = storageArea();
+    if (!area) return;
+    const host = hostName();
+    try {
+      area.get(POS_KEY, items => {
+        try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
+        const all = items && items[POS_KEY];
+        const saved = all && typeof all === 'object' ? all[host] : null;
+        if (!validPos(saved) || drag) return;
+        pos = { h: saved.h, v: saved.v, x: saved.x, y: saved.y };
+        applyPos();
+      });
+    } catch (e) { /* storage gone */ }
+  }
+
+  // One position per site, the most recent POS_HOSTS_MAX kept.
+  function savePos() {
+    const area = storageArea();
+    if (!area) return;
+    const host = hostName();
+    const value = { h: pos.h, v: pos.v, x: pos.x, y: pos.y, at: Date.now() };
+    try {
+      area.get(POS_KEY, items => {
+        try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
+        const all = Object.assign({}, items && typeof items[POS_KEY] === 'object' ? items[POS_KEY] : {});
+        all[host] = value;
+        const hosts = Object.keys(all).sort((a, b) => ((all[b] && all[b].at) || 0) - ((all[a] && all[a].at) || 0));
+        hosts.slice(POS_HOSTS_MAX).forEach(h => { delete all[h]; });
+        try { area.set({ [POS_KEY]: all }, () => { try { void chrome.runtime.lastError; } catch (e) { /* gone */ } }); } catch (e) { /* gone */ }
+      });
+    } catch (e) { /* storage gone */ }
+  }
+
+  function startDrag(event) {
+    if (!ui || !event) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    const r = rectOf(ui.wrap);
+    if (!r) return;
+    drag = {
+      id: event.pointerId,
+      sx: event.clientX,
+      sy: event.clientY,
+      left: r.left,
+      top: r.top,
+      w: r.width,
+      h: r.height,
+      moved: false,
+      handle: event.currentTarget || event.target
+    };
+    try { drag.handle.setPointerCapture(event.pointerId); } catch (e) { /* no capture */ }
+    ui.shadow.addEventListener('pointermove', onDragMove);
+    ui.shadow.addEventListener('pointerup', endDrag);
+    ui.shadow.addEventListener('pointercancel', endDrag);
+  }
+
+  function onDragMove(event) {
+    if (!drag || !ui || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.sx;
+    const dy = event.clientY - drag.sy;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      ui.wrap.classList.add('dragging');
+      dodge = null;
+    }
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    const vp = viewport();
+    const left = clampNum(drag.left + dx, EDGE_MIN, Math.max(EDGE_MIN, vp.w - drag.w - EDGE_MIN));
+    const top = clampNum(drag.top + dy, EDGE_MIN, Math.max(EDGE_MIN, vp.h - drag.h - EDGE_MIN));
+    const s = ui.wrap.style;
+    s.left = left + 'px';
+    s.top = top + 'px';
+    s.right = 'auto';
+    s.bottom = 'auto';
+  }
+
+  // The drop pins the dock to the nearest corner, measured from the dock
+  // (not the whole widget) so cards opening the other way do not make it jump.
+  function endDrag(event) {
+    if (!drag || !ui || (event && event.pointerId !== drag.id)) return;
+    const was = drag;
+    drag = null;
+    ui.shadow.removeEventListener('pointermove', onDragMove);
+    ui.shadow.removeEventListener('pointerup', endDrag);
+    ui.shadow.removeEventListener('pointercancel', endDrag);
+    try { was.handle.releasePointerCapture(was.id); } catch (e) { /* released */ }
+    ui.wrap.classList.remove('dragging');
+    if (!was.moved) {
+      applyPos();
+      return;
+    }
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 400);
+    const anchor = rectOf(ui.dock) || rectOf(ui.wrap);
+    if (anchor) {
+      const vp = viewport();
+      const h = anchor.left + anchor.width / 2 < vp.w / 2 ? 'left' : 'right';
+      const v = anchor.top + anchor.height / 2 < vp.h / 2 ? 'top' : 'bottom';
+      pos = {
+        h,
+        v,
+        x: Math.round(h === 'left' ? anchor.left : vp.w - anchor.right),
+        y: Math.round(v === 'top' ? anchor.top : vp.h - anchor.bottom)
+      };
+      savePos();
+    }
+    applyPos();
+  }
+
+  // When the field being edited sits under the widget, the widget moves to
+  // the first mirror position that clears it (the other side vertically, then
+  // horizontally), and goes back once the field is out from under it. The
+  // saved position never changes.
+  function avoid(target) {
+    if (!ui || drag) return;
+    const before = dodge;
+    const t = target && target !== ui.host && target !== document.body ? rectOf(target) : null;
+    if (!t) {
+      dodge = null;
+    } else {
+      const size = sizeOf();
+      const flipV = p => Object.assign({}, p, { v: p.v === 'top' ? 'bottom' : 'top' });
+      const flipH = p => Object.assign({}, p, { h: p.h === 'left' ? 'right' : 'left' });
+      const candidates = [pos, flipV(pos), flipH(pos), flipH(flipV(pos))];
+      const clear = candidates.find(c => !overlaps(boxAt(clampPos(c, size), size), t, AVOID_MARGIN_PX));
+      dodge = !clear || clear === pos ? null : clear;
+    }
+    if (before !== dodge) applyPos();
+  }
+
+  // Between fields (focus on the body) the widget stays where it is.
+  function avoidActive() {
+    const active = document.activeElement;
+    if (active && FIELD_TAGS.has(tagOf(active))) avoid(active);
+  }
+
+  function onViewportChange() {
+    if (!ui || viewportTimer) return;
+    viewportTimer = setTimeout(() => {
+      viewportTimer = null;
+      dodge = null;
+      applyPos();
+      avoidActive();
+    }, 120);
+  }
+
+  // A field's `change` fires on the mousedown that moves to the next field.
+  // A card added then lands under the pointer and takes the click, so focus
+  // never reaches the field the user clicked. Prompts asked for mid-press
+  // wait for the press to end (or a short safety delay).
+  function onPointerDownAny() { pointerDown = true; }
+
+  function onPointerUpAny() {
+    pointerDown = false;
+    flushPendingPrompt(0);
+  }
+
+  function flushPendingPrompt(delay) {
+    if (!pendingPrompt) return;
+    const pending = pendingPrompt;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      if (pendingPrompt !== pending) return;
+      pendingPrompt = null;
+      pending.show();
+    }, delay);
+  }
+
+  function cancelPendingPrompt() {
+    if (!pendingPrompt) return;
+    clearTimeout(pendingPrompt.timer);
+    pendingPrompt = null;
+  }
+
+  // --- cards -----------------------------------------------------------------------
   function makeButtons(container, actions, close) {
     const row = document.createElement('div');
     row.className = 'actions';
@@ -370,10 +814,10 @@
       const btn = document.createElement('button');
       btn.setAttribute('type', 'button');
       if (action.primary) btn.className = 'primary';
+      else if (action.quiet) btn.className = 'quiet';
       btn.textContent = action.label;
       btn.addEventListener('click', event => {
-        if (event && typeof event.preventDefault === 'function') event.preventDefault();
-        if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+        swallow(event);
         close();
         if (typeof action.onClick === 'function') action.onClick();
       });
@@ -382,77 +826,142 @@
     container.appendChild(row);
   }
 
+  // A card: header (grip, title, close), body, optional value and actions,
+  // and a bar that drains until it closes itself. Hovering or tabbing into
+  // the card holds the timer; Escape closes it.
+  function buildCard(cls, options, close) {
+    const el = document.createElement('div');
+    el.className = 'card ' + cls;
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.appendChild(makeGrip());
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = options.title || 'LIT Autofill';
+    head.appendChild(title);
+    head.appendChild(makeClose('Close', close));
+    el.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = options.text;
+    el.appendChild(body);
+    if (options.value) {
+      const value = document.createElement('div');
+      value.className = 'value';
+      value.textContent = options.value;
+      el.appendChild(value);
+    }
+    if (options.actions && options.actions.length) makeButtons(el, options.actions, close);
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    el.appendChild(bar);
+    el.setAttribute('style', '--life: ' + Math.round(options.durationMs) + 'ms');
+    el.addEventListener('keydown', event => {
+      if (event && event.key === 'Escape') { swallow(event); close(); }
+    });
+    return el;
+  }
+
+  function startLife(current, ms, close) {
+    current.remaining = ms;
+    current.startedAt = Date.now();
+    current.timer = setTimeout(close, ms);
+    const hold = () => {
+      if (current.held) return;
+      current.held = true;
+      clearTimeout(current.timer);
+      current.remaining = Math.max(1500, current.remaining - (Date.now() - current.startedAt));
+      current.el.classList.add('paused');
+    };
+    const release = () => {
+      if (!current.held) return;
+      current.held = false;
+      current.startedAt = Date.now();
+      current.timer = setTimeout(close, current.remaining);
+      current.el.classList.remove('paused');
+    };
+    current.el.addEventListener('pointerenter', hold);
+    current.el.addEventListener('pointerleave', release);
+    current.el.addEventListener('focusin', hold);
+    current.el.addEventListener('focusout', release);
+  }
+
   function closeToast() {
     if (!toast) return;
     clearTimeout(toast.timer);
     if (toast.el.parentNode) toast.el.parentNode.removeChild(toast.el);
     toast = null;
+    applyPos();
   }
 
   function showToast(text, options = {}) {
     const root = ensureUi();
     closeToast();
-    const el = document.createElement('div');
-    el.className = 'card toast ' + (options.variant || 'info');
-    el.setAttribute('role', 'status');
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.textContent = text;
-    el.appendChild(body);
-    const current = { el, timer: null };
+    const durationMs = options.durationMs || NOTE_TOAST_MS;
+    const current = { el: null, timer: null };
     const close = () => { if (toast === current) closeToast(); };
-    if (options.actions && options.actions.length) makeButtons(el, options.actions, close);
+    const titles = { success: 'Autofill', warn: 'Autofill', info: 'Autofill' };
+    const el = buildCard('toast ' + (options.variant || 'info'), {
+      title: options.title || titles[options.variant] || 'Autofill',
+      text,
+      actions: options.actions,
+      durationMs
+    }, close);
+    el.setAttribute('role', 'status');
+    current.el = el;
     root.stack.appendChild(el);
-    current.timer = setTimeout(close, options.durationMs || NOTE_TOAST_MS);
+    startLife(current, durationMs, close);
     toast = current;
+    applyPos();
+    avoidActive();
     return current;
   }
 
   function closePrompt() {
+    cancelPendingPrompt();
     if (!prompt) return;
     clearTimeout(prompt.timer);
     if (prompt.el.parentNode) prompt.el.parentNode.removeChild(prompt.el);
     prompt = null;
+    applyPos();
   }
 
-  // A small card next to the field. One at a time: a new prompt replaces the
-  // old one, and an unanswered prompt goes away by itself.
-  function showPrompt(entry, text, actions) {
+  // Learning questions sit in the widget, beside the Autofill button, never
+  // over the form. One at a time: a new prompt replaces the old one, and an
+  // unanswered prompt goes away by itself.
+  function showPrompt(entry, card, actions) {
+    cancelPendingPrompt();
+    if (pointerDown) {
+      pendingPrompt = { show: () => showPrompt(entry, card, actions), timer: null };
+      flushPendingPrompt(PRESS_SAFETY_MS);
+      return null;
+    }
     const root = ensureUi();
     closePrompt();
-    const el = document.createElement('div');
-    el.className = 'card prompt';
-    el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'LIT Autofill');
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.textContent = text;
-    el.appendChild(body);
-    const current = { el, timer: null, entry };
+    const current = { el: null, timer: null, entry };
     const close = () => { if (prompt === current) closePrompt(); };
-    makeButtons(el, actions, close);
-
-    let placed = false;
-    try {
-      const target = entry.desc.group || entry.desc.el;
-      const r = target.getBoundingClientRect();
-      if (r && (r.width > 0 || r.height > 0)) {
-        const vw = window.innerWidth || 1024;
-        const vh = window.innerHeight || 768;
-        let top = r.bottom + 6;
-        if (top > vh - 110) top = Math.max(8, r.top - 110);
-        const left = Math.max(8, Math.min(r.left, vw - 348));
-        el.setAttribute('style', 'top: ' + Math.round(top) + 'px; left: ' + Math.round(left) + 'px;');
-        placed = true;
-      }
-    } catch (e) {
-      placed = false;
-    }
-    if (!placed) el.classList.add('docked');
-    root.shadow.appendChild(el);
-    current.timer = setTimeout(close, PROMPT_MS);
+    const el = buildCard('prompt', {
+      title: card.title,
+      text: card.text,
+      value: card.value,
+      actions,
+      durationMs: PROMPT_MS
+    }, close);
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'LIT Autofill: ' + card.title);
+    current.el = el;
+    // The prompt sits next to the dock; a toast, if any, stays outermost.
+    root.stack.appendChild(el);
+    startLife(current, PROMPT_MS, close);
     prompt = current;
+    applyPos();
+    avoidActive();
     return current;
+  }
+
+  function preview(value, max) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > max ? text.slice(0, max - 3).trim() + '...' : text;
   }
 
   // --- outlines ----------------------------------------------------------------
@@ -655,26 +1164,26 @@
     const desc = entry.desc;
     const labelKey = labelKeyOf(desc);
     const label = shortLabel(desc);
-    showPrompt(entry, "Remember this for '" + label + "'?", [
+    showPrompt(entry, { title: 'Save answer for next time?', text: label, value: preview(value, 120) }, [
       {
         label: 'This site',
         primary: true,
         onClick: () => { learn({ host: hostName(), labelKey, value }, "Saved. LIT will fill '" + label + "' on this site."); }
       },
       {
-        label: 'Everywhere',
-        onClick: () => { learn({ host: '*', labelKey, value }, "Saved. LIT will fill '" + label + "' everywhere."); }
+        label: 'All sites',
+        onClick: () => { learn({ host: '*', labelKey, value }, "Saved. LIT will fill '" + label + "' on every site."); }
       },
-      { label: 'No' }
+      { label: 'Not now', quiet: true }
     ]);
   }
 
   function offerAnswer(entry, value) {
     const desc = entry.desc;
     entry.offered = value;
-    showPrompt(entry, 'Save to answer bank?', [
+    showPrompt(entry, { title: 'Save to answer bank?', text: desc.label || labelKeyOf(desc) || 'Long answer', value: preview(value, 160) }, [
       {
-        label: 'Save',
+        label: 'Save answer',
         primary: true,
         onClick: async () => {
           try {
@@ -685,7 +1194,7 @@
           }
         }
       },
-      { label: 'No' }
+      { label: 'Not now', quiet: true }
     ]);
   }
 
@@ -813,8 +1322,11 @@
 
   // --- document listeners --------------------------------------------------------
   function onFocusIn(event) {
-    const entry = entryFor(event && event.target);
+    const target = event && event.target;
+    const entry = entryFor(target);
     if (entry) clearOutline(entry.target);
+    // Focus inside the widget reaches the document as the host itself.
+    if (ui && target && target !== ui.host && FIELD_TAGS.has(tagOf(target))) avoid(target);
   }
 
   function onChange(event) {
@@ -877,6 +1389,7 @@
     if (running) return null;
     if (!alive()) { destroy(); return null; }
     running = true;
+    hiddenForPage = false;
     ensureUi();
     setFabBusy(true);
     closeToast();
@@ -913,7 +1426,7 @@
       showToast(text, {
         variant: filled.length ? 'success' : 'warn',
         durationMs: RESULT_TOAST_MS,
-        actions: [{ label: 'Fill again', primary: true, onClick: () => { fill(); } }, { label: 'Dismiss' }]
+        actions: [{ label: 'Fill again', primary: true, onClick: () => { fill(); } }]
       });
     } catch (err) {
       showToast('Autofill could not finish: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn', durationMs: RESULT_TOAST_MS });
@@ -931,7 +1444,7 @@
     if (!alive()) { destroy(); return; }
     eligible = countFillable(document) >= MIN_FIELDS;
     trackPage();
-    const show = eligible && !!settings && settings.showButton !== false;
+    const show = eligible && !hiddenForPage && !!settings && settings.showButton !== false;
     if (show) {
       ensureUi();
       setFabVisible(true);
@@ -985,6 +1498,11 @@
     document.addEventListener('click', onPointerCommit, true);
     document.addEventListener('keyup', onKeyCommit, true);
     window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange, true);
+    window.addEventListener('pointerdown', onPointerDownAny, true);
+    window.addEventListener('pointerup', onPointerUpAny, true);
+    window.addEventListener('pointercancel', onPointerUpAny, true);
     subscribeStore();
     loadSettings();
   }
@@ -1003,6 +1521,16 @@
     document.removeEventListener('click', onPointerCommit, true);
     document.removeEventListener('keyup', onKeyCommit, true);
     window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('resize', onViewportChange);
+    window.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('pointerdown', onPointerDownAny, true);
+    window.removeEventListener('pointerup', onPointerUpAny, true);
+    window.removeEventListener('pointercancel', onPointerUpAny, true);
+    pointerDown = false;
+    cancelPendingPrompt();
+    clearTimeout(viewportTimer);
+    viewportTimer = null;
+    if (drag && ui) endDrag(null);
     clearSweeps();
     if (storeUnsub) {
       try { storeUnsub(); } catch (e) { /* storage gone */ }
@@ -1044,6 +1572,11 @@
     profileKeyFor,
     formatResult,
     sweep,
+    // For the service worker's "Autofill this page": the form's size (capped
+    // at MIN_FIELDS) and a note when there is nothing to fill.
+    formSize: () => countFillable(document),
+    note: text => { showToast(String(text || ''), { variant: 'warn', durationMs: RESULT_TOAST_MS }); },
+    position: () => Object.assign({}, dodge || pos, { dodged: !!dodge }),
     state: () => ({ started, eligible, running, hasRun, buttonShown: !!ui && !ui.fab.classList.contains('hidden'), tracked: byEl.size })
   };
 

@@ -56,7 +56,10 @@ function extendChrome(mock) {
     'shared/auto-tracker-core.js': 'AutoTrackerCore',
     'shared/job-meta.js': 'JobMeta',
     'content/quick-log.js': 'quickLog',
-    'content/auto-tracker.js': 'mounted'
+    'content/auto-tracker.js': 'mounted',
+    'shared/autofill-store.js': 'AutofillStore',
+    'shared/autofill-core.js': 'AutofillCore',
+    'content/autofill/autofill-ui.js': 'ui'
   };
   mock.scripting = {
     frames,
@@ -76,6 +79,10 @@ function extendChrome(mock) {
         frame.quickLogCalls = (frame.quickLogCalls || 0) + 1;
         return [{ result: undefined }];
       }
+      const src = func.toString();
+      if (/formSize\(\)/.test(src)) return [{ frameId: 0, result: frame.ui ? (frame.formSize || 0) : -1 }];
+      if (/__litAutofillUI\.fill\(\)/.test(src)) { frame.fillCalls = (frame.fillCalls || 0) + 1; return [{ frameId: 0, result: undefined }]; }
+      if (/__litAutofillUI\.note\(/.test(src)) { frame.notes = (frame.notes || 0) + 1; return [{ frameId: 0, result: undefined }]; }
       return [{ result: Object.assign({ TrackerAuth: false, TrackerStorage: false, AutoTrackerCore: false, JobMeta: false, quickLog: false, mounted: false }, frame) }];
     },
     async registerContentScripts(list) { list.forEach(s => registered.push(s)); },
@@ -191,6 +198,7 @@ async function run() {
     sw.createMenus();
     assert.deepStrictEqual(mock.contextMenus.items.map(i => [i.id, i.contexts.join(',')]), [
       ['lit-log-page', 'page,frame,selection,link'],
+      ['lit-autofill-page', 'page,frame,editable'],
       ['lit-log-page-action', 'action']
     ]);
 
@@ -221,6 +229,110 @@ async function run() {
     assert.deepStrictEqual(answer, { ok: true }, 'the popup can ask for the current tab');
     unload();
     console.log('[PASS] Quick log: context menus, dependency-aware injection, reuse, and refusal on protected pages');
+  }
+
+  // 3b. "Autofill this page" (popup, menu, shortcut) works on any site:
+  // injects the Autofill files once, fills only a frame that has a form, and
+  // leaves a note instead when there is none.
+  {
+    const { mock, sw } = loadWorker();
+    assert.strictEqual(await sw.autofillTab({ id: 1, url: 'chrome://extensions/' }), false);
+    assert.ok(/application form/.test(mock.notifications.created.pop().opts.message));
+
+    // A company's own careers site with nothing of LIT's loaded.
+    mock.scripting.frames['20:0'] = { formSize: 3 };
+    assert.strictEqual(await sw.autofillTab({ id: 20, url: 'https://lifeattiktok.com/resume/1/apply' }), true);
+    const files = mock.scripting.executions.filter(e => e.files).map(e => e.files);
+    assert.deepStrictEqual(files, [['shared/autofill-store.js', 'shared/autofill-core.js',
+      'content/autofill/sites/greenhouse.js', 'content/autofill/sites/lever.js', 'content/autofill/sites/ashby.js', 'content/autofill/sites/workday.js',
+      'content/autofill/autofill-ui.js']], 'every Autofill file, in load order, once');
+    assert.strictEqual(mock.scripting.frames['20:0'].fillCalls, 1, 'the form is filled');
+
+    await sw.autofillTab({ id: 20, url: 'https://lifeattiktok.com/resume/1/apply' });
+    assert.strictEqual(mock.scripting.executions.filter(e => e.files).length, 1, 'a frame already running the button is not injected twice');
+    assert.strictEqual(mock.scripting.frames['20:0'].fillCalls, 2);
+
+    // No form: a note on the page, nothing filled.
+    mock.scripting.frames['21:0'] = { formSize: 1 };
+    assert.strictEqual(await sw.autofillTab({ id: 21, url: 'https://example.com/' }), false);
+    assert.strictEqual(mock.scripting.frames['21:0'].notes, 1);
+    assert.strictEqual(mock.scripting.frames['21:0'].fillCalls, undefined);
+
+    mock.scripting.blocked.add(22);
+    assert.strictEqual(await sw.autofillTab({ id: 22, url: 'https://chromewebstore.google.com/' }), false);
+    assert.ok(/does not allow extensions/.test(mock.notifications.created.pop().opts.message));
+
+    // The popup button, the context menu, and the shortcut all reach it.
+    mock.scripting.frames['23:0'] = { formSize: 3 };
+    mock.tabs.active = { id: 23, url: 'https://jobs.acme.com/apply' };
+    const answer = await new Promise(resolve => mock.runtime.sendMessage({ type: 'PT_AUTOFILL_TAB' }, resolve));
+    assert.deepStrictEqual(answer, { ok: true });
+    mock.contextMenus.onClicked.emit({ menuItemId: 'lit-autofill-page' }, { id: 23, url: 'https://jobs.acme.com/apply' });
+    mock.commands.onCommand.emit('autofill-page', { id: 23, url: 'https://jobs.acme.com/apply' });
+    await settle();
+    assert.strictEqual(mock.scripting.frames['23:0'].fillCalls, 3);
+    unload();
+    console.log('[PASS] Autofill this page: any site, injected once, fills only a frame with a form, notes when there is none');
+  }
+
+  // 3c. The universal bootstrap asks for injection on a job URL, and on a page
+  // whose URL says nothing but which holds an application form (a resume
+  // upload or application questions). A newsletter box does not count.
+  {
+    const BOOT = path.join(ROOT, 'content/universal-bootstrap.js');
+    function bootOn(href, page) {
+      const sent = [];
+      const listeners = {};
+      const fieldEls = (page.fields || []).map(f => ({
+        id: f.id || '',
+        getAttribute: n => (f[n] === undefined ? null : f[n]),
+        matches: () => true
+      }));
+      global.location = new URL(href);
+      global.window = { navigation: null, addEventListener() {} };
+      global.document = {
+        body: {},
+        querySelectorAll(sel) {
+          if (/ld\+json/.test(sel)) return [];
+          if (/^label/.test(sel)) return (page.labels || []).map(t => ({ textContent: t }));
+          return fieldEls;
+        },
+        querySelector(sel) { return /type="file"/.test(sel) && page.file ? {} : null; },
+        addEventListener(type, fn) { listeners[type] = fn; },
+        removeEventListener(type) { delete listeners[type]; }
+      };
+      global.chrome = { runtime: { id: 'lit', lastError: null, sendMessage: msg => sent.push(msg.type) } };
+      delete require.cache[require.resolve(BOOT)];
+      require(BOOT);
+      return { sent, listeners, page };
+    }
+    function bootDone() {
+      delete global.location;
+      delete global.window;
+      delete global.document;
+      delete global.chrome;
+    }
+    const three = [{ id: 'name' }, { id: 'email' }, { placeholder: 'Please enter' }];
+
+    let b = bootOn('https://lifeattiktok.com/resume/1/apply', { fields: [] });
+    assert.deepStrictEqual(b.sent, ['PT_INJECT_UNIVERSAL'], 'an /apply path is a job page');
+    bootDone();
+
+    b = bootOn('https://www.acme-corp.com/x/7731', { fields: three, file: true });
+    assert.deepStrictEqual(b.sent, ['PT_INJECT_UNIVERSAL'], 'a resume upload with fields is an application form');
+    bootDone();
+
+    b = bootOn('https://www.acme-corp.com/x/7731', { fields: three, labels: ['Name', 'Email', 'Are you authorized to work in the US?'] });
+    assert.deepStrictEqual(b.sent, ['PT_INJECT_UNIVERSAL'], 'application questions count without an upload');
+    bootDone();
+
+    b = bootOn('https://www.acme-corp.com/blog/post', { fields: three, labels: ['Name', 'Email', 'Company'] });
+    assert.deepStrictEqual(b.sent, [], 'a plain contact or newsletter form does not');
+    b.page.file = true;
+    b.listeners.focusin({ target: { matches: () => true } });
+    assert.deepStrictEqual(b.sent, ['PT_INJECT_UNIVERSAL'], 'a form that appears later is caught when the user clicks into a field');
+    bootDone();
+    console.log('[PASS] Universal bootstrap: job URLs, and application forms on any URL, but not contact forms');
   }
 
   // 4. The universal bootstrap asks for the full tracker; it is injected into
@@ -337,7 +449,7 @@ async function run() {
     await settle(80);
     assert.ok(mock.alarms.store.get('pt-maintenance'), 'the maintenance alarm is scheduled');
     assert.strictEqual(mock.alarms.store.get('pt-maintenance').periodInMinutes, 360);
-    assert.strictEqual(mock.contextMenus.items.length, 2);
+    assert.strictEqual(mock.contextMenus.items.length, 3);
     assert.strictEqual((await storage.listSnapshots()).length, 0, 'nothing to snapshot on an empty install');
 
     await storage.addLog({ metricId: 'jobs', company: 'Snapshot Co' });

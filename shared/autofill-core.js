@@ -3,8 +3,9 @@
 // No AI and no network: fields are found by scanning the DOM, labelled by a
 // fixed list of label strategies, matched to profile keys by rules, and filled
 // through the native value setters so React / Vue / Angular controlled inputs
-// see the change. The engine never clicks a submit button: the only element it
-// ever clicks is a radio or checkbox input it is choosing.
+// see the change. The engine never clicks a submit button: the only elements
+// it ever clicks are the radio, checkbox, choice button, or dropdown option it
+// is choosing.
 //
 //   normalizeLabel(text)             -> labelKey shared with AutofillStore
 //   scanFields(root, opts?)          -> FieldDescriptor[]
@@ -199,7 +200,7 @@ const AutofillCore = (() => {
 
   // --- DOM helpers ---------------------------------------------------------------
 
-  const CONTROL_SELECTOR = 'input, select, textarea, [role="combobox"], button[aria-haspopup="listbox"], ' +
+  const CONTROL_SELECTOR = 'input, select, textarea, [role="combobox"], button, [role="button"], ' +
     '[role="radio"], [role="checkbox"]';
   const NEVER_INPUT_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'password']);
   const SKIP_INPUT_TYPES = new Set(['search', 'range', 'color']);
@@ -291,7 +292,118 @@ const AutofillCore = (() => {
     if (tag === 'INPUT') return !NEVER_INPUT_TYPES.has(String(attr(el, 'type') || 'text').toLowerCase()) || false;
     if (tag === 'SELECT' || tag === 'TEXTAREA') return true;
     if (attr(el, 'role') === 'combobox') return true;
-    return tag === 'BUTTON' && String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox';
+    if (tag === 'BUTTON' && String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return true;
+    return isButtonish(el) && !!choiceGroupOf(el);
+  }
+
+  // --- choice buttons ------------------------------------------------------------
+  // Multiple-choice questions drawn as a row of plain buttons ("Yes" / "No",
+  // "0-2 years" / "3-5 years") have no input behind them; clicking is the only
+  // way to answer. A choice group is 2-12 short-labelled buttons sharing a
+  // container that holds no other control. Action buttons (Next, Submit,
+  // Upload, Add another...) never count, and inside a <form> a button must say
+  // type="button", because a bare <button> there submits the form.
+  const CHOICE_MAX = 12;
+  const ACTION_RE = new RegExp('^(submit( application)?|apply( now)?|next( step| page)?|continue|back|go back|previous|prev|' +
+    'save( and continue| draft| changes)?|cancel|close|done|finish|review|upload( file| resume| cv)?|attach( file| resume)?|' +
+    'browse|add( another| more| new| item)?|remove|delete|edit|clear|reset|sign in|log in|login|sign up|register|share|' +
+    'print|download|copy( link)?|show (more|less)|learn more|view( more| all| job)?|search|enter manually|skip|' +
+    'accept( all| cookies)?|reject( all)?|ok|okay|got it|dismiss|help|menu|x|autofill|fill again|' +
+    'dropbox|google drive|one ?drive|locate me|use (my|current) location|(upload|import|apply) (from|with) .+)$');
+  const NOT_CHOICE_SCOPE = 'nav, header, footer, [role="navigation"], [role="listbox"], [role="menu"], [role="menubar"], ' +
+    '[role="toolbar"], [role="tablist"], [data-lit-autofill-ignore]';
+  const STATE_ATTRS = ['aria-pressed', 'aria-checked', 'aria-selected'];
+  const STATE_CLASS_RE = /(^|[\s_-])(selected|checked|pressed|active|chosen)($|[\s_-])/i;
+  // Groups found during one scan; label extraction asks about the same
+  // buttons many times.
+  let choiceCache = null;
+
+  function isButtonish(el) {
+    return tagOf(el) === 'BUTTON' || String(attr(el, 'role') || '').toLowerCase() === 'button';
+  }
+
+  function choiceText(el) {
+    return norm(textOf(el)) || norm(attr(el, 'aria-label') || '');
+  }
+
+  function isChoiceButton(el) {
+    if (!isButtonish(el)) return false;
+    const popup = String(attr(el, 'aria-haspopup') || '').toLowerCase();
+    if (popup && popup !== 'false') return false;
+    try {
+      if (tagOf(el) === 'BUTTON') {
+        const type = String(attr(el, 'type') || '').toLowerCase();
+        if (type === 'submit' || type === 'reset') return false;
+        if (!type && el.closest('form')) return false;
+      }
+      if (el.closest(NOT_CHOICE_SCOPE)) return false;
+    } catch (_) { return false; }
+    const text = choiceText(el);
+    if (!text || text.length > 60 || text.split(' ').length > 8) return false;
+    return !ACTION_RE.test(text) && !/\bsubmit\b/.test(text);
+  }
+
+  function hasChoiceState(el) {
+    if (STATE_ATTRS.some(a => attr(el, a) !== null && attr(el, a) !== undefined)) return true;
+    return attr(el, 'data-state') != null || attr(el, 'data-headlessui-state') != null;
+  }
+
+  function hasOtherControl(node) {
+    try {
+      return Array.from(node.querySelectorAll('input, select, textarea, [role="combobox"], [contenteditable="true"]'))
+        .some(c => tagOf(c) !== 'INPUT' || String(attr(c, 'type') || 'text').toLowerCase() !== 'hidden');
+    } catch (_) { return true; }
+  }
+
+  // Page chrome (filters, pagination, share bars) can also be a row of short
+  // buttons, so a group must sit in a form, expose a pressed/selected state,
+  // be marked up as a group, or follow a question.
+  function looksLikeQuestion(container, members) {
+    try { if (container.closest('form, fieldset, [role="group"], [role="radiogroup"]')) return true; } catch (_) { /* ignore */ }
+    if (members.some(hasChoiceState)) return true;
+    return /\?\s*\*?\s*$/.test(precedingText(members[0], new Set(members)) || '');
+  }
+
+  function findChoiceGroup(el) {
+    if (!isChoiceButton(el)) return null;
+    let node = el.parentElement;
+    for (let depth = 0; depth < 4 && node; depth++, node = node.parentElement) {
+      const tag = tagOf(node);
+      if (tag === 'FORM' || tag === 'BODY' || tag === 'HTML') return null;
+      let buttons = [];
+      try { buttons = Array.from(node.querySelectorAll('button, [role="button"]')); } catch (_) { return null; }
+      buttons = buttons.filter(b => !buttons.some(o => o !== b && o.contains && o.contains(b)));
+      if (buttons.length < 2) continue;
+      if (buttons.length > CHOICE_MAX || !buttons.every(isChoiceButton) || hasOtherControl(node)) return null;
+      return looksLikeQuestion(node, buttons) ? { container: node, members: buttons } : null;
+    }
+    return null;
+  }
+
+  // Finding a group reads the question text before it, which can ask about a
+  // neighbouring group, which reads text that reaches back to this one. A
+  // lookup in progress is cached as "no group" so that loop ends at once.
+  function choiceGroupOf(el) {
+    const outer = choiceCache;
+    if (!outer) choiceCache = new Map();
+    try {
+      if (!choiceCache.has(el)) {
+        choiceCache.set(el, null);
+        const group = findChoiceGroup(el);
+        choiceCache.set(el, group);
+        if (group) group.members.forEach(m => choiceCache.set(m, group));
+      }
+      return choiceCache.get(el);
+    } finally {
+      if (!outer) choiceCache = null;
+    }
+  }
+
+  // Attribute and class text that changes when a button is picked, for
+  // buttons that show their state only through generated class names.
+  function stateSignature(el) {
+    const own = n => (n ? [attr(n, 'class')].concat(STATE_ATTRS.map(a => attr(n, a)), [attr(n, 'data-state'), attr(n, 'style')]).join('|') : '');
+    return own(el) + '#' + own(el.parentElement);
   }
 
   function containsControl(node, exclude) {
@@ -470,8 +582,9 @@ const AutofillCore = (() => {
       const type = String(attr(el, 'type') || '').toLowerCase();
       if (type === 'submit' || type === 'reset') return null;
       if (role === 'combobox' || String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return 'combobox';
-      return null;
+      return choiceGroupOf(el) ? 'radio' : null;
     }
+    if (role === 'button') return choiceGroupOf(el) ? 'radio' : null;
     if (role === 'radio' || role === 'checkbox') {
       // Custom radios and checkboxes: only inside a group or form, so page
       // chrome toggles (cookie banners, menus) are not taken for questions.
@@ -621,6 +734,10 @@ const AutofillCore = (() => {
   }
 
   function sameScopeInputs(el, type) {
+    if (type === 'radio' && isButtonish(el)) {
+      const choice = choiceGroupOf(el);
+      return choice ? choice.members : [el];
+    }
     if (tagOf(el) !== 'INPUT') {
       let group = null;
       try { group = el.closest(type === 'radio' ? '[role="radiogroup"]' : '[role="group"]'); } catch (_) { group = null; }
@@ -650,6 +767,10 @@ const AutofillCore = (() => {
       container = el.closest('[role="radiogroup"], [role="group"]');
       if (container && !inputs.every(i => container.contains(i))) container = null;
     } catch (_) { container = null; }
+    if (!container && kind === 'radio' && isButtonish(el)) {
+      const choice = choiceGroupOf(el);
+      if (choice) container = choice.container;
+    }
     container = container || groupContainer(inputs);
     const label = groupLabel(container, inputs, ctx);
     return buildDescriptor(inputs[0], kind, ctx, { inputs, group: container || undefined, label, isGroup: true });
@@ -703,7 +824,17 @@ const AutofillCore = (() => {
     const includeFilled = !!(opts && opts.includeFilled);
     const ctx = makeCtx();
     const raw = [];
-    collectControls(base, raw, 0);
+    const outerCache = choiceCache;
+    choiceCache = outerCache || new Map();
+    try {
+      collectControls(base, raw, 0);
+      return scanControls(raw, ctx, includeFilled);
+    } finally {
+      choiceCache = outerCache;
+    }
+  }
+
+  function scanControls(raw, ctx, includeFilled) {
     const seen = new Set();
     const out = [];
     for (const el of raw) {
@@ -1167,16 +1298,28 @@ const AutofillCore = (() => {
 
   // Click first: React and most frameworks hang radio / checkbox onChange off
   // the click event. If a handler cancels it, set `checked` directly.
+  // Custom radios and choice buttons: ARIA state first, then the data
+  // attributes Radix / Headless UI / Chakra set, then class names, but only
+  // when no ARIA state says otherwise.
   function isOn(input) {
     if (tagOf(input) === 'INPUT') return input.checked === true;
-    return attr(input, 'aria-checked') === 'true' || attr(input, 'aria-pressed') === 'true';
+    if (STATE_ATTRS.some(a => attr(input, a) === 'true')) return true;
+    const state = String(attr(input, 'data-state') || attr(input, 'data-headlessui-state') || '').toLowerCase();
+    if (/\b(on|checked|selected|active)\b/.test(state)) return true;
+    if (['data-selected', 'data-checked'].some(a => input.hasAttribute && input.hasAttribute(a) && attr(input, a) !== 'false')) return true;
+    if (STATE_ATTRS.some(a => attr(input, a) === 'false')) return false;
+    return STATE_CLASS_RE.test(String(attr(input, 'class') || ''));
   }
 
   function setChecked(input, want) {
     if (tagOf(input) !== 'INPUT') {
       if (isOn(input) === want) return true;
+      const before = stateSignature(input);
       press(input);
-      return isOn(input) === want;
+      if (isOn(input) === want) return true;
+      // A button that marks the pick only with generated class names, or
+      // that the page re-rendered away: the click is taken as landing.
+      return want && (input.isConnected === false || stateSignature(input) !== before);
     }
     if (!!input.checked === want) return true;
     try { if (typeof input.click === 'function') input.click(); } catch (_) { /* ignore */ }

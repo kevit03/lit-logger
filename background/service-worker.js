@@ -11,6 +11,10 @@
 //                   popup; Alt+Shift+J opens the popup with search focused.
 //   Quick log       "Log application from this page" in the page and toolbar
 //                   context menus injects content/quick-log.js on demand.
+//   Autofill        "Autofill this page" (popup, context menu, Alt+Shift+F)
+//                   injects the Autofill button into any site and runs it, so
+//                   a company's own careers site works without the all-sites
+//                   permission.
 //   Universal       With the optional all-sites permission granted and the
 //                   setting on, a tiny bootstrap runs on every page and asks
 //                   for the full universal tracker only on job pages.
@@ -64,6 +68,8 @@ const MENU_LOG_ACTION = 'lit-log-page-action';
 
 const COMMAND_INCREMENT = 'increment-active';
 const COMMAND_SEARCH = 'open-search';
+const COMMAND_AUTOFILL = 'autofill-page';
+const MENU_AUTOFILL = 'lit-autofill-page';
 const OPEN_SEARCH_FLAG = 'pt_open_search_at';
 
 const UNIVERSAL_SCRIPT_ID = 'lit-universal-bootstrap';
@@ -94,6 +100,8 @@ const AUTOFILL_FILES = [
   'content/autofill/autofill-ui.js'
 ];
 const AUTOFILL_CSS = ['content/autofill/autofill-ui.css'];
+// Matches MIN_FIELDS in content/autofill/autofill-ui.js.
+const AUTOFILL_MIN_FIELDS = 3;
 
 function alarmNameFor(key) {
   return TIMER_SURFACES[key] ? TIMER_SURFACES[key].alarm : null;
@@ -313,11 +321,14 @@ async function openPopupWithSearch() {
 }
 
 if (chrome.commands && chrome.commands.onCommand) {
-  chrome.commands.onCommand.addListener(command => {
+  chrome.commands.onCommand.addListener((command, tab) => {
     if (command === COMMAND_INCREMENT) {
       incrementActiveTracker().catch(err => console.warn('LIT: shortcut +1 failed:', err && err.message));
     } else if (command === COMMAND_SEARCH) {
       openPopupWithSearch().catch(() => {});
+    } else if (command === COMMAND_AUTOFILL) {
+      if (tab) autofillTab(tab).catch(() => {});
+      else chrome.tabs.query({ active: true, currentWindow: true }, tabs => { autofillTab(tabs && tabs[0]).catch(() => {}); });
     }
   });
 }
@@ -404,6 +415,70 @@ async function injectUniversal(sender) {
   }
 }
 
+// Autofill on demand. The popup button, the context menu, and the shortcut
+// all grant activeTab, which is enough to inject into the tab's top frame
+// (and its same-origin frames) on any site. Frames that already run the
+// button (an ATS page, or the universal path) are not given a second copy.
+// Only frames holding a form are filled, so an embedded application iframe
+// gets one result card instead of one per frame.
+async function frameResults(tabId, func) {
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func });
+  } catch (err) {
+    results = await chrome.scripting.executeScript({ target: { tabId }, func });
+  }
+  return (results || []).map(r => ({ frameId: typeof r.frameId === 'number' ? r.frameId : 0, result: r.result }));
+}
+
+async function autofillTab(tab) {
+  if (!tab || typeof tab.id !== 'number' || !isWebUrl(tab.url)) {
+    notify('lit-autofill', 'LIT', 'Open an application form in this tab to autofill it.');
+    return false;
+  }
+  const tabId = tab.id;
+  try {
+    const probes = await frameResults(tabId, () => ({
+      AutofillStore: typeof AutofillStore !== 'undefined',
+      AutofillCore: typeof AutofillCore !== 'undefined',
+      ui: !!window.__litAutofillUI
+    }));
+    for (const { frameId, result } of probes) {
+      const have = result || {};
+      if (have.ui) continue;
+      const target = { tabId, frameIds: [frameId] };
+      const files = AUTOFILL_SHARED.filter(([name]) => !have[name]).map(([, file]) => file).concat(AUTOFILL_FILES);
+      try {
+        await chrome.scripting.executeScript({ target, files });
+        if (typeof chrome.scripting.insertCSS === 'function') {
+          await chrome.scripting.insertCSS({ target, files: AUTOFILL_CSS }).catch(() => {});
+        }
+      } catch (err) {
+        // A sandboxed or cross-origin frame; the others still get filled.
+      }
+    }
+    const sizes = await frameResults(tabId, () => (window.__litAutofillUI ? window.__litAutofillUI.formSize() : -1));
+    let frames = sizes.filter(s => s.result >= AUTOFILL_MIN_FIELDS).map(s => s.frameId);
+    if (!frames.length) {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        func: () => { if (window.__litAutofillUI) window.__litAutofillUI.note('LIT did not find an application form on this page yet. Open the form, then try again.'); }
+      });
+      return false;
+    }
+    for (const frameId of frames) {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func: () => { if (window.__litAutofillUI) window.__litAutofillUI.fill(); }
+      }).catch(() => {});
+    }
+    return true;
+  } catch (err) {
+    notify('lit-autofill', 'LIT', 'This page does not allow extensions to add to it, so it cannot be autofilled.');
+    return false;
+  }
+}
+
 function createMenus() {
   if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
@@ -412,6 +487,12 @@ function createMenus() {
       id: MENU_LOG_PAGE,
       title: 'Log application from this page',
       contexts: ['page', 'frame', 'selection', 'link'],
+      documentUrlPatterns: ['http://*/*', 'https://*/*']
+    }, () => { void chrome.runtime.lastError; });
+    chrome.contextMenus.create({
+      id: MENU_AUTOFILL,
+      title: 'Autofill this page',
+      contexts: ['page', 'frame', 'editable'],
       documentUrlPatterns: ['http://*/*', 'https://*/*']
     }, () => { void chrome.runtime.lastError; });
     chrome.contextMenus.create({
@@ -425,6 +506,7 @@ function createMenus() {
 if (chrome.contextMenus && chrome.contextMenus.onClicked) {
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === MENU_LOG_PAGE || info.menuItemId === MENU_LOG_ACTION) logFromPage(tab);
+    if (info.menuItemId === MENU_AUTOFILL) autofillTab(tab);
   });
 }
 
@@ -432,6 +514,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || (sender && sender.id && sender.id !== chrome.runtime.id)) return false;
   if (msg.type === 'PT_INJECT_UNIVERSAL') {
     injectUniversal(sender).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.type === 'PT_AUTOFILL_TAB') {
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+      autofillTab(tabs && tabs[0]).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false }));
+    });
     return true;
   }
   if (msg.type === 'PT_LOG_FROM_TAB') {
@@ -557,6 +645,7 @@ if (typeof module !== 'undefined' && module.exports) {
     openPopupWithSearch,
     logFromPage,
     injectUniversal,
+    autofillTab,
     syncUniversalRegistration,
     runMaintenance,
     createMenus,

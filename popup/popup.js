@@ -1661,12 +1661,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     details(body, item, metric) {
       placePart(body, PART_IDS.details);
-      const placeholders = metric.id === 'jobs'
+      const labels = metric.id === 'jobs'
         ? ['Company', 'Role', 'Notes or job link']
         : (metric.id === 'leetcode' ? ['Problem', 'Topic or tag', 'Notes or link'] : ['Title', 'Tag', 'Notes or link']);
-      el('detail-company').placeholder = placeholders[0];
-      el('detail-role').placeholder = placeholders[1];
-      el('detail-notes').placeholder = placeholders[2];
+      el('detail-company-label').textContent = labels[0];
+      el('detail-role-label').textContent = labels[1];
+      el('detail-notes-label').textContent = labels[2];
       el('details-form').dataset.metricId = metric.id;
     },
 
@@ -3320,6 +3320,23 @@ document.addEventListener('DOMContentLoaded', async () => {
           showStatus('That page cannot be read. Open a job posting or application in the current tab.', 'error');
           return;
         }
+        window.close();
+      });
+    } catch (err) {
+      showStatus('Could not reach the LIT background worker: ' + errMsg(err), 'error');
+    }
+  });
+
+  // Same grant as Log this page: the worker injects Autofill into this tab
+  // even on a site LIT has no standing access to.
+  el('autofill-page-btn').addEventListener('click', () => {
+    try {
+      chrome.runtime.sendMessage({ type: 'PT_AUTOFILL_TAB' }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          showStatus('That page cannot be autofilled. Open an application form in the current tab.', 'error');
+          return;
+        }
+        // With no form found, the page itself says so.
         window.close();
       });
     } catch (err) {

@@ -86,8 +86,12 @@ LIT draws its badges in a layer of its own, never inside Google Calendar's cells
 
 Fill in your profile once (open LIT, **Settings > Autofill profile**). On Greenhouse, Lever, Ashby, Workday, and the other supported career sites, an **Autofill** button appears at the bottom right of any page with an application form. Click it, or press **Alt+Shift+F**. Filled fields get a green outline and fields that need you get an amber one.
 
+On any other site, such as a company's own applicant system (TikTok, for example), press **Alt+Shift+F**, click **Autofill** in the LIT popup, or right-click and choose **Autofill this page**. With **Detect applications on any career site** turned on, the button shows up there by itself whenever the page has an application form.
+
+The button and its cards stay out of the way. Drag the grip (or the button) anywhere, and LIT remembers the spot for each site. When the field you are editing is under the widget, the widget moves aside. Questions such as "save answer for next time?" appear beside the button, not over the form. The X hides the button on that page.
+
 - **No AI and no servers.** Fields are matched by rules: site-specific selectors first, then rules you taught it, then the page's `autocomplete` hints, then a dictionary of common phrasings ("legal first name", "will you now or in the future require sponsorship").
-- **It learns from everything you answer.** Text boxes, dropdowns (including custom ones like Workday's and Greenhouse's), multiple choice, checkboxes, and yes/no buttons. Fill or change one and LIT either learns it outright (when it matches your profile) or offers to remember it for that site or everywhere. Fields that appear on later steps count too. Long answers can go into an answer bank and get suggested the next time a similar question shows up.
+- **It learns from everything you answer.** Text boxes, dropdowns (including custom ones like Workday's and Greenhouse's), multiple choice, checkboxes, and yes/no buttons. Fill or change one and LIT either learns it outright (when it matches your profile) or offers to remember it for that site or all sites. Fields that appear on later steps count too. Long answers can go into an answer bank and get suggested the next time a similar question shows up.
 - **You stay in control.** Autofill never clicks Submit. EEO questions are left blank unless you turn them on. LIT never learns from password, card, or SSN fields.
 - **Your data stays on this device**, in `chrome.storage.local`. Export and import it as JSON from the profile page.
 

@@ -110,6 +110,11 @@ function promptText(doc) {
   return p ? p.querySelector('.body').textContent : '';
 }
 
+function promptTitle(doc) {
+  const p = promptEl(doc);
+  return p ? p.querySelector('.title').textContent : '';
+}
+
 function clickPrompt(doc, label) {
   const p = promptEl(doc);
   assert.ok(p, 'a prompt is shown');
@@ -449,16 +454,19 @@ async function run() {
     cleanup(ctx);
   }
 
-  // 7b. Unmatched field with a non-profile value: prompt; This site / Everywhere / No.
+  // 7b. Unmatched field with a non-profile value: prompt; This site / All sites / Not now.
   {
     const ctx = await learningPage();
     await ctx.api.fill();
     userTypes(ctx, ctx.fields.ref, 'LIT-2026');
     await settle();
     assert.strictEqual(ctx.store.calls.learnRule.length, 0, 'nothing saved before the user answers');
-    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Referral code (optional)'?");
-    assert.deepStrictEqual(promptEl(ctx.doc).querySelectorAll('button').map(b => b.textContent), ['This site', 'Everywhere', 'No']);
-    assert.ok(/top: \d+px; left: \d+px;/.test(promptEl(ctx.doc).getAttribute('style')), 'the prompt sits next to the field');
+    assert.strictEqual(promptTitle(ctx.doc), 'Save answer for next time?');
+    assert.strictEqual(promptText(ctx.doc), 'Referral code (optional)');
+    assert.strictEqual(promptEl(ctx.doc).querySelector('.value').textContent, 'LIT-2026', 'the answer being saved is shown');
+    assert.deepStrictEqual(promptEl(ctx.doc).querySelectorAll('.actions button').map(b => b.textContent), ['This site', 'All sites', 'Not now']);
+    assert.ok(promptEl(ctx.doc).parentElement.classList.contains('stack'), 'the prompt sits in the widget, not over the form');
+    assert.ok(!/top:|left:/.test(promptEl(ctx.doc).getAttribute('style') || ''), 'the prompt is not pinned next to the field');
     clickPrompt(ctx.doc, 'This site');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'referral code optional', value: 'LIT-2026' }]);
@@ -466,13 +474,13 @@ async function run() {
 
     userTypes(ctx, ctx.fields.ref, 'LIT-2027');
     await settle();
-    clickPrompt(ctx.doc, 'Everywhere');
+    clickPrompt(ctx.doc, 'All sites');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule[1], { host: '*', labelKey: 'referral code optional', value: 'LIT-2027' }, 'Everywhere saves a global rule');
 
     userTypes(ctx, ctx.fields.ref, 'LIT-2028');
     await settle();
-    clickPrompt(ctx.doc, 'No');
+    clickPrompt(ctx.doc, 'Not now');
     await settle();
     assert.strictEqual(ctx.store.calls.learnRule.length, 2, 'No saves nothing');
     // The same value changing again (blur/re-render) does not nag a second time.
@@ -499,7 +507,7 @@ async function run() {
     // Overwriting with a non-profile value asks first.
     userTypes(ctx, ctx.fields.last, 'Byron');
     await settle();
-    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Last name'?");
+    assert.strictEqual(promptText(ctx.doc), 'Last name');
     assert.strictEqual(ctx.store.calls.learnRule.length, 1);
     cleanup(ctx);
   }
@@ -516,8 +524,8 @@ async function run() {
     assert.strictEqual(promptEl(ctx.doc), null, 'a long answer waits for blur, no rule prompt on change');
     mock.fire(ctx.doc, ctx.win, essay, 'focusout');
     await settle();
-    assert.strictEqual(promptText(ctx.doc), 'Save to answer bank?');
-    clickPrompt(ctx.doc, 'Save');
+    assert.strictEqual(promptTitle(ctx.doc), 'Save to answer bank?');
+    clickPrompt(ctx.doc, 'Save answer');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.saveAnswer, [{ question: 'Why do you want to work here?', answer }]);
     assert.strictEqual(toastText(ctx.doc), 'Saved to your answer bank.');
@@ -562,7 +570,7 @@ async function run() {
     mock.fire(ctx.doc, ctx.win, yes, 'change');
     await settle();
     assert.strictEqual(ctx.store.calls.learnRule.length, 0, 'workAuthorized is "yes" too, but a bare Yes is not pinned to it');
-    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Are you over 18?'?");
+    assert.strictEqual(promptText(ctx.doc), 'Are you over 18?');
     clickPrompt(ctx.doc, 'This site');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'are you over 18', value: 'Yes' }]);
@@ -618,7 +626,7 @@ async function run() {
     ctx.api.check();
     userTypes(ctx, late, 'Hooli');
     await settle();
-    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Current company'?", 'a late field asks like any other');
+    assert.strictEqual(promptText(ctx.doc), 'Current company', 'a late field asks like any other');
     cleanup(ctx);
   }
 
@@ -671,8 +679,8 @@ async function run() {
     es.checked = true;
     mock.fire(ctx.doc, ctx.win, es, 'change');
     await settle();
-    assert.strictEqual(promptText(ctx.doc), "Remember this for 'Languages'?");
-    clickPrompt(ctx.doc, 'Everywhere');
+    assert.strictEqual(promptText(ctx.doc), 'Languages');
+    clickPrompt(ctx.doc, 'All sites');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: '*', labelKey: 'languages', value: 'English, Spanish' }]);
     cleanup(ctx);
@@ -833,6 +841,122 @@ async function run() {
     assert.strictEqual(hostEl(ctx.doc), null);
     assert.strictEqual(dom.FakeMutationObserver.activeCount(), 0);
     cleanup({});
+  }
+
+  // -------------------------------------------------------------------------
+  // The widget moves: drag by the grip, saved per site, restored on the next
+  // load, kept out from under the field being edited, hideable per page.
+  {
+    const ctx = await page(threeTextFields);
+    const sh = shadow(ctx.doc);
+    const wrap = sh.querySelector('.wrap');
+    const dock = sh.querySelector('.dock');
+    assert.ok(!dock.classList.contains('hidden'), 'the dock shows with the button');
+    assert.strictEqual(wrap.style.right, '16px', 'bottom right by default');
+    assert.strictEqual(wrap.style.bottom, '16px');
+
+    // Layout stand-ins: the widget is 200x40 in the bottom-right corner.
+    Object.assign(wrap, { offsetWidth: 200, offsetHeight: 40, rectLeft: 1064, rectTop: 744 });
+    Object.assign(dock, { offsetWidth: 200, offsetHeight: 40, rectLeft: 1064, rectTop: 744 });
+
+    // Field under the widget: it hops to the top, then back when focus moves.
+    const low = ctx.fields.email;
+    Object.assign(low, { offsetWidth: 300, offsetHeight: 32, rectLeft: 1000, rectTop: 750 });
+    mock.fire(ctx.doc, ctx.win, low, 'focusin');
+    assert.strictEqual(ctx.api.position().dodged, true, 'the widget moves off the focused field');
+    assert.strictEqual(wrap.style.top, '16px');
+    assert.strictEqual(wrap.style.bottom, 'auto');
+    assert.ok(wrap.classList.contains('at-top'), 'cards open downward when the widget is at the top');
+    const high = ctx.fields.first;
+    Object.assign(high, { offsetWidth: 300, offsetHeight: 32, rectLeft: 20, rectTop: 20 });
+    mock.fire(ctx.doc, ctx.win, high, 'focusin');
+    assert.strictEqual(ctx.api.position().dodged, false, 'and returns once the field is clear');
+    assert.strictEqual(wrap.style.bottom, '16px');
+
+    // A press without movement is a click, not a drag.
+    const grip = dock.querySelector('.grip');
+    const pe = (type, x, y) => dom.makeEvent(type, grip, { pointerId: 1, button: 0, clientX: x, clientY: y, stopPropagation() {} });
+    grip.dispatchEvent(pe('pointerdown', 1100, 760));
+    grip.dispatchEvent(pe('pointerup', 1101, 760));
+    assert.strictEqual(ctx.api.position().h, 'right', 'a 1px wobble does not move it');
+
+    // Drag to the top left; the dock lands at (40, 60).
+    grip.dispatchEvent(pe('pointerdown', 1100, 760));
+    grip.dispatchEvent(pe('pointermove', 600, 400));
+    assert.ok(wrap.classList.contains('dragging'));
+    grip.dispatchEvent(pe('pointermove', 76, 76));
+    assert.strictEqual(wrap.style.left, '40px', 'follows the pointer');
+    assert.strictEqual(wrap.style.top, '60px');
+    Object.assign(dock, { rectLeft: 40, rectTop: 60 });
+    Object.assign(wrap, { rectLeft: 40, rectTop: 60 });
+    grip.dispatchEvent(pe('pointerup', 76, 76));
+    await settle();
+    assert.ok(!wrap.classList.contains('dragging'));
+    assert.deepStrictEqual(ctx.api.position(), { h: 'left', v: 'top', x: 40, y: 60, dodged: false }, 'pinned to the nearest corner');
+    assert.ok(wrap.classList.contains('at-left') && wrap.classList.contains('at-top'));
+    const saved = ctx.chrome.storage.local.store.lit_af_ui_pos;
+    assert.ok(saved && saved[HOST] && saved[HOST].h === 'left' && saved[HOST].y === 60, 'saved for this site');
+
+    // The click that ends a drag does not fill.
+    fab(ctx.doc).dispatchEvent(dom.makeEvent('click', fab(ctx.doc), { stopPropagation() {} }));
+    await settle();
+    assert.strictEqual(ctx.core.calls.run.length, 0, 'dropping the button is not a click');
+
+    // A fresh load on the same site starts where it was left.
+    ctx.api.destroy();
+    const api2 = load();
+    await settle();
+    const wrap2 = shadow(ctx.doc).querySelector('.wrap');
+    assert.strictEqual(wrap2.style.left, '40px', 'restored on the next load');
+    assert.strictEqual(wrap2.style.top, '60px');
+    ctx.api = api2;
+
+    // Hide for this page: gone until the user fills on purpose.
+    const hide = shadow(ctx.doc).querySelector('.dock .x');
+    hide.dispatchEvent(dom.makeEvent('click', hide, { stopPropagation() {} }));
+    assert.strictEqual(buttonShown(ctx.doc), false, 'hidden on this page');
+    assert.ok(/hidden on this page/.test(toastText(ctx.doc)));
+    ctx.api.check();
+    assert.strictEqual(buttonShown(ctx.doc), false, 'stays hidden as the page changes');
+    await ctx.api.fill();
+    await settle();
+    assert.strictEqual(buttonShown(ctx.doc), true, 'a deliberate fill brings it back');
+
+    // Cards hold while hovered and close from their own X.
+    const card = shadow(ctx.doc).querySelector('.toast');
+    card.dispatchEvent(dom.makeEvent('pointerenter', card));
+    assert.ok(card.classList.contains('paused'), 'hovering holds the timer');
+    card.dispatchEvent(dom.makeEvent('pointerleave', card));
+    assert.ok(!card.classList.contains('paused'));
+    const x = card.querySelector('.head .x');
+    x.dispatchEvent(dom.makeEvent('click', x, { stopPropagation() {} }));
+    assert.strictEqual(shadow(ctx.doc).querySelector('.toast'), null, 'X closes the card');
+
+    // A prompt asked for mid-click (change fires on the mousedown that moves
+    // to the next field) waits for the press to end, so it cannot land under
+    // the pointer and take the click.
+    {
+      const d = mock.descFor(ctx.fields.last, 'text', 'Last name');
+      ctx.core.setReport(() => ({ filled: [], unmatched: [d], skipped: [] }));
+      await ctx.api.fill();
+      await settle();
+      ctx.win.dispatch('pointerdown');
+      userTypes(ctx, ctx.fields.last, 'Byron');
+      await settle();
+      assert.strictEqual(promptEl(ctx.doc), null, 'held while the button is down');
+      ctx.win.dispatch('pointerup');
+      await wait(5);
+      assert.strictEqual(promptText(ctx.doc), 'Last name', 'shown once the press ends');
+      const close = promptEl(ctx.doc).querySelector('.head .x');
+      close.dispatchEvent(dom.makeEvent('click', close, { stopPropagation() {} }));
+    }
+
+    // The service worker's hooks.
+    assert.ok(ctx.api.formSize() >= ctx.api.MIN_FIELDS);
+    ctx.api.note('Nothing to fill here.');
+    assert.strictEqual(toastText(ctx.doc), 'Nothing to fill here.');
+    cleanup(ctx);
+    console.log('[PASS] Widget: drag by grip or button, per-site position restored, dodges the focused field, hide per page, cards hold on hover');
   }
 
   console.log('[PASS] autofill-ui: button visibility, shadow DOM, run, learning, sensitive fields, idempotence, teardown');

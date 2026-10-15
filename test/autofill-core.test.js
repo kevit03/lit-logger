@@ -599,6 +599,70 @@ async function run() {
     console.log('[PASS] ARIA radio groups, currentValue for native and custom widgets, generic dropdown fill');
   }
 
+  // Multiple-choice questions drawn as plain buttons
+  {
+    const { doc, h, restore } = installAutofillDom({ href: 'https://x.test/' });
+    const C = freshCore();
+    // Buttons that show the pick with a class name, as most React forms do.
+    const choice = (text, cls = 'opt') => h('button', { type: 'button', class: cls }, text);
+    const pickOne = (buttons, on, off) => buttons.forEach(b => b.addEventListener('click', () => {
+      buttons.forEach(o => o.setAttribute('class', o === b ? on : off));
+    }));
+    const onsite = [choice('Yes'), choice('No')];
+    pickOne(onsite, 'opt opt--selected', 'opt');
+    const years = [choice('0-2 years', 'sc-x1'), choice('3-5 years', 'sc-x1'), choice('6+ years', 'sc-x1')];
+    pickOne(years, 'sc-x1 Qz9', 'sc-x1'); // generated class names only
+    const city = h('input', { type: 'text', id: 'city' });
+    const form = h('form', {},
+      h('div', {}, h('div', {}, 'Are you willing to work onsite?'), h('div', {}, onsite)),
+      h('div', {}, h('div', {}, 'Years of experience'), h('div', {}, years)),
+      h('div', {}, h('label', { for: 'city' }, 'Your city'), city),
+      // A bare <button> in a form submits it; never a choice.
+      h('div', {}, h('div', {}, 'Bare buttons'), h('div', {}, h('button', {}, 'A'), h('button', {}, 'B'))),
+      // Navigation buttons are never choices.
+      h('div', {}, h('button', { type: 'button' }, 'Back'), h('button', { type: 'button' }, 'Next')),
+      // Ashby-style yes/no: the checkbox is the field, not the buttons.
+      h('div', {}, h('div', {}, 'Ashby question?'),
+        h('div', {}, h('button', { type: 'button', 'aria-pressed': 'false' }, 'Yes'),
+          h('button', { type: 'button', 'aria-pressed': 'false' }, 'No'), h('input', { type: 'checkbox', id: 'ash' }))));
+    // Outside a form: page chrome unless it follows a question or shows a state.
+    const sortBar = h('div', {}, h('div', {}, 'Sort by'), h('div', {}, h('button', {}, 'Newest'), h('button', {}, 'Oldest')));
+    const outsideQ = h('div', {}, h('div', {}, 'Do you have a driver license?'),
+      h('div', {}, h('div', { role: 'button' }, 'Yes'), h('div', { role: 'button' }, 'No')));
+    doc.body.appendChild(h('div', {}, form, sortBar, outsideQ));
+
+    const fields = C.scanFields(doc, { includeFilled: true });
+    const radios = fields.filter(f => f.kind === 'radio');
+    assert.deepStrictEqual(radios.map(f => f.label),
+      ['Are you willing to work onsite?', 'Years of experience', 'Do you have a driver license?'],
+      'button groups are radio questions; bare, navigation, Ashby, and sort buttons are not');
+    const [q1, q2, q3] = radios;
+    assert.deepStrictEqual(q1.options, ['Yes', 'No']);
+    assert.deepStrictEqual(q2.options, ['0-2 years', '3-5 years', '6+ years']);
+    assert.strictEqual(fields.find(f => f.el === city).label, 'Your city');
+    assert.ok(fields.some(f => f.kind === 'checkbox' && f.el.id === 'ash'), 'the Ashby checkbox is still the field');
+
+    // Filling clicks the button; a class-name state reads back.
+    assert.strictEqual(C.currentValue(q1), '');
+    assert.strictEqual(await C.setValue(q1, 'no'), true);
+    assert.strictEqual(onsite[1].getAttribute('class'), 'opt opt--selected');
+    assert.strictEqual(C.currentValue(q1), 'No');
+    assert.ok(C.isFilled(q1));
+    // Generated class names: the click is trusted when the button's markup changes.
+    assert.strictEqual(await C.setValue(q2, '3-5 years'), true);
+    assert.strictEqual(years[1].getAttribute('class'), 'sc-x1 Qz9');
+    // A button that ignores the click is a failed fill.
+    assert.strictEqual(await C.setValue(q3, 'Yes'), false);
+
+    // Learned rules pick the button on the next run.
+    q1.el.parentElement.children.forEach(b => b.setAttribute('class', 'opt'));
+    const report = await C.run({ profile: PROFILE, rules: [{ host: 'x.test', labelKey: 'are you willing to work onsite', value: 'Yes' }], host: 'x.test' });
+    assert.ok(report.filled.some(f => f.desc.label === 'Are you willing to work onsite?'), 'rule filled the button group');
+    assert.strictEqual(onsite[0].getAttribute('class'), 'opt opt--selected');
+    restore();
+    console.log('[PASS] Choice buttons: grouped as radio questions, clicked to fill, read back, never Submit/Next');
+  }
+
   console.log('--- autofill-core: all tests passed ---');
 }
 

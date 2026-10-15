@@ -165,6 +165,13 @@
         "mac": "Alt+Shift+J"
       },
       "description": "Open LIT with search focused"
+    },
+    "autofill-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+F",
+        "mac": "Alt+Shift+F"
+      },
+      "description": "Autofill the application form on this page"
     }
   },
   "icons": {
