@@ -524,17 +524,45 @@ body.pt-dark .tab-indicator { background: var(--surface-3); }
   border: 1px solid var(--border-soft);
   box-shadow: var(--shadow);
 }
-.digest-card { padding: 12px 14px; animation: slide-in 0.4s var(--ease); background: linear-gradient(135deg, var(--accent-soft), var(--surface) 60%); }
-.digest-head { display: flex; justify-content: space-between; align-items: flex-start; }
-.digest-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent-text); }
-.digest-title { font-size: 14px; font-weight: 700; margin-top: 1px; }
-.digest-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.digest-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: baseline; }
-.digest-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12.5px; }
-.digest-name i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
-.digest-total { font-weight: 700; font-variant-numeric: tabular-nums; }
-.digest-detail { grid-column: 1 / -1; font-size: 11.5px; color: var(--text-2); }
-.digest-foot { margin-top: 10px; font-size: 11.5px; color: var(--text-2); }
+.digest-card { padding: 12px 14px 12px; animation: slide-in 0.4s var(--ease); }
+.digest-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.digest-head > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.digest-kicker { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.digest-title { font-size: 12px; font-weight: 500; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.digest-rows { display: flex; flex-direction: column; margin-top: 8px; }
+.digest-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name total" "detail week";
+  align-items: center;
+  gap: 2px 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.digest-row:first-child { border-top: 0; padding-top: 2px; }
+.digest-name { grid-area: name; display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; font-weight: 500; }
+.digest-name i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.digest-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.digest-total { grid-area: total; justify-self: end; font-size: 15px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.digest-total small { font-size: 11.5px; font-weight: 500; color: var(--text-3); }
+.digest-row.met .digest-total { color: var(--success); }
+.digest-detail {
+  grid-area: detail;
+  min-width: 0;
+  padding-left: 15px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.digest-week { grid-area: week; display: flex; align-items: flex-end; gap: 3px; height: 26px; }
+.digest-day { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 9px; }
+.digest-day b { display: block; width: 100%; min-height: 2px; border-radius: 2px; background: var(--c); opacity: 0.85; }
+.digest-day.is-zero b { background: var(--surface-3); opacity: 1; }
+.digest-day em { font-style: normal; font-size: 8px; line-height: 1; color: var(--text-3); }
+.digest-foot { margin-top: 2px; padding-top: 9px; border-top: 1px solid var(--border-soft); font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .first-run-card { padding: 12px 14px; }
 .first-run-title { font-weight: 700; margin-bottom: 4px; }

@@ -2236,9 +2236,11 @@ const TrackerStorage = (() => {
         let activeDays = 0;
         let goalDays = 0;
         let bestDay = null;
+        const days = [];
         for (let i = 0; i < 7; i++) {
           const d = addDays(start, i);
           const n = (dailyMap[d] || {})[m.id] || 0;
+          days.push(n);
           total += n;
           if (n > 0) activeDays++;
           if (goalMetOn(dailyMap, d, m.id, m.dailyGoal)) goalDays++;
@@ -2254,7 +2256,8 @@ const TrackerStorage = (() => {
           total,
           activeDays,
           goalDays,
-          bestDay
+          bestDay,
+          days
         };
       });
       const responses = jobs.filter(l => {

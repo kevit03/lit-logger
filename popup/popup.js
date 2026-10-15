@@ -1240,7 +1240,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // Weekly recap
   // ---------------------------------------------------------------------------
-  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const WEEK_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
   async function renderDigest() {
     const card = el('digest-card');
@@ -1267,23 +1268,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     rows.textContent = '';
     summary.metrics.filter(m => m.total > 0 || m.weeklyGoal > 0).forEach(m => {
       const row = make('div', 'digest-row');
+      row.style.setProperty('--c', m.color);
+
       const name = make('span', 'digest-name');
-      const dot = make('i');
-      dot.style.setProperty('--c', m.color);
-      name.appendChild(dot);
-      name.appendChild(document.createTextNode(m.name));
+      name.appendChild(make('i'));
+      name.appendChild(make('span', 'digest-name-text', m.name));
+      name.title = m.name;
       row.appendChild(name);
-      row.appendChild(make('span', 'digest-total', m.weeklyGoal > 0 ? m.total + ' / ' + m.weeklyGoal : m.total));
-      const bits = [m.activeDays + ' of 7 days active'];
-      if (m.goalDays > 0) bits.push('daily goal met ' + m.goalDays + (m.goalDays === 1 ? ' time' : ' times'));
-      if (m.bestDay) bits.push('best on ' + WEEKDAYS[TrackerStorage.parseLocalDateToNoon(m.bestDay.date).getDay()] + ' (' + m.bestDay.count + ')');
-      row.appendChild(make('span', 'digest-detail', bits.join(', ')));
+
+      const total = make('span', 'digest-total', String(m.total));
+      if (m.weeklyGoal > 0) {
+        total.appendChild(make('small', null, ' / ' + m.weeklyGoal));
+        row.classList.toggle('met', m.total >= m.weeklyGoal);
+      }
+      row.appendChild(total);
+
+      // Seven bars, Monday to Sunday, scaled to the week's busiest day.
+      const days = m.days || [];
+      const peak = Math.max(1, ...days);
+      const chart = make('div', 'digest-week');
+      chart.setAttribute('aria-hidden', 'true');
+      WEEK_LETTERS.forEach((letter, i) => {
+        const n = days[i] || 0;
+        const col = make('span', 'digest-day' + (n > 0 ? '' : ' is-zero'));
+        const bar = make('b');
+        bar.style.height = (n > 0 ? Math.max(3, Math.round((n / peak) * 16)) : 2) + 'px';
+        col.appendChild(bar);
+        col.appendChild(make('em', null, letter));
+        col.title = n + (n === 1 ? ' entry' : ' entries');
+        chart.appendChild(col);
+      });
+      row.appendChild(chart);
+
+      const bits = [m.activeDays + '/7 days'];
+      if (m.goalDays > 0) bits.push('goal met ' + m.goalDays + '×');
+      if (m.bestDay) bits.push('best ' + WEEKDAYS[TrackerStorage.parseLocalDateToNoon(m.bestDay.date).getDay()]);
+      const detail = make('span', 'digest-detail', bits.join(' · '));
+      detail.title = bits.join(' · ');
+      row.appendChild(detail);
       rows.appendChild(row);
     });
     const foot = [];
-    if (summary.responses > 0) foot.push(summary.responses + (summary.responses === 1 ? ' application heard back.' : ' applications heard back.'));
-    foot.push('Keep the chain going this week.');
-    el('digest-foot').textContent = foot.join(' ');
+    if (summary.responses > 0) foot.push(summary.responses + (summary.responses === 1 ? ' application heard back' : ' applications heard back'));
+    foot.push(foot.length ? 'keep it going' : 'Keep the chain going this week');
+    el('digest-foot').textContent = foot.join(' · ');
     card.classList.remove('hidden');
   }
 
