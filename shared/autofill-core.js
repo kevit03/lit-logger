@@ -143,6 +143,28 @@ const AutofillCore = (() => {
   const ALIAS_INDEX = new Map();
   ALIAS_GROUPS.forEach((g, i) => g.members.forEach(m => { if (!ALIAS_INDEX.has(m)) ALIAS_INDEX.set(m, { id: i, family: g.family || null }); }));
 
+  // Alias groups that name a place (a US state or a country).
+  const PLACE_IDS = new Set(['us', 'uk', 'uae'].concat(US_STATES.map(s => s[0])).map(m => ALIAS_INDEX.get(m).id));
+
+  // "Plainview, NY" vs "Plainview, New York, United States": a place option
+  // must name the same city first and, among its other parts, every state or
+  // country the value names, abbreviated or not. Same city in another state
+  // scores 0 so a same-named town is never picked. null when the value isn't
+  // "city, state/country", so the caller scores normally.
+  function scoreLocation(value, option) {
+    const parts = s => String(s == null ? '' : s).split(',')
+      .map(p => norm(p).replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const place = p => { const a = ALIAS_INDEX.get(p); return a && PLACE_IDS.has(a.id) ? a.id : null; };
+    const v = parts(value);
+    const o = parts(option);
+    if (v.length < 2 || !o.length || o[0] !== v[0]) return null;
+    const regions = v.slice(1).map(place);
+    if (regions.some(r => r === null)) return null;
+    if (o.length === 1) return 0.8;
+    const have = new Set(o.slice(1).map(place));
+    return regions.every(r => have.has(r)) ? 0.95 : 0;
+  }
+
   const DECLINE_RE = /\b(decline|declined|prefer not|rather not|do not wish|dont wish|not wish|choose not|not to (say|answer|disclose|self identify|specify)|wish to answer|wish to self identify|not disclose)\b/;
   const NEGATION_RE = /\b(no|not|dont|do not|never|none|neither|cannot|cant|wont|will not)\b/;
   const YES_RE = /^(yes|y|true|1|on|checked|agree|i agree)$/;
@@ -153,6 +175,8 @@ const AutofillCore = (() => {
     const o = norm(option);
     if (!v || !o) return 0;
     if (v === o) return 1;
+    const loc = scoreLocation(value, option);
+    if (loc !== null) return loc;
     const ga = ALIAS_INDEX.get(v);
     const gb = ALIAS_INDEX.get(o);
     if (ga && gb) {
@@ -201,7 +225,8 @@ const AutofillCore = (() => {
   // --- DOM helpers ---------------------------------------------------------------
 
   const CONTROL_SELECTOR = 'input, select, textarea, [role="combobox"], button, [role="button"], ' +
-    '[role="radio"], [role="checkbox"]';
+    '[role="radio"], [role="checkbox"], [role="option"], [tabindex], [aria-pressed], [aria-checked], [aria-selected], ' +
+    '[data-state], [data-headlessui-state]';
   const NEVER_INPUT_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'password']);
   const SKIP_INPUT_TYPES = new Set(['search', 'range', 'color']);
   const SKIP_TEXT_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SELECT', 'OPTION', 'TEXTAREA', 'INPUT', 'BUTTON', 'SVG']);
@@ -293,7 +318,7 @@ const AutofillCore = (() => {
     if (tag === 'SELECT' || tag === 'TEXTAREA') return true;
     if (attr(el, 'role') === 'combobox') return true;
     if (tag === 'BUTTON' && String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return true;
-    return isButtonish(el) && !!choiceGroupOf(el);
+    return isChoiceLike(el) && !!choiceGroupOf(el);
   }
 
   // --- choice buttons ------------------------------------------------------------
@@ -303,7 +328,19 @@ const AutofillCore = (() => {
   // container that holds no other control. Action buttons (Next, Submit,
   // Upload, Add another...) never count, and inside a <form> a button must say
   // type="button", because a bare <button> there submits the form.
+  //
+  // The same goes for answer cards drawn as a plain div / li / span / label
+  // that takes focus or shows a picked state ("tiles"), and for the options
+  // of a listbox drawn in the page rather than popped up by a dropdown. A
+  // group whose question says "select all that apply" (or whose listbox is
+  // aria-multiselectable) is a checkbox question: several members are picked.
   const CHOICE_MAX = 12;
+  const TILE_TAGS = new Set(['DIV', 'LI', 'SPAN', 'LABEL']);
+  const TILE_INNER = 'input, select, textarea, button, a, [role="button"], [role="radio"], [role="checkbox"], [role="option"]';
+  // Everything a tile or option can be found by (see hasChoiceState).
+  const CHOICE_CANDIDATES = '[role="option"], [tabindex], [aria-pressed], [aria-checked], [aria-selected], ' +
+    '[data-state], [data-headlessui-state]';
+  const MULTI_RE = /\b(all|any|each) (that|which) appl(y|ies)\b|\b(select|check|choose|pick|mark|tick) (all|any|multiple|one or more|as many|up to \w+)\b/;
   const ACTION_RE = new RegExp('^(submit( application)?|apply( now)?|next( step| page)?|continue|back|go back|previous|prev|' +
     'save( and continue| draft| changes)?|cancel|close|done|finish|review|upload( file| resume| cv)?|attach( file| resume)?|' +
     'browse|add( another| more| new| item)?|remove|delete|edit|clear|reset|sign in|log in|login|sign up|register|share|' +
@@ -322,12 +359,52 @@ const AutofillCore = (() => {
     return tagOf(el) === 'BUTTON' || String(attr(el, 'role') || '').toLowerCase() === 'button';
   }
 
+  function isTile(el) {
+    if (!TILE_TAGS.has(tagOf(el)) || attr(el, 'role')) return false;
+    const tab = attr(el, 'tabindex');
+    if ((tab == null || tab === '-1') && !hasChoiceState(el)) return false;
+    try { return !el.querySelector(TILE_INNER); } catch (_) { return false; }
+  }
+
+  // A listbox drawn in the page as the answer list, not a dropdown's popup:
+  // nothing points at it, it sits in no combobox, and it is not floated.
+  function isStandaloneList(list) {
+    if (!list || !isRendered(list)) return false;
+    try {
+      if (list.parentElement && list.parentElement.closest('[role="combobox"]')) return false;
+      const id = String(list.id || '').replace(/"/g, '');
+      if (id && rootNodeOf(list).querySelector('[aria-controls*="' + id + '"], [aria-owns*="' + id + '"]')) return false;
+    } catch (_) { return false; }
+    for (let n = list, i = 0; n && i < 3; n = n.parentElement, i++) {
+      const cs = computed(n);
+      if (cs && (cs.position === 'absolute' || cs.position === 'fixed')) return false;
+    }
+    return true;
+  }
+
+  function isListOption(el) {
+    if (String(attr(el, 'role') || '').toLowerCase() !== 'option') return false;
+    try { return isStandaloneList(el.closest('[role="listbox"]')); } catch (_) { return false; }
+  }
+
+  // Which kind of clickable answer an element is, or null.
+  function choiceFamily(el) {
+    if (isButtonish(el)) return 'button';
+    if (isListOption(el)) return 'option';
+    return isTile(el) ? 'tile' : null;
+  }
+
+  function isChoiceLike(el) {
+    return choiceFamily(el) !== null;
+  }
+
   function choiceText(el) {
     return norm(textOf(el)) || norm(attr(el, 'aria-label') || '');
   }
 
   function isChoiceButton(el) {
-    if (!isButtonish(el)) return false;
+    const family = choiceFamily(el);
+    if (!family) return false;
     const popup = String(attr(el, 'aria-haspopup') || '').toLowerCase();
     if (popup && popup !== 'false') return false;
     try {
@@ -336,7 +413,9 @@ const AutofillCore = (() => {
         if (type === 'submit' || type === 'reset') return false;
         if (!type && el.closest('form')) return false;
       }
-      if (el.closest(NOT_CHOICE_SCOPE)) return false;
+      // An option's own listbox was already vetted by isStandaloneList.
+      const scope = family === 'option' ? (el.closest('[role="listbox"]') || el).parentElement : el;
+      if (scope && scope.closest(NOT_CHOICE_SCOPE)) return false;
     } catch (_) { return false; }
     const text = choiceText(el);
     if (!text || text.length > 60 || text.split(' ').length > 8) return false;
@@ -358,26 +437,45 @@ const AutofillCore = (() => {
   // Page chrome (filters, pagination, share bars) can also be a row of short
   // buttons, so a group must sit in a form, expose a pressed/selected state,
   // be marked up as a group, or follow a question.
-  function looksLikeQuestion(container, members) {
+  function looksLikeQuestion(container, members, question) {
     try { if (container.closest('form, fieldset, [role="group"], [role="radiogroup"]')) return true; } catch (_) { /* ignore */ }
     if (members.some(hasChoiceState)) return true;
-    return /\?\s*\*?\s*$/.test(precedingText(members[0], new Set(members)) || '');
+    return /\?\s*\*?\s*$/.test(question);
   }
 
+  function isMultiChoice(container, question) {
+    try { if (container.closest('[aria-multiselectable="true"]')) return true; } catch (_) { /* ignore */ }
+    return MULTI_RE.test(norm([question, attr(container, 'aria-label'), labelledByText(container)].join(' ')));
+  }
+
+  // Members are the element's own family: buttons with buttons, tiles with
+  // tiles of the same tag, options with options.
   function findChoiceGroup(el) {
     if (!isChoiceButton(el)) return null;
+    const family = choiceFamily(el);
+    const peer = c => choiceFamily(c) === family && (family !== 'tile' || tagOf(c) === tagOf(el));
     let node = el.parentElement;
     for (let depth = 0; depth < 4 && node; depth++, node = node.parentElement) {
       const tag = tagOf(node);
       if (tag === 'FORM' || tag === 'BODY' || tag === 'HTML') return null;
       let buttons = [];
-      try { buttons = Array.from(node.querySelectorAll('button, [role="button"]')); } catch (_) { return null; }
+      try { buttons = Array.from(node.querySelectorAll(family === 'button' ? 'button, [role="button"]' : CHOICE_CANDIDATES)).filter(peer); } catch (_) { return null; }
       buttons = buttons.filter(b => !buttons.some(o => o !== b && o.contains && o.contains(b)));
       if (buttons.length < 2) continue;
       if (buttons.length > CHOICE_MAX || !buttons.every(isChoiceButton) || hasOtherControl(node)) return null;
-      return looksLikeQuestion(node, buttons) ? { container: node, members: buttons } : null;
+      // Tiles and options beside real buttons are some other widget.
+      try { if (family !== 'button' && node.querySelector('button, [role="button"]')) return null; } catch (_) { return null; }
+      const question = precedingText(buttons[0], new Set(buttons)) || '';
+      if (!looksLikeQuestion(node, buttons, question)) return null;
+      return { container: node, members: buttons, multi: isMultiChoice(node, question) };
     }
     return null;
+  }
+
+  // 'radio' or 'checkbox' for a member of a choice group, null otherwise.
+  function choiceKind(el) {
+    const group = choiceGroupOf(el);
+    return group ? (group.multi ? 'checkbox' : 'radio') : null;
   }
 
   // Finding a group reads the question text before it, which can ask about a
@@ -582,9 +680,9 @@ const AutofillCore = (() => {
       const type = String(attr(el, 'type') || '').toLowerCase();
       if (type === 'submit' || type === 'reset') return null;
       if (role === 'combobox' || String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return 'combobox';
-      return choiceGroupOf(el) ? 'radio' : null;
+      return choiceKind(el);
     }
-    if (role === 'button') return choiceGroupOf(el) ? 'radio' : null;
+    if (role === 'button' || role === 'option') return choiceKind(el);
     if (role === 'radio' || role === 'checkbox') {
       // Custom radios and checkboxes: only inside a group or form, so page
       // chrome toggles (cookie banners, menus) are not taken for questions.
@@ -598,7 +696,7 @@ const AutofillCore = (() => {
       try { if (el.querySelector && el.querySelector('input, textarea')) return null; } catch (_) { /* ignore */ }
       return 'combobox';
     }
-    return null;
+    return isTile(el) ? choiceKind(el) : null;
   }
 
   function isPlaceholderOption(opt) {
@@ -733,8 +831,31 @@ const AutofillCore = (() => {
     return desc;
   }
 
+  // Ant Design (TikTok's form) and other React kits render radios with no
+  // name, so the group is the nearest ancestor holding other nameless inputs
+  // of the type, stopping at one that holds a different field. Nameless
+  // checkboxes group only inside a container marked as a group: two consent
+  // boxes side by side are separate questions.
+  function namelessGroup(el, type) {
+    const peer = c => tagOf(c) === 'INPUT' && String(attr(c, 'type') || 'text').toLowerCase() === type && !attr(c, 'name');
+    let node = el.parentElement;
+    for (let depth = 0; depth < 6 && node; depth++, node = node.parentElement) {
+      const tag = tagOf(node);
+      if (tag === 'FORM' || tag === 'BODY' || tag === 'HTML') break;
+      let all = [];
+      try { all = Array.from(node.querySelectorAll('input, select, textarea, [role="combobox"]')); } catch (_) { break; }
+      const other = all.some(c => !peer(c) && (tagOf(c) !== 'INPUT' || String(attr(c, 'type') || 'text').toLowerCase() !== 'hidden'));
+      if (other) break;
+      const peers = all.filter(peer);
+      if (peers.length < 2) continue;
+      if (type === 'checkbox' && !(tag === 'FIELDSET' || attr(node, 'role') === 'group' || /group/i.test(String(attr(node, 'class') || '')))) break;
+      return peers;
+    }
+    return [el];
+  }
+
   function sameScopeInputs(el, type) {
-    if (type === 'radio' && isButtonish(el)) {
+    if (tagOf(el) !== 'INPUT' && isChoiceLike(el)) {
       const choice = choiceGroupOf(el);
       return choice ? choice.members : [el];
     }
@@ -747,7 +868,7 @@ const AutofillCore = (() => {
       return members.length ? members : [el];
     }
     const name = attr(el, 'name');
-    if (!name) return [el];
+    if (!name) return namelessGroup(el, type);
     let scope = null;
     try { scope = el.closest('form'); } catch (_) { scope = null; }
     if (!scope) scope = rootNodeOf(el);
@@ -767,7 +888,7 @@ const AutofillCore = (() => {
       container = el.closest('[role="radiogroup"], [role="group"]');
       if (container && !inputs.every(i => container.contains(i))) container = null;
     } catch (_) { container = null; }
-    if (!container && kind === 'radio' && isButtonish(el)) {
+    if (!container && tagOf(el) !== 'INPUT' && isChoiceLike(el)) {
       const choice = choiceGroupOf(el);
       if (choice) container = choice.container;
     }
@@ -1157,7 +1278,10 @@ const AutofillCore = (() => {
           : { reason: 'no-value' };
       }
       if (desc.kind === 'file') return { reason: 'no-match' };
-      const value = profileValue(profile, key);
+      // A city dropdown searches places, and a bare city name matches every
+      // same-named town ("Plainview" is in NY and TX): give it the state too.
+      const value = (key === 'city' && desc.kind === 'combobox' && profileValue(profile, 'location')) ||
+        profileValue(profile, key);
       if (!value) return { reason: 'no-value' };
       return { match: { profileKey: key, value: presentValue(key, value, desc.kind), confidence, source } };
     };
@@ -1353,15 +1477,14 @@ const AutofillCore = (() => {
     }
     const ctx = makeCtx();
     const candidates = inputs.map(i => [optionLabel(i, ctx), String(attr(i, 'value') || '')]);
-    const wanted = Array.isArray(value) ? value : [value];
+    // A learned answer arrives as "Python, Rust" (currentValue's form): each
+    // part is its own pick unless the whole string names one option exactly.
+    const whole = Array.isArray(value) ? null : bestOption(value, candidates);
+    const parts = Array.isArray(value) ? value : String(value).split(/\s*[,;|]\s*/).filter(Boolean);
     let picks = [];
-    wanted.forEach(w => { const b = bestOption(w, candidates); if (b) picks.push(b.index); });
-    if (!picks.length && !Array.isArray(value)) {
-      String(value).split(/\s*[,;|]\s*/).filter(Boolean).forEach(w => {
-        const b = bestOption(w, candidates);
-        if (b) picks.push(b.index);
-      });
-    }
+    if (whole && (whole.score >= 0.95 || parts.length < 2)) picks.push(whole.index);
+    else parts.forEach(w => { const b = bestOption(w, candidates); if (b) picks.push(b.index); });
+    if (!picks.length && whole) picks.push(whole.index);
     picks = Array.from(new Set(picks));
     if (!picks.length) return false;
     return picks.map(i => setChecked(inputs[i], true)).every(Boolean);
@@ -1718,6 +1841,7 @@ const AutofillCore = (() => {
     profileValue,
     bestOption,
     scoreOption,
+    scoreLocation,
     findAnswer,
     dictionaryLookup,
     isFilled,

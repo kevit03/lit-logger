@@ -281,6 +281,11 @@ async function run() {
     assert.strictEqual(C.bestOption('BS', ['High School', 'Bachelor\'s Degree', 'Master\'s Degree']).index, 1, 'degree family');
     assert.strictEqual(C.bestOption('May 2026', ['2025', '2026', '2027']).index, 1);
     assert.strictEqual(C.bestOption('Purple', ['Red', 'Green']), null);
+    const towns = ['Plainview, Texas, United States', 'Plainview, New York, United States'];
+    assert.strictEqual(C.bestOption('Plainview, NY', towns).index, 1, 'same-named town picks the state');
+    assert.strictEqual(C.bestOption('Plainview, New York', ['Plainview, TX, USA', 'Plainview, NY 11803, USA']).index, 1, 'abbreviated option');
+    assert.strictEqual(C.bestOption('Plainview, NY', ['Plainview, Texas, United States']), null, 'never the wrong state');
+    assert.strictEqual(C.bestOption('Yes, I am authorized', ['No', 'Yes']).index, 1, 'commas outside places score normally');
 
     const sel = h('select', { id: 's' }, h('option', { value: '' }, 'Select...'), h('option', { value: 'AZ' }, 'Arizona'), h('option', { value: 'CA' }, 'California'));
     const yn = h('select', { id: 'yn' }, h('option', { value: '' }, ''), h('option', { value: '1' }, 'Yes, I am authorized'), h('option', { value: '0' }, 'No'));
@@ -661,6 +666,71 @@ async function run() {
     assert.strictEqual(onsite[0].getAttribute('class'), 'opt opt--selected');
     restore();
     console.log('[PASS] Choice buttons: grouped as radio questions, clicked to fill, read back, never Submit/Next');
+  }
+
+  // Multiple choice without names or buttons: nameless radios, answer tiles,
+  // in-page listboxes, and "select all that apply" groups
+  {
+    const { doc, h, restore } = installAutofillDom({ href: 'https://x.test/' });
+    const C = freshCore();
+    // Ant Design (TikTok): native radios with no name attribute.
+    const antRadio = t => h('label', { class: 'ant-radio-wrapper' },
+      h('span', { class: 'ant-radio' }, h('input', { type: 'radio', class: 'ant-radio-input', value: t })), h('span', {}, t));
+    const pickOne = (members, on, off) => members.forEach(m => m.addEventListener('click', () => {
+      members.forEach(o => o.setAttribute(on[0], o === m ? on[1] : off));
+    }));
+    const tiles = ['Remote', 'Hybrid', 'Onsite'].map(t => h('div', { class: 'card', tabindex: '0' }, t));
+    pickOne(tiles, ['class', 'card card--selected'], 'card');
+    const shifts = ['Day', 'Night'].map(t => h('li', { role: 'option', 'aria-selected': 'false' }, t));
+    pickOne(shifts, ['aria-selected', 'true'], 'false');
+    const langs = ['Python', 'Go', 'Rust'].map(t => h('button', { type: 'button', 'aria-pressed': 'false' }, t));
+    langs.forEach(b => b.addEventListener('click', () => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'))));
+    doc.body.appendChild(h('div', {},
+      h('div', {}, h('div', {}, 'Are you at least 18 years old?'), h('div', { class: 'ant-radio-group' }, antRadio('Yes'), antRadio('No'))),
+      h('div', {}, h('div', {}, 'Do you have a degree?'), h('div', { class: 'ant-radio-group' }, antRadio('Yes'), antRadio('No'))),
+      h('div', {}, h('div', {}, 'Preferred work style?'), h('div', {}, tiles)),
+      h('div', {}, h('div', {}, 'Which shift?'), h('ul', { role: 'listbox', 'aria-label': 'Which shift?' }, shifts)),
+      h('div', {}, h('div', {}, 'Languages you use (select all that apply)'), h('div', {}, langs)),
+      // Two nameless consent boxes side by side stay separate questions.
+      h('div', {}, h('label', {}, h('input', { type: 'checkbox' }), 'I agree to the terms'),
+        h('label', {}, h('input', { type: 'checkbox' }), 'Send me job alerts')),
+      // A dropdown's popup listbox is not a question, nor is a tab bar.
+      h('div', {}, h('div', {}, 'Country?'), h('div', { role: 'combobox', 'aria-controls': 'pop' }, 'Select...'),
+        h('ul', { role: 'listbox', id: 'pop' }, h('li', { role: 'option' }, 'US'), h('li', { role: 'option' }, 'UK'))),
+      h('div', { role: 'tablist' }, h('div', { tabindex: '0', 'aria-selected': 'true' }, 'Overview'), h('div', { tabindex: '0' }, 'Apply'))));
+
+    const fields = C.scanFields(doc, { includeFilled: true });
+    const choices = fields.filter(f => f.kind === 'radio' || (f.kind === 'checkbox' && f.inputs.length > 1));
+    assert.deepStrictEqual(choices.map(f => [f.kind, f.label, f.options]), [
+      ['radio', 'Are you at least 18 years old?', ['Yes', 'No']],
+      ['radio', 'Do you have a degree?', ['Yes', 'No']],
+      ['radio', 'Preferred work style?', ['Remote', 'Hybrid', 'Onsite']],
+      ['radio', 'Which shift?', ['Day', 'Night']],
+      ['checkbox', 'Languages you use (select all that apply)', ['Python', 'Go', 'Rust']]
+    ], 'one question per group; popups and tabs are not questions');
+    assert.strictEqual(fields.filter(f => f.kind === 'checkbox' && f.inputs.length === 1).length, 2, 'consent boxes stay single');
+    const [adult, degree, style, shift, lang] = choices;
+
+    assert.strictEqual(await C.setValue(adult, 'No'), true);
+    assert.deepStrictEqual(adult.inputs.map(i => i.checked), [false, true], 'nameless radio clicked');
+    assert.strictEqual(C.currentValue(degree), '', 'the next nameless group is untouched');
+    assert.strictEqual(await C.setValue(style, 'hybrid'), true);
+    assert.strictEqual(tiles[1].getAttribute('class'), 'card card--selected', 'tile clicked');
+    assert.strictEqual(C.currentValue(style), 'Hybrid');
+    assert.strictEqual(await C.setValue(shift, 'Night'), true);
+    assert.strictEqual(C.currentValue(shift), 'Night', 'listbox option read back through aria-selected');
+    // A learned multi-select answer is saved as "A, B" and replays every part.
+    assert.strictEqual(await C.setValue(lang, 'Python, Rust'), true);
+    assert.deepStrictEqual(langs.map(b => b.getAttribute('aria-pressed')), ['true', 'false', 'true']);
+    assert.strictEqual(C.currentValue(lang), 'Python, Rust');
+
+    // Learned rules answer these on the next run.
+    const report = await C.run({ profile: PROFILE, host: 'x.test',
+      rules: [{ host: 'x.test', labelKey: 'do you have a degree', value: 'Yes' }] });
+    assert.ok(report.filled.some(f => f.desc.label === 'Do you have a degree?'), 'rule filled the nameless radios');
+    assert.deepStrictEqual(degree.inputs.map(i => i.checked), [true, false]);
+    restore();
+    console.log('[PASS] Multiple choice: nameless radios, tiles, in-page listboxes, select-all-that-apply groups');
   }
 
   console.log('--- autofill-core: all tests passed ---');

@@ -3044,7 +3044,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const s = await TrackerStorage.getStorageInfo();
       const where = s.backend === 'indexeddb' ? 'IndexedDB' : 'chrome.storage.local';
-      info.textContent = s.logCount.toLocaleString() + (s.logCount === 1 ? ' entry' : ' entries') + ' across all accounts, stored on this device in ' + where + '. Trackers, layout, and theme sync through your Chrome profile.';
+      info.textContent = s.logCount.toLocaleString() + (s.logCount === 1 ? ' entry' : ' entries') + ' on this device (' + where + ').';
     } catch (err) {
       info.textContent = 'Could not read storage: ' + errMsg(err);
     }

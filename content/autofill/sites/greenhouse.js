@@ -36,6 +36,8 @@
     const v = norm(value);
     if (!o || !v) return 0;
     if (o === v) return 1;
+    const loc = AutofillCore.scoreLocation ? AutofillCore.scoreLocation(value, label) : null;
+    if (loc !== null) return loc;
     if (canon(o) === canon(v)) return 0.95;
     if (v === 'yes' || v === 'no') return new RegExp('^' + v + '\\b').test(o) ? 0.9 : 0;
     if ((' ' + o + ' ').includes(' ' + v + ' ')) return 0.7 + 0.1 * (v.length / o.length);
@@ -165,6 +167,13 @@
     press(control());
     typeInto(input, String(value));
     let hit = bestOption(await waitFor(options, root) || [], value);
+    if (!hit && /,/.test(value)) {
+      // Place searches can miss "Plainview, NY"; search the city alone and
+      // still pick the option in the right state.
+      // Wait for a matching option: the old query's results linger a moment.
+      typeInto(input, String(value).split(',')[0].trim());
+      hit = await waitFor(() => bestOption(options(), value), root);
+    }
     if (!hit) {
       // The typed filter can hide the right option ("United States" vs "USA");
       // clear it and match against the full list.

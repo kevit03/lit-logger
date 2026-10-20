@@ -197,6 +197,19 @@ test('greenhouse: async location options are awaited and the closest one wins', 
   assertNoObservers('greenhouse location');
 });
 
+test('greenhouse: location picks the same-named town in the profile state', async () => {
+  const { by } = loadAll();
+  const doc = af.loadFixture('greenhouse.html');
+  const state = af.reactSelect(doc, 'candidate-location',
+    ['Plainview, Texas, United States', 'Plainview, New York, United States', 'Plainview, Nebraska, United States'],
+    { asyncOptions: true, delay: 30 });
+  // The mock filters by substring, so "Plainview, NY" finds nothing and the
+  // adapter has to retry with the city alone.
+  assert.strictEqual(await by.greenhouse.fill(descOf(doc.getElementById('candidate-location')), 'Plainview, NY'), true);
+  assert.strictEqual(state.selected, 'Plainview, New York, United States');
+  assertNoObservers('greenhouse plainview');
+});
+
 test('greenhouse: no acceptable option returns false and closes the menu', async () => {
   const { by } = loadAll();
   const doc = af.loadFixture('greenhouse.html');
@@ -289,6 +302,16 @@ test('ashby: location autocomplete types and picks a suggestion', async () => {
   assert.strictEqual(input.value, 'Austin, Texas, United States');
   assert.strictEqual(doc.querySelector('[role="listbox"]'), null);
   assertNoObservers('ashby location');
+});
+
+test('ashby: location picks the same-named town in the profile state', async () => {
+  const { by } = loadAll();
+  const doc = af.loadFixture('ashby.html');
+  const input = doc.querySelector('[data-field-path="_systemfield_location"] input[role="combobox"]');
+  af.ashbyAutocomplete(doc, input, ['Plainview, Texas, United States', 'Plainview, New York, United States'], { delay: 30 });
+  assert.strictEqual(await by.ashby.fill(descOf(input, { kind: 'combobox' }), 'Plainview, NY'), true);
+  assert.strictEqual(input.value, 'Plainview, New York, United States');
+  assertNoObservers('ashby plainview');
 });
 
 test('ashby: plain inputs fall back to setValue', () => {
