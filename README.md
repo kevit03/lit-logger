@@ -15,13 +15,9 @@ Every application sent, every problem solved, counted automatically and painted 
 
 ## The problem
 
-Job hunting is a volume game, and volume is invisible.
+Job hunting is a volume game. 
 
-- You apply to 12 roles on Tuesday and 0 on Wednesday, and by Friday you can't remember which was which.
-- You solve 40 LeetCode problems and feel like you've done nothing, because nothing shows it.
-- Spreadsheets die by week two. Habit apps want you to tap a button, and you forget to.
-
-The people who get offers aren't more talented. They're more consistent. **Consistency is hard to keep up when you can't see it.**
+Applying to 12 roles on Tuesday and 0 on Wednesday, and by Friday you can't remember which was which. You can solve 40 LeetCode problems and feel like you've done nothing. Spreadsheets die by week two. Habit apps want you to tap a button, and you forget to. 
 
 ## The solution
 
