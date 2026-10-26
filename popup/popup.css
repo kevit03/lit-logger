@@ -620,8 +620,8 @@ body.pt-dark .tab-indicator { background: var(--surface-3); }
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 9px 8px 0 12px;
-  min-height: 34px;
+  padding: 10px 8px 0 14px;
+  min-height: 36px;
 }
 .widget-collapse {
   display: flex;
@@ -629,16 +629,15 @@ body.pt-dark .tab-indicator { background: var(--surface-3); }
   gap: 6px;
   min-width: 0;
   padding: 2px 0;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: var(--fs-base);
+  font-weight: 650;
+  color: var(--text);
   text-align: left;
 }
-.widget-collapse:hover { color: var(--text-2); }
+.widget-collapse .chev { color: var(--text-3); }
+.widget-collapse:hover .chev { color: var(--text); }
 .widget-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.widget-pin { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-pin { font-weight: 500; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chev { width: 10px; height: 10px; flex-shrink: 0; transition: transform 0.3s var(--ease); }
 .widget.collapsed .chev { transform: rotate(-90deg); }
 .widget-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
@@ -655,7 +654,7 @@ body.pt-dark .tab-indicator { background: var(--surface-3); }
 .widget:not(:hover):not(:focus-within) .tool-btn { display: none; }
 .tool-btn:hover { background: var(--surface-2); color: var(--text); }
 .widget-drag-handle { cursor: grab; touch-action: none; }
-.widget-body { padding: 8px 12px 12px; }
+.widget-body { padding: 10px 14px 14px; }
 .widget.collapsed .widget-body { display: none; }
 .widget.collapsed .widget-head { padding-bottom: 9px; }
 .widget.dragging {
@@ -886,18 +885,24 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
 
 /* Details form */
 .details-section { container-type: inline-size; }
-.details-form { display: flex; flex-direction: column; gap: 8px; }
-.details-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-.details-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.details-label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.details-notes-row { grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 8px; }
-.details-notes-row .details-field { flex: 1; }
-.details-submit { flex-shrink: 0; height: var(--control-h); padding: 0 14px; }
+.details-form { display: flex; flex-direction: column; gap: 10px; }
+.details-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.details-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.details-wide { grid-column: 1 / -1; }
+.details-label { font-size: var(--fs-sm); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.details-opt { font-weight: 400; color: var(--text-3); }
+/* Hint left, Save right: the button ends the reading path. */
+.details-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.details-hint { font-size: var(--fs-xs); color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-submit { flex-shrink: 0; padding: 0 16px; }
+/* A tonal fill read as disabled here; Save is this card's one primary. */
+.widget-body .btn-accent.details-submit:not(.running) { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.widget-body .btn-accent.details-submit:not(.running):hover { filter: brightness(1.08); background: var(--accent); }
 /* Half-width card: one field per row, full-width button. */
 @container (max-width: 260px) {
   .details-grid { grid-template-columns: minmax(0, 1fr); }
-  .details-notes-row { flex-direction: column; align-items: stretch; }
-  .details-submit { margin-top: 2px; }
+  .details-hint { display: none; }
+  .details-submit { flex: 1; }
 }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .details-form input, .form-group input, .form-group select {
@@ -961,7 +966,7 @@ input::placeholder { color: var(--text-3); }
 .funnel { display: flex; flex-direction: column; gap: 4px; }
 .stage {
   display: grid;
-  grid-template-columns: 124px 1fr 30px;
+  grid-template-columns: 148px 1fr 30px;
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
@@ -981,7 +986,7 @@ input::placeholder { color: var(--text-3); }
 .funnel-foot .pipeline-edit-btn { margin: -2px -6px -2px 0; }
 
 /* Pipeline count editor */
-.pipeline-editor .stage { grid-template-columns: 124px 1fr 58px; cursor: default; }
+.pipeline-editor .stage { grid-template-columns: 148px 1fr 58px; cursor: default; }
 .pipeline-editor .stage:hover { background: transparent; }
 .stage-hint { font-size: var(--fs-xs); color: var(--text-3); text-align: right; }
 .stage-input {
@@ -1011,25 +1016,51 @@ input::placeholder { color: var(--text-3); }
 .stage-rejected { --stage: var(--stage-rejected); }
 
 /* Entry lists (recent applications, search results) */
-.entry-list { list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.entry-list { list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .entry {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 7px 6px;
+  gap: 10px;
+  padding: 7px 8px;
   border-radius: var(--radius-sm);
   animation: slide-in 0.28s var(--ease) both;
   transition: background 0.14s var(--ease);
 }
 .entry:hover { background: var(--surface-2); }
-.entry-main { min-width: 0; display: flex; gap: 8px; align-items: center; }
+.entry-main { min-width: 0; display: flex; gap: 10px; align-items: center; }
 .entry-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--accent)); flex-shrink: 0; }
-.entry-text { min-width: 0; }
-.entry-title { font-weight: 600; font-size: var(--fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.entry-sub { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-mono {
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+.entry:hover .entry-mono { background: var(--surface-3); }
+.entry-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.entry-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.entry-title { font-weight: 600; font-size: var(--fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.entry-date { margin-left: auto; flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.entry-sub { font-size: var(--fs-xs); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-side { display: flex; align-items: center; gap: 4px; }
-.recent-list { max-height: 260px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.recent-list { max-height: 268px; overflow-y: auto; margin: 0 -6px; padding: 0 2px; scrollbar-width: none; }
+.recent-list::-webkit-scrollbar { display: none; }
+/* Rows fade out at the bottom edge instead of being sliced mid-line; the
+   fade lifts once the list is scrolled to the end. */
+@property --fade { syntax: '<length>'; inherits: false; initial-value: 32px; }
+.recent-list.scrolls {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade)), transparent);
+  animation: list-fade linear both;
+  animation-timeline: scroll(self);
+}
+@keyframes list-fade { 0%, 80% { --fade: 32px; } 100% { --fade: 0px; } }
+/* Every stage pill in a list is the same width so the right edge lines up. */
+.recent-list .status-pill { width: 92px; }
 .empty { padding: 12px 4px; text-align: center; font-size: var(--fs-sm); color: var(--text-3); }
 .filter-chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1047,30 +1078,31 @@ input::placeholder { color: var(--text-3); }
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 9px 0 7px;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
   border-radius: var(--radius-pill);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
-  color: var(--stage);
-  background: color-mix(in srgb, var(--stage) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--stage) 22%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--stage) 14%, transparent);
+  border: 0;
   transition: transform 0.16s var(--ease), background 0.16s var(--ease);
 }
-.status-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--stage); }
+.status-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--stage); flex-shrink: 0; }
 /* Caret: the pill opens a stage picker, unlike the static tags elsewhere. */
 .status-pill::after {
   content: "";
   width: 4px; height: 4px;
-  margin: -2px 0 0 1px;
+  margin: -2px 1px 0 auto;
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: rotate(45deg);
-  opacity: 0.7;
+  opacity: 0.45;
 }
-.status-pill:hover { background: color-mix(in srgb, var(--stage) 20%, transparent); }
+.status-pill:hover { background: color-mix(in srgb, var(--stage) 24%, transparent); }
+.status-pill:hover::after { opacity: 0.8; }
 .status-pill:active { transform: scale(0.96); }
 .del-btn {
   width: 22px; height: 22px;
@@ -1370,7 +1402,7 @@ body.pt-dark .switch[aria-checked="true"] span { background: #0f1012; }
 .digest-check { display: inline-grid; margin-left: 3px; vertical-align: middle; color: var(--success); }
 
 /* -/+ steppers in the pipeline count editor */
-.pipeline-editor .stage { grid-template-columns: 124px 1fr auto; }
+.pipeline-editor .stage { grid-template-columns: 148px 1fr auto; }
 .stepper { display: inline-flex; align-items: center; gap: 2px; }
 .stepper .stage-input { width: 44px; text-align: center; padding: 0 4px; -moz-appearance: textfield; }
 .stepper .stage-input::-webkit-outer-spin-button,

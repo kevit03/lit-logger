@@ -1712,9 +1712,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       const labels = metric.id === 'jobs'
         ? ['Company', 'Role', 'Notes or job link']
         : (metric.id === 'leetcode' ? ['Problem', 'Topic or tag', 'Notes or link'] : ['Title', 'Tag', 'Notes or link']);
+      // Placeholders show an example rather than repeating the label.
+      const hints = metric.id === 'jobs'
+        ? ['e.g. Stripe', 'e.g. Software Engineer', 'Posting URL or a note']
+        : (metric.id === 'leetcode' ? ['e.g. Two Sum', 'e.g. Arrays', 'Problem URL or a note'] : ['What you did', 'e.g. Reading', 'URL or a note']);
       el('detail-company-label').textContent = labels[0];
       el('detail-role-label').textContent = labels[1];
       el('detail-notes-label').textContent = labels[2];
+      el('detail-company').placeholder = hints[0];
+      el('detail-role').placeholder = hints[1];
+      el('detail-notes').placeholder = hints[2];
       el('details-form').dataset.metricId = metric.id;
     },
 
@@ -1797,9 +1804,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         const list = make('ul', 'entry-list recent-list');
-        const jobsColor = (metricById('jobs') || {}).color;
-        filtered.slice(0, 10).forEach((log, i) => list.appendChild(entryRow(log, { color: jobsColor, delay: i })));
+        filtered.slice(0, 10).forEach((log, i) => list.appendChild(entryRow(log, { monogram: true, delay: i })));
         body.appendChild(list);
+        // Fade the bottom edge only when there is more to scroll to.
+        requestAnimationFrame(() => list.classList.toggle('scrolls', list.scrollHeight > list.clientHeight + 1));
       });
     },
 
@@ -1862,13 +1870,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     li.style.setProperty('--c', options.color || (metric ? metric.color : '#1a73e8'));
     if (options.delay) li.style.animationDelay = Math.min(options.delay, 10) * 18 + 'ms';
     const main = make('div', 'entry-main');
-    main.appendChild(make('span', 'entry-dot'));
+    const titleText = log.company || log.role || log.notes || (metric ? metric.name : 'Entry');
+    // A one-tracker list gets a company monogram; mixed lists keep the
+    // tracker-colored dot, since there the color tells entries apart.
+    if (options.monogram) {
+      const mono = make('span', 'entry-mono', (titleText.trim()[0] || '?').toUpperCase());
+      mono.setAttribute('aria-hidden', 'true');
+      main.appendChild(mono);
+    } else {
+      main.appendChild(make('span', 'entry-dot'));
+    }
     const text = make('div', 'entry-text');
     const title = make('div', 'entry-title');
-    const titleText = log.company || log.role || log.notes || (metric ? metric.name : 'Entry');
     const subParts = [];
     if (log.company && log.role) subParts.push(log.role);
-    subParts.push(relativeDate(log.date));
+    if (!options.monogram) subParts.push(relativeDate(log.date));
     if (options.showTracker && metric) subParts.push(metric.name);
     if ((log.company || log.role) && log.notes && options.showNotes) subParts.push(log.notes);
     const subText = subParts.join(' · ');
@@ -1881,8 +1897,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       sub.textContent = subText;
     }
     title.title = titleText;
-    text.appendChild(title);
-    text.appendChild(sub);
+    if (options.monogram) {
+      // The date sits on the title line so a long role can't truncate it.
+      const head = make('div', 'entry-head');
+      head.appendChild(title);
+      head.appendChild(make('span', 'entry-date', relativeDate(log.date)));
+      text.appendChild(head);
+    } else {
+      text.appendChild(title);
+    }
+    if (sub.textContent) text.appendChild(sub);
     main.appendChild(text);
     li.appendChild(main);
     const side = make('div', 'entry-side');

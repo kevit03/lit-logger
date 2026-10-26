@@ -222,18 +222,19 @@
                 <input type="text" id="detail-company" autocomplete="off" />
               </label>
               <label class="details-field">
-                <span class="details-label" id="detail-role-label">Tag</span>
-                <input type="text" id="detail-role" autocomplete="off" placeholder="Optional" />
+                <span class="details-label"><span id="detail-role-label">Tag</span> <span class="details-opt">optional</span></span>
+                <input type="text" id="detail-role" autocomplete="off" />
               </label>
-              <div class="details-notes-row">
-                <label class="details-field">
-                  <span class="details-label" id="detail-notes-label">Notes or link</span>
-                  <input type="text" id="detail-notes" autocomplete="off" placeholder="Optional, a URL becomes a link" />
-                </label>
-                <button type="submit" class="btn btn-accent details-submit" id="details-submit-btn">Save entry</button>
-              </div>
+              <label class="details-field details-wide">
+                <span class="details-label"><span id="detail-notes-label">Notes or link</span> <span class="details-opt">optional</span></span>
+                <input type="text" id="detail-notes" autocomplete="off" />
+              </label>
             </div>
             <div class="dup-note hidden" id="dup-note" role="status"></div>
+            <div class="details-foot">
+              <span class="details-hint">A pasted URL becomes a link</span>
+              <button type="submit" class="btn btn-accent details-submit" id="details-submit-btn">Save entry</button>
+            </div>
           </form>
         </div>
       </div>
