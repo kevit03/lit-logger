@@ -464,17 +464,17 @@ async function run() {
     assert.strictEqual(promptTitle(ctx.doc), 'Save answer for next time?');
     assert.strictEqual(promptText(ctx.doc), 'Referral code (optional)');
     assert.strictEqual(promptEl(ctx.doc).querySelector('.value').textContent, 'LIT-2026', 'the answer being saved is shown');
-    assert.deepStrictEqual(promptEl(ctx.doc).querySelectorAll('.actions button').map(b => b.textContent), ['This site', 'All sites', 'Not now']);
+    assert.deepStrictEqual(promptEl(ctx.doc).querySelectorAll('.actions button').map(b => b.textContent), ['Save for this site', 'Save for all sites', 'Not now']);
     assert.ok(promptEl(ctx.doc).parentElement.classList.contains('stack'), 'the prompt sits in the widget, not over the form');
     assert.ok(!/top:|left:/.test(promptEl(ctx.doc).getAttribute('style') || ''), 'the prompt is not pinned next to the field');
-    clickPrompt(ctx.doc, 'This site');
+    clickPrompt(ctx.doc, 'Save for this site');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'referral code optional', value: 'LIT-2026' }]);
     assert.strictEqual(promptEl(ctx.doc), null, 'the prompt closes');
 
     userTypes(ctx, ctx.fields.ref, 'LIT-2027');
     await settle();
-    clickPrompt(ctx.doc, 'All sites');
+    clickPrompt(ctx.doc, 'Save for all sites');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule[1], { host: '*', labelKey: 'referral code optional', value: 'LIT-2027' }, 'Everywhere saves a global rule');
 
@@ -571,7 +571,7 @@ async function run() {
     await settle();
     assert.strictEqual(ctx.store.calls.learnRule.length, 0, 'workAuthorized is "yes" too, but a bare Yes is not pinned to it');
     assert.strictEqual(promptText(ctx.doc), 'Are you over 18?');
-    clickPrompt(ctx.doc, 'This site');
+    clickPrompt(ctx.doc, 'Save for this site');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'are you over 18', value: 'Yes' }]);
     cleanup(ctx);
@@ -680,7 +680,7 @@ async function run() {
     mock.fire(ctx.doc, ctx.win, es, 'change');
     await settle();
     assert.strictEqual(promptText(ctx.doc), 'Languages');
-    clickPrompt(ctx.doc, 'All sites');
+    clickPrompt(ctx.doc, 'Save for all sites');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: '*', labelKey: 'languages', value: 'English, Spanish' }]);
     cleanup(ctx);

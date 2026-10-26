@@ -80,7 +80,7 @@
       <div class="search-field">
         <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><circle cx="8.8" cy="8.8" r="5.6" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         <input id="search-input" type="search" placeholder="Search companies, roles, notes" autocomplete="off" spellcheck="false" aria-label="Search all entries" />
-        <button id="search-close-btn" class="kbd-btn" type="button" aria-label="Close search">Esc</button>
+        <button id="search-close-btn" class="kbd-btn" type="button" aria-label="Close search" title="Close search (Esc)">Esc</button>
       </div>
       <div class="search-meta" id="search-meta" aria-live="polite"></div>
       <ul id="search-results" class="entry-list search-results"></ul>
@@ -128,7 +128,7 @@
           </div>
         </div>
         <div class="split-actions" id="action-buttons">
-          <button id="undo-btn" class="split-btn split-minus" type="button" title="Undo" aria-label="Remove the most recent entry logged today">
+          <button id="undo-btn" class="split-btn split-minus" type="button" title="Remove the most recent entry logged today" aria-label="Remove the most recent entry logged today">
             <svg viewBox="0 0 14 14" width="14" height="14" fill="none" aria-hidden="true" focusable="false"><path d="M3 7h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </button>
           <button id="quick-add-btn" class="split-btn split-plus" type="button">
@@ -145,7 +145,7 @@
             <div class="digest-kicker">Weekly recap</div>
             <div class="digest-title" id="digest-title">Last week</div>
           </div>
-          <button id="digest-dismiss-btn" class="icon-btn icon-btn-sm" type="button" aria-label="Dismiss weekly recap">
+          <button id="digest-dismiss-btn" class="icon-btn icon-btn-sm" type="button" aria-label="Dismiss weekly recap" title="Dismiss weekly recap">
             <svg viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           </button>
         </header>
@@ -223,12 +223,12 @@
               </label>
               <label class="details-field">
                 <span class="details-label" id="detail-role-label">Tag</span>
-                <input type="text" id="detail-role" autocomplete="off" />
+                <input type="text" id="detail-role" autocomplete="off" placeholder="Optional" />
               </label>
               <div class="details-notes-row">
                 <label class="details-field">
                   <span class="details-label" id="detail-notes-label">Notes or link</span>
-                  <input type="text" id="detail-notes" autocomplete="off" />
+                  <input type="text" id="detail-notes" autocomplete="off" placeholder="Optional, a URL becomes a link" />
                 </label>
                 <button type="submit" class="btn btn-accent details-submit" id="details-submit-btn">Save entry</button>
               </div>
@@ -269,7 +269,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3 id="new-metric-title">Add tracker</h3>
-          <button id="close-metric-modal" class="close-btn" type="button" aria-label="Close add tracker dialog">&times;</button>
+          <button id="close-metric-modal" class="close-btn" type="button" aria-label="Close add tracker dialog" title="Close add tracker dialog">&times;</button>
         </div>
         <form id="new-metric-form">
           <div class="form-group">
@@ -283,18 +283,18 @@
             </div>
             <div class="form-group">
               <label for="new-metric-goal">Daily goal</label>
-              <input type="number" id="new-metric-goal" placeholder="5" min="1" value="5" />
+              <input type="number" id="new-metric-goal" placeholder="e.g. 5" min="1" value="5" />
             </div>
           </div>
           <div class="form-group">
             <label>Color</label>
             <div class="color-palette" id="color-palette">
-              <button type="button" class="color-option selected" data-color="#1a73e8" style="background:#1a73e8;" aria-label="Blue"></button>
-              <button type="button" class="color-option" data-color="#1e8e3e" style="background:#1e8e3e;" aria-label="Green"></button>
-              <button type="button" class="color-option" data-color="#d93025" style="background:#d93025;" aria-label="Red"></button>
-              <button type="button" class="color-option" data-color="#f9ab00" style="background:#f9ab00;" aria-label="Amber"></button>
-              <button type="button" class="color-option" data-color="#9334e6" style="background:#9334e6;" aria-label="Purple"></button>
-              <button type="button" class="color-option" data-color="#007b83" style="background:#007b83;" aria-label="Teal"></button>
+              <button type="button" class="color-option selected" data-color="#1a73e8" style="background:#1a73e8;" aria-label="Blue" title="Blue"></button>
+              <button type="button" class="color-option" data-color="#1e8e3e" style="background:#1e8e3e;" aria-label="Green" title="Green"></button>
+              <button type="button" class="color-option" data-color="#d93025" style="background:#d93025;" aria-label="Red" title="Red"></button>
+              <button type="button" class="color-option" data-color="#f9ab00" style="background:#f9ab00;" aria-label="Amber" title="Amber"></button>
+              <button type="button" class="color-option" data-color="#9334e6" style="background:#9334e6;" aria-label="Purple" title="Purple"></button>
+              <button type="button" class="color-option" data-color="#007b83" style="background:#007b83;" aria-label="Teal" title="Teal"></button>
             </div>
           </div>
           <div class="modal-actions">
@@ -310,13 +310,13 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3 id="metric-settings-title">Tracker settings</h3>
-          <button id="close-settings-modal" class="close-btn" type="button" aria-label="Close tracker settings dialog">&times;</button>
+          <button id="close-settings-modal" class="close-btn" type="button" aria-label="Close tracker settings dialog" title="Close tracker settings dialog">&times;</button>
         </div>
         <form id="metric-settings-form">
           <div class="field-row">
             <div class="form-group">
               <label for="metric-settings-goal">Daily goal</label>
-              <input type="number" id="metric-settings-goal" min="1" step="1" value="5" required />
+              <input type="number" id="metric-settings-goal" min="1" step="1" value="5" placeholder="e.g. 5" required />
             </div>
             <div class="form-group">
               <label for="metric-settings-weekly">Weekly goal</label>
@@ -338,7 +338,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3 id="add-widget-title">Add widget</h3>
-          <button id="close-add-widget-modal" class="close-btn" type="button" aria-label="Close add widget dialog">&times;</button>
+          <button id="close-add-widget-modal" class="close-btn" type="button" aria-label="Close add widget dialog" title="Close add widget dialog">&times;</button>
         </div>
         <div id="add-widget-list" class="widget-picker"></div>
         <div class="modal-actions">
@@ -353,7 +353,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3 id="widget-settings-title">Widget settings</h3>
-          <button id="close-widget-settings-modal" class="close-btn" type="button" aria-label="Close widget settings dialog">&times;</button>
+          <button id="close-widget-settings-modal" class="close-btn" type="button" aria-label="Close widget settings dialog" title="Close widget settings dialog">&times;</button>
         </div>
         <form id="widget-settings-form">
           <div class="token-bar" role="group" aria-label="Widget settings">
@@ -407,7 +407,7 @@
       <div class="modal-content sheet-content">
         <div class="modal-header">
           <h3 id="settings-title">Settings</h3>
-          <button id="close-app-settings" class="close-btn" type="button" aria-label="Close settings">&times;</button>
+          <button id="close-app-settings" class="close-btn" type="button" aria-label="Close settings" title="Close settings">&times;</button>
         </div>
 
         <section class="settings-group">
@@ -503,7 +503,7 @@
       <div class="modal-content">
         <div class="modal-header">
           <h3 id="email-signin-title">Sign in with your Google email</h3>
-          <button id="close-email-signin-modal" class="close-btn" type="button" aria-label="Close sign-in dialog">&times;</button>
+          <button id="close-email-signin-modal" class="close-btn" type="button" aria-label="Close sign-in dialog" title="Close sign-in dialog">&times;</button>
         </div>
         <p class="modal-note">This unpacked build is not linked to a Google Cloud OAuth client yet. Enter the Google Account email you want your entries scoped to; each account keeps its own counts.</p>
         <form id="email-signin-form">

@@ -75,6 +75,18 @@
   flex-shrink: 0;
 }
 
+/* Goal met: a white check in place of the dot. */
+.pt-goal-met .pt-badge-dot {
+  box-sizing: border-box;
+  width: 4px;
+  height: 7px;
+  border-radius: 0;
+  background: transparent;
+  border: solid #ffffff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
 /* Quick add: hidden until its day is hovered (content.js tracks the hover
    because the button is not inside the cell). */
 
@@ -107,10 +119,12 @@
   pointer-events: auto;
 }
 
+/* A blue tint on hover, not a fill: solid blue is kept for the modal's
+   Add entry button. */
 .pt-quick-add-cell:hover {
-  background: #1a73e8;
-  color: #fff;
-  border-color: #1a73e8;
+  background: #e8f0fe;
+  color: #1967d2;
+  border-color: #aecbfa;
   transform: scale(1.1);
 }
 
@@ -126,9 +140,9 @@
   }
 
   .pt-quick-add-cell:hover {
-    background: #8ab4f8;
+    background: #394457;
     border-color: #8ab4f8;
-    color: #202124;
+    color: #d2e3fc;
   }
 
   .pt-quick-add-cell:focus-visible {
@@ -183,6 +197,12 @@
   font-weight: 600;
   cursor: pointer;
   transition: background 0.12s;
+}
+
+.pt-modal-submit {
+  margin-top: 4px;
+  padding: 7px 12px;
+  font-size: 12px;
 }
 
 .pt-btn-primary:hover {
@@ -264,7 +284,7 @@
   padding: 6px 8px;
   font-size: 12px;
   border: 1px solid #dadce0;
-  border-radius: 4px;
+  border-radius: 6px;
   outline: none;
   background: #fff;
   font-family: inherit;

@@ -38,8 +38,8 @@
 
     toast.showForm({
       fields: [
-        { name: 'company', label: 'Company', value: details.company, placeholder: 'Company' },
-        { name: 'role', label: 'Role', value: details.role, placeholder: 'Role or job title' }
+        { name: 'company', label: 'Company', value: details.company, placeholder: 'e.g. Acme Corp' },
+        { name: 'role', label: 'Role', value: details.role, placeholder: 'e.g. Software Engineer' }
       ],
       submitLabel: prior ? 'Log anyway' : 'Log application',
       onSubmit: async values => {

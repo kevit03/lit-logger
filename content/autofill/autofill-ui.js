@@ -7,7 +7,8 @@
 // the same as a click.
 //
 // A click loads everything from AutofillStore, hands it to AutofillCore.run,
-// outlines filled fields green and the ones that still need the user amber,
+// outlines filled fields solid green and the ones that still need the user
+// dashed amber, explains the outlines in the result toast,
 // and reports "Filled 14 fields, 3 need you." Outlines clear on focus.
 //
 // Learning (settings.autoLearn): after a run, edits to every field on the
@@ -51,7 +52,8 @@
   const ANSWER_MIN_CHARS = 40;
   const FILLED_CLASS = 'lit-af-filled';
   const UNMATCHED_CLASS = 'lit-af-unmatched';
-  const OUTLINE_COLORS = { [FILLED_CLASS]: '#34a853', [UNMATCHED_CLASS]: '#f9ab00' };
+  // Filled is solid green, needs-you dashed amber: two cues, not just color.
+  const OUTLINE_STYLES = { [FILLED_CLASS]: '2px solid #34a853', [UNMATCHED_CLASS]: '2px dashed #f9ab00' };
   const DEFAULT_SETTINGS = { showButton: true, fillEeo: false, autoLearn: true };
 
   const SENSITIVE = /password|ssn|social security|card|cvv|iban|routing/i;
@@ -124,8 +126,10 @@
     button:hover { background: rgba(255, 255, 255, 0.14); }
     button:active { transform: scale(0.97); }
     button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 2px; }
-    button.primary { background: #8ab4f8; color: #111316; border-color: transparent; }
-    button.primary:hover { background: #aecbfa; }
+    /* In a card the main answer is a blue tint, not a fill: the solid blue
+       stays on the Autofill button alone. */
+    button.primary { background: rgba(138, 180, 248, 0.16); color: #aecbfa; border-color: rgba(138, 180, 248, 0.38); }
+    button.primary:hover { background: rgba(138, 180, 248, 0.26); }
     button.quiet { background: transparent; border-color: transparent; color: #9aa0a6; }
     button.quiet:hover { background: rgba(255, 255, 255, 0.08); color: #ecedee; }
     .hidden { display: none !important; }
@@ -158,26 +162,29 @@
       transition: box-shadow 160ms ease;
     }
     .dock .grip { width: 16px; margin-left: 4px; }
+    /* The one control in brand blue: everything else in the widget is
+       neutral, so the Autofill button is what the eye lands on. */
     .fab {
       font-size: 13px;
       padding: 8px 14px 8px 12px;
       border-radius: 999px;
-      background: transparent;
+      background: #8ab4f8;
+      color: #111316;
       border-color: transparent;
       touch-action: none;
     }
     .fab::before {
       content: "";
       display: inline-block;
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       margin-right: 8px;
       border-radius: 50%;
-      background: #8ab4f8;
+      background: currentColor;
       vertical-align: 1px;
     }
-    .fab:hover { background: rgba(255, 255, 255, 0.1); }
-    .fab.busy { opacity: 0.7; cursor: progress; }
+    .fab:hover { background: #aecbfa; }
+    .fab.busy { opacity: 0.75; cursor: progress; }
     .fab.busy::before { animation: lit-pulse 900ms ease-in-out infinite; }
     .x {
       flex: none;
@@ -194,17 +201,27 @@
     }
     .x:hover { background: rgba(255, 255, 255, 0.1); color: #ecedee; }
     .x svg { display: block; }
+    /* Hide sits apart from Autofill, behind a hairline, so a slightly-off
+       click on the main button does not dismiss the widget. */
+    .dock .x { margin-left: 6px; position: relative; }
+    .dock .x::before {
+      content: "";
+      position: absolute;
+      left: -4px; top: 5px; bottom: 5px;
+      width: 1px;
+      background: rgba(255, 255, 255, 0.14);
+    }
 
     .card {
       pointer-events: auto;
       box-sizing: border-box;
       width: 300px;
       max-width: calc(100vw - 24px);
-      padding: 8px 8px 12px 12px;
-      border-radius: 12px;
+      padding: 10px 10px 14px 14px;
+      border-radius: 14px;
       background: rgba(24, 25, 28, 0.97);
-      font-size: 13px;
-      line-height: 1.45;
+      font-size: 12px;
+      line-height: 1.5;
       border: 1px solid rgba(255, 255, 255, 0.1);
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
       position: relative;
@@ -216,28 +233,40 @@
       position: absolute;
       left: 0; top: 0; bottom: 0;
       width: 3px;
-      background: #8ab4f8;
+      background: #5f6368;
     }
     .card.success::before { background: #34a853; }
     .card.warn::before { background: #fbbc04; }
-    .head { display: flex; align-items: center; gap: 4px; margin: 0 0 2px -4px; }
+    /* Type scale: 13 title, 12 body and buttons, 11 notes. The title is the
+       heaviest and brightest line; the body steps down in contrast. */
+    .head { display: flex; align-items: center; gap: 6px; margin: 0 0 4px -6px; }
     .head .grip { height: 22px; }
+    .icon {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #9aa0a6;
+    }
+    .icon svg { display: block; }
+    .success .icon { color: #81c995; }
+    .warn .icon { color: #fdd663; }
     .title {
       flex: 1;
       min-width: 0;
-      font-size: 11px;
+      font-size: 13px;
       font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: #9aa0a6;
+      line-height: 1.35;
+      color: #ecedee;
     }
-    .body { word-break: break-word; padding-right: 4px; }
-    .prompt .body { font-weight: 600; }
+    .body { word-break: break-word; padding-right: 4px; color: #bdc1c6; }
     .value {
-      margin-top: 6px;
+      margin-top: 8px;
       margin-right: 4px;
-      padding: 5px 8px;
-      border-radius: 6px;
+      padding: 6px 8px;
+      border-radius: 7px;
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid rgba(255, 255, 255, 0.08);
       color: #c8cbd0;
@@ -247,13 +276,26 @@
       overflow: hidden;
       word-break: break-word;
     }
-    .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .note {
+      margin-top: 8px;
+      padding-right: 4px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #9aa0a6;
+    }
+    .key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11px; color: #bdc1c6; }
+    .key span { display: inline-flex; align-items: center; gap: 6px; }
+    .swatch { width: 12px; height: 8px; border-radius: 2px; box-sizing: border-box; }
+    .swatch.filled { border: 2px solid #34a853; }
+    .swatch.unmatched { border: 2px dashed #f9ab00; }
+    .actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+    .actions button { border-radius: 7px; }
     .bar {
       position: absolute;
       left: 0; bottom: 0;
       height: 2px;
       width: 100%;
-      background: rgba(138, 180, 248, 0.55);
+      background: rgba(255, 255, 255, 0.22);
       transform-origin: left center;
       animation: lit-drain var(--life, 20000ms) linear forwards;
     }
@@ -273,6 +315,30 @@
     attrs: { width: '8', height: '14', viewBox: '0 0 8 14', fill: 'currentColor' },
     children: [[2, 2], [6, 2], [2, 7], [6, 7], [2, 12], [6, 12]].map(([cx, cy]) => ['circle', { cx: String(cx), cy: String(cy), r: '1.3' }])
   };
+  // Card status icons, so success, warning, and info differ by shape as well
+  // as by color.
+  const CHECK_SVG = {
+    attrs: { width: '14', height: '14', viewBox: '0 0 14 14', fill: 'none' },
+    children: [
+      ['circle', { cx: '7', cy: '7', r: '6', stroke: 'currentColor', 'stroke-width': '1.4' }],
+      ['path', { d: 'M4.3 7.2l1.8 1.8 3.6-3.8', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]
+    ]
+  };
+  const WARN_SVG = {
+    attrs: { width: '14', height: '14', viewBox: '0 0 14 14', fill: 'none' },
+    children: [
+      ['path', { d: 'M7 1.6l5.6 10H1.4z', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }],
+      ['path', { d: 'M7 5.6v2.6M7 10v.1', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round' }]
+    ]
+  };
+  const INFO_SVG = {
+    attrs: { width: '14', height: '14', viewBox: '0 0 14 14', fill: 'none' },
+    children: [
+      ['circle', { cx: '7', cy: '7', r: '6', stroke: 'currentColor', 'stroke-width': '1.4' }],
+      ['path', { d: 'M7 6.4v3.4M7 4.2v.1', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round' }]
+    ]
+  };
+  const STATUS_SVG = { success: CHECK_SVG, warn: WARN_SVG, info: INFO_SVG };
   const X_SVG = {
     attrs: { width: '10', height: '10', viewBox: '0 0 10 10', fill: 'none' },
     children: [['path', { d: 'M1.5 1.5l7 7M8.5 1.5l-7 7', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }]]
@@ -517,8 +583,8 @@
     const fab = document.createElement('button');
     fab.className = 'fab hidden';
     fab.setAttribute('type', 'button');
-    fab.setAttribute('title', 'Autofill this form (Alt+Shift+F). Drag to move.');
-    fab.setAttribute('aria-label', 'Autofill this form');
+    fab.setAttribute('title', 'Fill this form from your LIT profile (Alt+Shift+F). Nothing is submitted. Drag to move.');
+    fab.setAttribute('aria-label', 'Autofill this form from your LIT profile. Nothing is submitted.');
     fab.textContent = 'Autofill';
     // The button drags too; a press that moves is a drag, not a click.
     fab.addEventListener('pointerdown', startDrag);
@@ -835,6 +901,8 @@
     const head = document.createElement('div');
     head.className = 'head';
     head.appendChild(makeGrip());
+    const status = STATUS_SVG[options.variant] || INFO_SVG;
+    head.appendChild(svgSpan('icon', status));
     const title = document.createElement('div');
     title.className = 'title';
     title.textContent = options.title || 'LIT Autofill';
@@ -851,6 +919,13 @@
       value.textContent = options.value;
       el.appendChild(value);
     }
+    if (options.key) el.appendChild(outlineKey());
+    if (options.note) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = options.note;
+      el.appendChild(note);
+    }
     if (options.actions && options.actions.length) makeButtons(el, options.actions, close);
     const bar = document.createElement('div');
     bar.className = 'bar';
@@ -860,6 +935,25 @@
       if (event && event.key === 'Escape') { swallow(event); close(); }
     });
     return el;
+  }
+
+  // What the outlines on the page mean, in words, so the green and amber
+  // (solid and dashed) are not left to color alone.
+  function outlineKey() {
+    const key = document.createElement('div');
+    key.className = 'key';
+    [['filled', 'Filled'], ['unmatched', 'Needs you']].forEach(([cls, text]) => {
+      const item = document.createElement('span');
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch ' + cls;
+      swatch.setAttribute('aria-hidden', 'true');
+      item.appendChild(swatch);
+      const label = document.createElement('span');
+      label.textContent = text;
+      item.appendChild(label);
+      key.appendChild(item);
+    });
+    return key;
   }
 
   function startLife(current, ms, close) {
@@ -900,10 +994,14 @@
     const durationMs = options.durationMs || NOTE_TOAST_MS;
     const current = { el: null, timer: null };
     const close = () => { if (toast === current) closeToast(); };
-    const titles = { success: 'Autofill', warn: 'Autofill', info: 'Autofill' };
-    const el = buildCard('toast ' + (options.variant || 'info'), {
-      title: options.title || titles[options.variant] || 'Autofill',
+    const variant = options.variant || 'info';
+    const titles = { success: 'Autofill', warn: 'Autofill needs attention', info: 'Autofill' };
+    const el = buildCard('toast ' + variant, {
+      title: options.title || titles[variant] || 'Autofill',
+      variant,
       text,
+      note: options.note,
+      key: options.key,
       actions: options.actions,
       durationMs
     }, close);
@@ -942,6 +1040,8 @@
     const close = () => { if (prompt === current) closePrompt(); };
     const el = buildCard('prompt', {
       title: card.title,
+      variant: 'info',
+      note: card.note,
       text: card.text,
       value: card.value,
       actions,
@@ -985,7 +1085,7 @@
         offsetPriority: target.style.getPropertyPriority('outline-offset')
       });
     }
-    target.style.setProperty('outline', '2px solid ' + OUTLINE_COLORS[cls], 'important');
+    target.style.setProperty('outline', OUTLINE_STYLES[cls], 'important');
     target.style.setProperty('outline-offset', '1px', 'important');
   }
 
@@ -1164,14 +1264,19 @@
     const desc = entry.desc;
     const labelKey = labelKeyOf(desc);
     const label = shortLabel(desc);
-    showPrompt(entry, { title: 'Save answer for next time?', text: label, value: preview(value, 120) }, [
+    showPrompt(entry, {
+      title: 'Save answer for next time?',
+      text: label,
+      value: preview(value, 120),
+      note: 'LIT will fill in this answer the next time it sees this question.'
+    }, [
       {
-        label: 'This site',
+        label: 'Save for this site',
         primary: true,
         onClick: () => { learn({ host: hostName(), labelKey, value }, "Saved. LIT will fill '" + label + "' on this site."); }
       },
       {
-        label: 'All sites',
+        label: 'Save for all sites',
         onClick: () => { learn({ host: '*', labelKey, value }, "Saved. LIT will fill '" + label + "' on every site."); }
       },
       { label: 'Not now', quiet: true }
@@ -1181,7 +1286,12 @@
   function offerAnswer(entry, value) {
     const desc = entry.desc;
     entry.offered = value;
-    showPrompt(entry, { title: 'Save to answer bank?', text: desc.label || labelKeyOf(desc) || 'Long answer', value: preview(value, 160) }, [
+    showPrompt(entry, {
+      title: 'Save to answer bank?',
+      text: desc.label || labelKeyOf(desc) || 'Long answer',
+      value: preview(value, 160),
+      note: 'LIT can reuse it when a similar question comes up.'
+    }, [
       {
         label: 'Save answer',
         primary: true,
@@ -1420,13 +1530,18 @@
       running = false;
       trackPage();
       const need = unmatched.length + skipped.length;
-      const text = filled.length === 0 && profileIsEmpty(profile)
+      const empty = filled.length === 0 && profileIsEmpty(profile);
+      const text = empty
         ? 'Your Autofill profile is empty. Open LIT and choose Autofill profile to set it up.'
         : formatResult(filled.length, need);
+      // The Autofill button already reads "Fill again", so the toast's copy
+      // of it stays secondary.
       showToast(text, {
         variant: filled.length ? 'success' : 'warn',
         durationMs: RESULT_TOAST_MS,
-        actions: [{ label: 'Fill again', primary: true, onClick: () => { fill(); } }]
+        key: !empty && filled.length + need > 0,
+        note: empty ? '' : 'Nothing was submitted. Check the form before you send it.',
+        actions: [{ label: 'Fill again', onClick: () => { fill(); } }]
       });
     } catch (err) {
       showToast('Autofill could not finish: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn', durationMs: RESULT_TOAST_MS });

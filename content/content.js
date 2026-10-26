@@ -282,8 +282,10 @@
       const label = metricLabel(m, count);
       badge.title = label + (isGoalMet ? ' (goal met)' : ' (goal ' + (m.dailyGoal || 1) + ')');
       const dot = document.createElement('span');
+      // A met goal swaps the dot for a check (drawn in content.css), so it
+      // reads by shape and not only by the solid fill.
       dot.className = 'pt-badge-dot';
-      dot.style.backgroundColor = isGoalMet ? '#ffffff' : m.color;
+      if (!isGoalMet) dot.style.backgroundColor = m.color;
       // Count and name are separate so a narrow column can keep the count.
       const text = document.createElement('span');
       text.className = 'pt-badge-text';
@@ -472,13 +474,13 @@
     });
 
     backdrop.innerHTML = [
-      '<div class="pt-modal-dialog' + (currentTheme === 'dark' ? ' pt-dark' : '') + '">',
+      '<div class="pt-modal-dialog' + (currentTheme === 'dark' ? ' pt-dark' : '') + '" role="dialog" aria-modal="true" aria-labelledby="pt-modal-title">',
         '<div class="pt-modal-header">',
           '<div>',
-            '<div class="pt-modal-header-title">' + escapeHtml(formatDateNice(dateStr)) + '</div>',
+            '<div class="pt-modal-header-title" id="pt-modal-title">' + escapeHtml(formatDateNice(dateStr)) + '</div>',
             '<div class="pt-modal-header-sub">' + escapeHtml(summaryText) + '</div>',
           '</div>',
-          '<button class="pt-close-btn" id="pt-modal-close">&times;</button>',
+          '<button class="pt-close-btn" id="pt-modal-close" type="button" aria-label="Close" title="Close">&times;</button>',
         '</div>',
         '<div class="pt-modal-body">',
           '<div class="pt-modal-form">',
@@ -489,7 +491,7 @@
               '<input type="text" id="pt-modal-role" placeholder="Role or tag" />',
             '</div>',
             '<input type="text" id="pt-modal-notes" placeholder="Notes or link (optional)" />',
-            '<button class="pt-btn-primary" id="pt-modal-add" style="padding:6px;font-size:12px;">Add Entry</button>',
+            '<button class="pt-btn-primary pt-modal-submit" id="pt-modal-add" type="button">Add entry</button>',
           '</div>',
         '</div>',
       '</div>'
@@ -501,6 +503,9 @@
     backdrop.querySelector('#pt-modal-close').addEventListener('click', () => backdrop.remove());
     backdrop.addEventListener('click', (e) => {
       if (e.target === backdrop) backdrop.remove();
+    });
+    backdrop.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') backdrop.remove();
     });
 
     // Add entry, then close: the badge count is the only readout for a day.

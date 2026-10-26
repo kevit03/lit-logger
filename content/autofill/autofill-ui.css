@@ -4,6 +4,7 @@
  * in a closed shadow root and carries its own styles, so the only rules here
  * are the two classes autofill-ui.js puts on the page's own form fields. They
  * are removed again when the field is focused or the next run starts.
+ * Needs-you is dashed as well as amber so it does not rely on color alone.
  */
 .lit-af-filled {
   outline: 2px solid #34a853 !important;
@@ -11,6 +12,6 @@
 }
 
 .lit-af-unmatched {
-  outline: 2px solid #f9ab00 !important;
+  outline: 2px dashed #f9ab00 !important;
   outline-offset: 1px !important;
 }

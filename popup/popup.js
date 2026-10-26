@@ -41,9 +41,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     return err && err.message ? err.message : 'unknown error';
   }
 
-  // Single transient status / error line, announced via aria-live
+  // Single transient status / error line, announced via aria-live. An
+  // optional action ({ label, run }) adds one inline button, used for Undo.
   let statusTimer = null;
-  function showStatus(message, tone) {
+  function showStatus(message, tone, action) {
     const line = el('status-line');
     if (!line) return;
     if (statusTimer) {
@@ -57,13 +58,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     line.textContent = message;
+    if (action && action.label && typeof action.run === 'function') {
+      const btn = make('button', 'status-action', action.label);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        showStatus('');
+        action.run();
+      });
+      line.appendChild(document.createTextNode(' '));
+      line.appendChild(btn);
+    }
     line.classList.remove('hidden');
     if (tone) line.classList.add(tone === 'error' ? 'status-error' : 'status-ok');
     statusTimer = setTimeout(() => {
       line.textContent = '';
       line.classList.add('hidden');
       line.classList.remove('status-error', 'status-ok');
-    }, 6000);
+    }, action ? 10000 : 6000);
   }
 
   function make(tag, className, text) {
@@ -351,6 +362,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }[state];
 
     timerToggleBtn.textContent = running ? 'Pause' : (finished ? 'Restart' : 'Start');
+    // Space toggles the timer when nothing else has focus; say so on hover.
+    timerToggleBtn.title = timerToggleBtn.textContent + ' (Space)';
+    timerToggleBtn.setAttribute('aria-keyshortcuts', 'Space');
     timerToggleBtn.classList.toggle('running', running);
     timerToggleBtn.disabled = state === 'idle';
     timerLapBtn.disabled = !running;
@@ -1232,7 +1246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       showStatus('Nothing logged today for ' + (current ? current.name : 'this tracker') + ', so there is nothing to remove.', 'error');
       return;
     }
-    showStatus('Removed the most recent entry logged today.', 'ok');
+    showStatus('Removed the most recent entry logged today. Use the plus button to log it again.', 'ok');
     notifyCalendarTabs();
     await loadData();
   });
@@ -1240,8 +1254,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // Weekly recap
   // ---------------------------------------------------------------------------
+  // Bars are the default: daily counts are discrete, so a line between days
+  // suggests values that were never logged. Line stays for existing layouts
+  // and for reading the overall trend.
+  const CHART_LABELS = { bar: 'Bars', area: 'Line', heatmap: 'Grid' };
+  const CHART_HINTS = { bar: 'Bars, one per day', area: 'Line, overall trend', heatmap: 'Grid, calendar by week' };
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const WEEK_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const CHECK_SVG = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   async function renderDigest() {
     const card = el('digest-card');
@@ -1279,7 +1299,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       const total = make('span', 'digest-total', String(m.total));
       if (m.weeklyGoal > 0) {
         total.appendChild(make('small', null, ' / ' + m.weeklyGoal));
-        row.classList.toggle('met', m.total >= m.weeklyGoal);
+        const met = m.total >= m.weeklyGoal;
+        row.classList.toggle('met', met);
+        // A check mark as well as the color, so "met" never rests on color.
+        if (met) {
+          const check = make('span', 'digest-check');
+          check.innerHTML = CHECK_SVG;
+          total.appendChild(check);
+          total.title = 'Weekly goal met';
+          total.setAttribute('aria-label', m.total + ' of ' + m.weeklyGoal + ', weekly goal met');
+        }
       }
       row.appendChild(total);
 
@@ -1451,7 +1480,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const form = make('form', 'funnel pipeline-editor');
     form.noValidate = true;
     STATUSES.forEach(s => {
-      const row = make('label', 'stage stage-' + s.id);
+      // A div, not a label: the stepper buttons would otherwise become the
+      // label's control and a click on the stage name would press "-".
+      const row = make('div', 'stage stage-' + s.id);
       const name = make('span', 'stage-name');
       name.appendChild(make('i'));
       name.appendChild(document.createTextNode(s.label));
@@ -1471,7 +1502,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         input.value = summary.counts[s.id];
         input.dataset.initial = summary.counts[s.id];
         input.setAttribute('aria-label', s.label + ' count');
-        row.appendChild(input);
+        // Whole-number counts get -/+ steppers around the field.
+        const stepper = make('span', 'stepper');
+        const minus = make('button', 'stepper-btn', '\u2212');
+        minus.type = 'button';
+        minus.dataset.step = '-1';
+        minus.setAttribute('aria-label', 'One fewer ' + s.label);
+        minus.title = 'One fewer';
+        const plus = make('button', 'stepper-btn', '+');
+        plus.type = 'button';
+        plus.dataset.step = '1';
+        plus.setAttribute('aria-label', 'One more ' + s.label);
+        plus.title = 'One more';
+        stepper.appendChild(minus);
+        stepper.appendChild(input);
+        stepper.appendChild(plus);
+        row.appendChild(stepper);
       }
       form.appendChild(row);
     });
@@ -1626,10 +1672,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const seg = make('div', 'segmented');
         seg.setAttribute('role', 'group');
         seg.setAttribute('aria-label', 'Chart style');
-        [['bar', 'Bars'], ['area', 'Line'], ['heatmap', 'Grid']].forEach(([value, label]) => {
-          const b = make('button', '', label);
+        WidgetLayout.CHART_MODES.forEach(value => {
+          const b = make('button', '', CHART_LABELS[value]);
           b.type = 'button';
           b.dataset.chart = value;
+          b.title = CHART_HINTS[value];
           seg.appendChild(b);
         });
         extra.appendChild(seg);
@@ -1637,6 +1684,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       extra.querySelectorAll('[data-chart]').forEach(b => b.setAttribute('aria-pressed', b.dataset.chart === item.options.chart ? 'true' : 'false'));
       if (!body.firstChild) {
         body.appendChild(make('div', 'chart'));
+        body.appendChild(make('div', 'empty activity-empty hidden'));
         const statsRow = make('div', 'stat-row activity-stats');
         statsRow.appendChild(statTile(0, 'Total', 'total'));
         statsRow.appendChild(statTile(0, 'Daily avg', 'avg'));
@@ -1703,7 +1751,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         body.appendChild(funnel);
         const foot = make('div', 'funnel-foot');
         foot.appendChild(make('span', '', summary.total + (summary.total === 1 ? ' application' : ' applications')));
-        foot.appendChild(make('span', '', pipelineFilter ? 'Filtering Recent Applications' : 'Select a stage to filter'));
+        foot.appendChild(make('span', '', pipelineFilter
+          ? 'Recent list shows ' + statusMeta(pipelineFilter).short
+          : 'Select a stage to filter'));
         const edit = make('button', 'pipeline-edit-btn', 'Edit counts');
         edit.type = 'button';
         foot.appendChild(edit);
@@ -1722,14 +1772,28 @@ document.addEventListener('DOMContentLoaded', async () => {
           clear.type = 'button';
           clear.dataset.clearFilter = '1';
           clear.setAttribute('aria-label', 'Show every stage');
+          clear.title = 'Show every stage';
           clear.innerHTML = X_SVG;
           chip.appendChild(clear);
           body.appendChild(chip);
         }
         if (!filtered.length) {
-          body.appendChild(make('div', 'empty', pipelineFilter
-            ? 'Nothing in ' + statusMeta(pipelineFilter).label + ' right now.'
-            : 'No applications yet. Log one here, or apply on a job site and LIT logs it for you.'));
+          // Empty states point at a next step instead of ending the list.
+          const empty = make('div', 'empty empty-actions');
+          if (pipelineFilter) {
+            empty.appendChild(make('p', '', 'Nothing in ' + statusMeta(pipelineFilter).label + ' right now.'));
+            const all = make('button', 'btn btn-ghost btn-sm', 'Show every stage');
+            all.type = 'button';
+            all.dataset.clearFilter = '1';
+            empty.appendChild(all);
+          } else {
+            empty.appendChild(make('p', '', 'No applications yet. Apply on a job site and LIT logs it for you, or add one by hand.'));
+            const add = make('button', 'btn btn-accent btn-sm', 'Add an application');
+            add.type = 'button';
+            add.addEventListener('click', focusDetailsForm);
+            empty.appendChild(add);
+          }
+          body.appendChild(empty);
           return;
         }
         const list = make('ul', 'entry-list recent-list');
@@ -1756,6 +1820,16 @@ document.addEventListener('DOMContentLoaded', async () => {
           bar.appendChild(seg);
         });
         wrap.appendChild(bar);
+        // The bar is color only, so a text legend names each segment.
+        const legend = make('div', 'response-legend');
+        ['review', 'interviewing', 'offer', 'rejected'].forEach(id => {
+          if (!s.counts[id]) return;
+          const key = make('span', 'stage-' + id);
+          key.appendChild(make('i'));
+          key.appendChild(document.createTextNode(statusMeta(id).short + ' ' + s.counts[id]));
+          legend.appendChild(key);
+        });
+        if (legend.firstChild) wrap.appendChild(legend);
         const meta = s.total === 0
           ? 'Move applications past Applied as you hear back to see your rate.'
           : s.responded + ' of ' + s.total + ' heard back' + (s.avgTurnaroundDays !== null
@@ -1766,6 +1840,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
   };
+
+  // Brings the Add Details form into view with the first field focused,
+  // adding or expanding its widget first when needed.
+  async function focusDetailsForm() {
+    const item = widgetItems.find(i => i.type === 'details');
+    if (!item) await applyLayout(WidgetLayout.add('details', {}));
+    else if (item.options.collapsed) await applyLayout(WidgetLayout.update(item.id, { collapsed: false }));
+    const field = el('detail-company');
+    if (!field || !field.closest('.widget')) return;
+    field.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+    field.focus({ preventScroll: true });
+  }
 
   // A row for an entry: company or title, a quieter second line, and for job
   // entries a stage pill. Used by Recent Applications and search results.
@@ -1806,7 +1892,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       del.type = 'button';
       del.dataset.deleteId = log.id;
       del.setAttribute('aria-label', 'Delete this entry');
-      del.title = 'Delete';
+      del.title = 'Delete entry';
       del.innerHTML = X_SVG;
       side.appendChild(del);
     }
@@ -1830,6 +1916,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     body.querySelector('[data-stat="avg"]').textContent = history.dailyAverage;
     body.querySelector('[data-stat="days"]').textContent = history.activeDaysCount;
     body.querySelector('[data-stat="best"]').textContent = history.bestDay.count;
+
+    const emptyNote = body.querySelector('.activity-empty');
+    if (emptyNote) {
+      emptyNote.textContent = 'Nothing logged in the last ' + item.options.days + ' days. Each entry you log adds to this chart.';
+      emptyNote.classList.toggle('hidden', history.totalCount > 0);
+    }
 
     const chart = body.querySelector('.chart');
     chart.textContent = '';
@@ -2046,6 +2138,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (PART_IDS[type]) parkPart(PART_IDS[type]);
       node.remove();
     });
+
+    if (!visible.length) widgetsHost.appendChild(widgetsEmptyState());
+  }
+
+  // Shown when every widget for this tab has been removed: two starting
+  // points rather than a blank area.
+  function widgetsEmptyState() {
+    const box = make('div', 'empty empty-actions widgets-empty');
+    box.appendChild(make('p', '', 'No widgets on this tab. Add the ones you want, or start from the recommended set.'));
+    const row = make('div', 'empty-buttons');
+    const add = make('button', 'btn btn-accent btn-sm', 'Add widget');
+    add.type = 'button';
+    add.addEventListener('click', () => el('add-widget-btn').click());
+    const reset = make('button', 'btn btn-ghost btn-sm', 'Use recommended layout');
+    reset.type = 'button';
+    reset.addEventListener('click', () => resetLayout(null));
+    row.appendChild(add);
+    row.appendChild(reset);
+    box.appendChild(row);
+    return box;
   }
 
   function widgetById(id) {
@@ -2105,6 +2217,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wrap) return;
     const item = widgetById(wrap.dataset.widgetId);
     if (!item) return;
+    const step = e.target.closest('[data-step]');
+    if (step) {
+      e.preventDefault();
+      const input = step.parentElement.querySelector('.stage-input');
+      const max = parseInt(input.max, 10) || 0;
+      const next = Math.max(0, Math.min(max, (parseInt(input.value, 10) || 0) + parseInt(step.dataset.step, 10)));
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
     if (e.target.closest('.widget-edit-btn')) {
       openWidgetSettings(item.id);
       return;
@@ -2481,7 +2603,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let settingsWidgetId = null;
   let widgetRemoveArmed = false;
   let widgetDraft = null; // { metricId, days, showStats, size, chart }
-  const CHART_LABELS = { bar: 'Bars', area: 'Line', heatmap: 'Heatmap' };
 
   function metricLabelFor(metricId) {
     if (metricId === WidgetLayout.ACTIVE) return 'Follow the selected tab';
@@ -2570,7 +2691,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   el('widget-chart-btn').addEventListener('click', () => {
     if (!widgetDraft) return;
-    const items = WidgetLayout.CHART_MODES.map(c => ({ value: c, label: CHART_LABELS[c], selected: widgetDraft.chart === c }));
+    const items = WidgetLayout.CHART_MODES.map(c => ({ value: c, label: CHART_HINTS[c], selected: widgetDraft.chart === c }));
     openTokenPopover(el('widget-chart-btn'), items, (value) => {
       if (value === widgetDraft.chart) return;
       widgetDraft.chart = value;
@@ -2624,21 +2745,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (ok) closeModal(el('widget-settings-modal'));
   });
 
-  // Two-step remove, same pattern as deleting a tracker.
+  // Two-step remove, same pattern as deleting a tracker. The confirm label
+  // names the action, and the status line offers Undo, which adds the same
+  // widget back with its options in its old slot.
   el('remove-widget-btn').addEventListener('click', async () => {
     const btn = el('remove-widget-btn');
     if (!widgetRemoveArmed) {
       widgetRemoveArmed = true;
-      btn.querySelector('span').textContent = 'Select again to confirm';
+      btn.querySelector('span').textContent = 'Confirm: remove widget';
       btn.classList.add('armed');
       return;
     }
     const target = settingsWidgetId;
+    const removedItem = widgetById(target);
+    const index = widgetItems.findIndex(i => i.id === target);
+    const nextId = index >= 0 && widgetItems[index + 1] ? widgetItems[index + 1].id : null;
     settingsWidgetId = null;
     widgetRemoveArmed = false;
-    const ok = await applyLayout(WidgetLayout.remove(target), 'Widget removed.');
-    if (ok) closeModal(el('widget-settings-modal'));
+    const ok = await applyLayout(WidgetLayout.remove(target));
+    if (!ok) return;
+    closeModal(el('widget-settings-modal'));
+    const name = removedItem ? WidgetLayout.TYPES[removedItem.type].name : 'Widget';
+    showStatus(name + ' removed. Your logged entries are unchanged.', 'ok', removedItem ? {
+      label: 'Undo',
+      run: () => restoreWidget(removedItem, nextId)
+    } : null);
   });
+
+  async function restoreWidget(item, beforeId) {
+    const before = captureRects();
+    let items;
+    try {
+      items = await WidgetLayout.add(item.type, item.options);
+      const added = items.find(i => i.type === item.type && !widgetItems.some(w => w.id === i.id));
+      if (added && beforeId && items.some(i => i.id === beforeId)) items = await WidgetLayout.reorder(added.id, beforeId);
+    } catch (err) {
+      showStatus('Could not restore that widget: ' + errMsg(err), 'error');
+      return;
+    }
+    await applyLayout(Promise.resolve(items), WidgetLayout.TYPES[item.type].name + ' restored.', before);
+  }
 
   el('close-widget-settings-modal').addEventListener('click', () => closeModal(el('widget-settings-modal')));
   el('cancel-widget-settings-btn').addEventListener('click', () => closeModal(el('widget-settings-modal')));
@@ -2657,9 +2803,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('color-palette').addEventListener('click', (e) => {
     const btn = e.target.closest('.color-option');
     if (!btn) return;
-    el('color-palette').querySelectorAll('.color-option').forEach(b => b.classList.remove('selected'));
+    el('color-palette').querySelectorAll('.color-option').forEach(b => {
+      b.classList.remove('selected');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('selected');
+    btn.setAttribute('aria-pressed', 'true');
     selectedColor = btn.dataset.color;
+  });
+  // Swatches keep their color name visible on hover, not only to screen readers.
+  el('color-palette').querySelectorAll('.color-option').forEach(b => {
+    if (!b.title) b.title = b.getAttribute('aria-label') || '';
+    b.setAttribute('aria-pressed', b.classList.contains('selected') ? 'true' : 'false');
   });
 
   el('new-metric-form').addEventListener('submit', async (e) => {
@@ -2735,7 +2890,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = el('delete-metric-btn');
     if (!metricDeleteArmed) {
       metricDeleteArmed = true;
-      btn.textContent = 'Select again to confirm';
+      btn.textContent = 'Confirm: delete tracker';
       btn.classList.add('armed');
       return;
     }
@@ -2836,7 +2991,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('detail-role').value = '';
     el('detail-notes').value = '';
     resetDuplicateNote();
-    showStatus('Entry saved.', 'ok');
+    const savedTo = metricById(metricId);
+    showStatus('Entry saved' + (savedTo ? ' to ' + savedTo.name : '') + '. The form is cleared for the next one.', 'ok');
     await loadData();
   });
 
@@ -2847,6 +3003,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   let searchOpen = false;
   let searchTimer = null;
   let searchToken = 0;
+  // The entries on screen, so a deleted one can be put back by Undo.
+  const searchLogsById = new Map();
 
   function openSearch() {
     if (searchOpen) {
@@ -2907,6 +3065,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!q) {
       results.textContent = '';
       meta.textContent = 'Search all ' + ((stats && stats.totalLogs) || 0) + ' entries by company, role, notes, stage, or tracker.';
+      results.appendChild(searchSuggestions('Try a stage'));
       return;
     }
     let res;
@@ -2922,7 +3081,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       ? 'No entries match "' + q + '".'
       : res.total + (res.total === 1 ? ' match' : ' matches') + (res.total > res.results.length ? ', showing the newest ' + res.results.length : '');
     results.textContent = '';
+    searchLogsById.clear();
+    res.results.forEach(log => searchLogsById.set(log.id, log));
     res.results.forEach((log, i) => results.appendChild(entryRow(log, { tokens, showTracker: true, showNotes: true, deletable: true, delay: i })));
+    if (res.total === 0) results.appendChild(searchSuggestions('Search by stage instead'));
+  }
+
+  // Starting points for an empty search: one-tap queries for each stage
+  // past Applied.
+  function searchSuggestions(lead) {
+    const li = make('li', 'search-suggest');
+    li.appendChild(make('span', 'search-suggest-lead', lead));
+    STATUSES.filter(s => s.id !== 'applied').forEach(s => {
+      const b = make('button', 'search-suggest-btn stage-' + s.id);
+      b.type = 'button';
+      b.dataset.suggest = s.label;
+      b.appendChild(make('i'));
+      b.appendChild(document.createTextNode(s.label));
+      li.appendChild(b);
+    });
+    return li;
   }
 
   searchInput.addEventListener('input', () => {
@@ -2944,6 +3122,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Delete (two-step) and stage changes from a search result.
   const deleteArms = new Map();
   el('search-results').addEventListener('click', async (e) => {
+    const suggest = e.target.closest('[data-suggest]');
+    if (suggest) {
+      searchInput.value = suggest.dataset.suggest;
+      searchInput.focus();
+      runSearch();
+      return;
+    }
     const pill = e.target.closest('.status-pill');
     if (pill) {
       openStatusPicker(pill);
@@ -2952,16 +3137,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const del = e.target.closest('.del-btn');
     if (!del) return;
     const id = del.dataset.deleteId;
+    // First press turns the icon into a labeled "Delete entry" button for a
+    // few seconds; only a second press on it deletes.
     if (!deleteArms.has(id)) {
       del.classList.add('armed');
-      del.title = 'Select again to delete';
-      del.setAttribute('aria-label', 'Select again to delete this entry');
+      del.textContent = 'Delete entry';
+      del.title = 'Select again to delete this entry';
+      del.setAttribute('aria-label', 'Confirm: delete this entry');
       deleteArms.set(id, setTimeout(() => {
         deleteArms.delete(id);
         del.classList.remove('armed');
-        del.title = 'Delete';
+        del.innerHTML = X_SVG;
+        del.title = 'Delete entry';
         del.setAttribute('aria-label', 'Delete this entry');
-      }, 3000));
+      }, 4000));
       return;
     }
     clearTimeout(deleteArms.get(id));
@@ -2979,10 +3168,41 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     const row = del.closest('.entry');
     if (row) row.remove();
-    showStatus('Entry deleted.', 'ok');
+    const deleted = searchLogsById.get(id);
+    showStatus('Entry deleted. Counts, stats, and the calendar no longer include it.', 'ok', deleted ? {
+      label: 'Undo',
+      run: () => restoreEntry(deleted)
+    } : null);
     notifyCalendarTabs();
     loadData();
   });
+
+  // Undo for a deleted entry: logs it again with the same content, date, and
+  // stage. It comes back as a new entry with a fresh id.
+  async function restoreEntry(log) {
+    try {
+      await TrackerStorage.addLog({
+        metricId: log.metricId,
+        count: log.count,
+        date: log.date,
+        company: log.company,
+        role: log.role,
+        notes: log.notes,
+        url: log.url,
+        status: log.status,
+        solveTimeSeconds: log.solveTimeSeconds,
+        source: log.source,
+        sourceId: log.sourceId
+      });
+    } catch (err) {
+      showStatus('Could not restore that entry: ' + errMsg(err), 'error');
+      return;
+    }
+    showStatus('Entry restored.', 'ok');
+    notifyCalendarTabs();
+    if (searchOpen) runSearch();
+    loadData();
+  }
 
   // "/" or Cmd/Ctrl+F opens search from anywhere in the popup.
   document.addEventListener('keydown', (e) => {
@@ -3062,7 +3282,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     list.textContent = '';
     if (!snaps.length) {
-      list.appendChild(make('li', 'snap-meta', 'No snapshots yet. LIT takes one automatically each week.'));
+      list.appendChild(make('li', 'snap-meta', 'No snapshots yet. LIT takes one automatically each week, or take one now.'));
       return;
     }
     snaps.forEach(s => {
@@ -3075,6 +3295,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const restore = make('button', 'link-btn', 'Restore');
       restore.type = 'button';
       restore.dataset.restoreSnapshot = s.id;
+      restore.title = 'Adds back entries from this snapshot that are missing. Nothing you have now is removed or overwritten.';
       const download = make('button', 'link-btn', 'Download');
       download.type = 'button';
       download.dataset.downloadSnapshot = s.id;

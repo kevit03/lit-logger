@@ -1,6 +1,8 @@
 /* LIT autofill profile editor.
    Tokens are copied from popup/popup.css so the page matches the popup in
-   both themes; body.pt-dark follows the popup's theme choice. */
+   both themes; body.pt-dark follows the popup's theme choice.
+   Type scale is 1.25: 14px body, 17.5px section titles, 22px page title.
+   Help text is capped at --measure so it never runs the full card width. */
 
 :root {
   --font: "Google Sans", "Google Sans Text", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -9,6 +11,7 @@
   --radius-lg: 14px;
   --radius: 10px;
   --radius-sm: 8px;
+  --measure: 65ch;
 
   --bg: #f6f7f9;
   --surface: #ffffff;
@@ -62,7 +65,7 @@ body.pt-dark {
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { scroll-behavior: smooth; scroll-padding-top: 120px; }
+html { scroll-behavior: smooth; scroll-padding-top: 128px; }
 
 body {
   font-family: var(--font);
@@ -111,8 +114,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand img { border-radius: 6px; flex: none; }
-.brand h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
-.subtitle { font-size: 12.5px; color: var(--text-2); }
+.brand h1 { font-size: 22px; font-weight: 800; line-height: 1.2; letter-spacing: -0.015em; }
+.subtitle { font-size: 13px; line-height: 1.5; color: var(--text-2); max-width: var(--measure); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
 .section-nav { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
@@ -127,6 +130,13 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
 .section-nav a:hover { background: var(--surface-2); color: var(--text); }
+/* Current section: tinted background plus an outline ring, so it does not
+   rely on color alone. */
+.section-nav a[aria-current="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
 
 /* Save indicator */
 .save-status {
@@ -159,9 +169,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   box-shadow: var(--shadow);
   padding: 18px 20px 20px;
 }
-.card-head { margin-bottom: 14px; }
-.card-head h2 { font-size: 16px; font-weight: 700; }
-.card-note { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.card-head { margin-bottom: 16px; }
+.card-head h2 { font-size: 17.5px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; }
+.card-note { font-size: 13px; line-height: 1.5; color: var(--text-2); margin-top: 4px; max-width: var(--measure); }
 
 .banner {
   padding: 10px 12px;
@@ -181,11 +191,33 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   color: var(--text-3);
   margin-bottom: 8px;
 }
-.group-note { font-size: 12.5px; color: var(--text-2); margin: -2px 0 10px; }
+.group-note { font-size: 12.5px; line-height: 1.5; color: var(--text-2); margin: -2px 0 10px; max-width: var(--measure); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .field.wide { grid-column: 1 / -1; }
 .field-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.field-hint { font-size: 11.5px; line-height: 1.4; color: var(--text-3); }
+
+/* -/+ stepper for whole-number fields */
+.stepper { display: flex; align-items: stretch; }
+.stepper .step-input { border-radius: 0; text-align: center; min-width: 0; }
+.step-btn {
+  flex: none;
+  width: 34px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
+}
+.step-btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); border-right: none; }
+.step-btn:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border-left: none; }
+.step-btn:hover { background: var(--surface-3); color: var(--text); }
+.step-btn:focus-visible { position: relative; z-index: 1; border-radius: var(--radius-sm); }
+.stepper .step-input:focus { position: relative; z-index: 1; }
 
 .input {
   width: 100%;
@@ -234,8 +266,13 @@ select.input { padding-right: 6px; }
 .btn-accent:hover { filter: brightness(1.07); }
 .btn-ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--surface-2); }
-.btn-danger-ghost { color: var(--danger); background: transparent; border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
-.btn-danger-ghost:hover, .btn-danger-ghost.armed { background: var(--danger-soft); }
+/* Destructive buttons differ from the primary on color, fill, and border:
+   red text with no box until hovered or armed. */
+.btn-danger-ghost { color: var(--danger); background: transparent; border-color: transparent; }
+.btn-danger-ghost:hover { background: var(--danger-soft); }
+.btn-danger-ghost.armed { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.btn-danger { background: var(--danger); color: var(--on-accent); }
+.btn-danger:hover { filter: brightness(1.07); }
 
 .row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .row-actions.between { justify-content: space-between; }
@@ -273,7 +310,10 @@ select.input { padding-right: 6px; }
 .answer-item > .input:first-child { font-weight: 600; }
 .answer-new { margin-bottom: 12px; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .item-meta { font-size: 12px; color: var(--text-3); }
-.empty { font-size: 13px; color: var(--text-3); padding: 8px 2px; }
+.empty { font-size: 13px; line-height: 1.5; color: var(--text-2); padding: 8px 2px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.empty p { max-width: var(--measure); }
+.template-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.template-btn { font-weight: 500; }
 
 /* ===== Rules table ===== */
 .table-wrap { overflow-x: auto; }
@@ -304,20 +344,64 @@ select.input { padding-right: 6px; }
 }
 .chip-soft { background: var(--surface-2); color: var(--text-2); }
 
+/* ===== Data ===== */
+/* Erase sits apart from Export / Import so it is never the button next to
+   the one you meant to press. */
+.erase-row { margin-top: 20px; }
+.confirm-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.confirm-title { font-weight: 700; }
+.confirm-text { font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-width: var(--measure); margin-bottom: 4px; }
+
+/* ===== Undo bar ===== */
+.undo-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.undo-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  color: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.undo-btn:hover { background: color-mix(in srgb, var(--bg) 14%, transparent); }
+
 /* ===== Settings ===== */
 .settings-list { display: flex; flex-direction: column; }
+/* Rows are grouped by spacing alone; no divider lines. */
+.settings-list { gap: 14px; }
 .toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-soft);
   cursor: pointer;
 }
-.toggle-row:last-child { border-bottom: none; }
 .toggle-title { display: block; font-weight: 600; }
-.toggle-desc { display: block; font-size: 12.5px; color: var(--text-2); }
+.toggle-desc { display: block; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-width: var(--measure); }
 
 .switch {
   appearance: none;

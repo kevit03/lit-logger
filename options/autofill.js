@@ -22,18 +22,18 @@
     {
       title: 'Basics',
       fields: [
-        { key: 'firstName', label: 'First name', autocomplete: 'given-name' },
+        { key: 'firstName', label: 'First name', autocomplete: 'given-name', placeholder: 'As it appears on your resume' },
         { key: 'lastName', label: 'Last name', autocomplete: 'family-name' },
-        { key: 'preferredName', label: 'Preferred name', autocomplete: 'nickname' },
-        { key: 'email', label: 'Email', type: 'email', autocomplete: 'email' },
+        { key: 'preferredName', label: 'Preferred name', autocomplete: 'nickname', placeholder: 'Only if different from first name' },
+        { key: 'email', label: 'Email', type: 'email', autocomplete: 'email', placeholder: 'name@example.com' },
         { key: 'phoneCountryCode', label: 'Phone country code', placeholder: '+1', autocomplete: 'tel-country-code' },
-        { key: 'phone', label: 'Phone', type: 'tel', autocomplete: 'tel-national' },
-        { key: 'addressLine1', label: 'Address line 1', autocomplete: 'address-line1', wide: true },
-        { key: 'addressLine2', label: 'Address line 2', autocomplete: 'address-line2', wide: true },
-        { key: 'city', label: 'City', autocomplete: 'address-level2' },
-        { key: 'state', label: 'State or province', autocomplete: 'address-level1' },
-        { key: 'postalCode', label: 'Postal code', autocomplete: 'postal-code' },
-        { key: 'country', label: 'Country', autocomplete: 'country-name' }
+        { key: 'phone', label: 'Phone', type: 'tel', autocomplete: 'tel-national', placeholder: 'e.g. 555 123 4567' },
+        { key: 'addressLine1', label: 'Address line 1', autocomplete: 'address-line1', wide: true, placeholder: 'Street address' },
+        { key: 'addressLine2', label: 'Address line 2', autocomplete: 'address-line2', wide: true, placeholder: 'Apartment, suite, or unit (optional)' },
+        { key: 'city', label: 'City', autocomplete: 'address-level2', placeholder: 'e.g. Seattle' },
+        { key: 'state', label: 'State or province', autocomplete: 'address-level1', placeholder: 'e.g. WA or Washington' },
+        { key: 'postalCode', label: 'Postal code', autocomplete: 'postal-code', placeholder: 'e.g. 98101' },
+        { key: 'country', label: 'Country', autocomplete: 'country-name', placeholder: 'e.g. United States' }
       ]
     },
     {
@@ -48,20 +48,22 @@
     {
       title: 'Education',
       fields: [
-        { key: 'school', label: 'School', wide: true },
+        { key: 'school', label: 'School', wide: true, placeholder: 'e.g. University of Washington' },
         { key: 'degree', label: 'Degree', placeholder: 'e.g. Bachelor of Science' },
         { key: 'major', label: 'Major', placeholder: 'e.g. Computer Science' },
-        { key: 'gpa', label: 'GPA', placeholder: 'e.g. 3.8' },
+        { key: 'gpa', label: 'GPA', placeholder: 'e.g. 3.8', hint: 'Leave blank to skip GPA questions.' },
         { key: 'gradMonth', label: 'Graduation month', options: [{ value: '', label: 'Not set' }].concat(MONTHS.map(m => ({ value: m, label: m }))) },
-        { key: 'gradYear', label: 'Graduation year', placeholder: 'e.g. 2027', inputmode: 'numeric' }
+        { key: 'gradYear', label: 'Graduation year', placeholder: 'e.g. 2027', inputmode: 'numeric',
+          stepper: { min: 1950, max: 2100, start: new Date().getFullYear() } }
       ]
     },
     {
       title: 'Work',
       fields: [
-        { key: 'currentCompany', label: 'Current company', autocomplete: 'organization' },
-        { key: 'currentTitle', label: 'Current title', autocomplete: 'organization-title' },
-        { key: 'yearsExperience', label: 'Years of experience', placeholder: 'e.g. 2', inputmode: 'decimal' }
+        { key: 'currentCompany', label: 'Current company', autocomplete: 'organization', placeholder: 'Leave blank if not working' },
+        { key: 'currentTitle', label: 'Current title', autocomplete: 'organization-title', placeholder: 'e.g. Software Engineer' },
+        { key: 'yearsExperience', label: 'Years of experience', placeholder: 'e.g. 2', inputmode: 'decimal',
+          stepper: { min: 0, max: 60, start: 0 }, hint: 'Count internships if the job is entry level.' }
       ]
     },
     {
@@ -71,7 +73,7 @@
         { key: 'needsSponsorship', label: 'Will need visa sponsorship', options: YES_NO },
         { key: 'willingToRelocate', label: 'Willing to relocate', options: YES_NO },
         { key: 'earliestStartDate', label: 'Earliest start date', placeholder: 'e.g. June 2027 or 2027-06-01' },
-        { key: 'salaryExpectation', label: 'Salary expectation', placeholder: 'e.g. $120,000' },
+        { key: 'salaryExpectation', label: 'Salary expectation', placeholder: 'e.g. $120,000', hint: 'Filled exactly as written. Leave blank to skip.' },
         { key: 'howDidYouHear', label: 'How did you hear about us', placeholder: 'e.g. LinkedIn' }
       ]
     },
@@ -147,18 +149,19 @@
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
-  // Two-click delete: the first click arms the button, the second confirms.
-  function armedDelete(button, onConfirm) {
+  // Two-click delete: the first click arms the button and relabels it with
+  // the action it will take, the second confirms. It disarms after 4 seconds.
+  function armedDelete(button, confirmLabel, onConfirm) {
     const original = button.textContent;
     let timer = null;
     button.addEventListener('click', () => {
       if (!button.classList.contains('armed')) {
         button.classList.add('armed');
-        button.textContent = 'Confirm';
+        button.textContent = confirmLabel;
         timer = setTimeout(() => {
           button.classList.remove('armed');
           button.textContent = original;
-        }, 3000);
+        }, 4000);
         return;
       }
       clearTimeout(timer);
@@ -225,6 +228,46 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Undo bar: shown after a delete, erase, or import, for 8 seconds
+  // ---------------------------------------------------------------------------
+  const undoBar = el('undo-bar');
+  let undoAction = null;
+  let undoTimer = null;
+
+  function hideUndo() {
+    clearTimeout(undoTimer);
+    undoAction = null;
+    show(undoBar, false);
+  }
+
+  function offerUndo(text, action) {
+    clearTimeout(undoTimer);
+    undoAction = action;
+    el('undo-text').textContent = text;
+    show(undoBar, true);
+    undoTimer = setTimeout(hideUndo, 8000);
+  }
+
+  el('undo-btn').addEventListener('click', async () => {
+    const action = undoAction;
+    hideUndo();
+    if (!action) return;
+    try {
+      await write(action());
+      await loadAll();
+      setStatus('Restored', 'saved');
+    } catch (err) {
+      reportError(err);
+    }
+  });
+
+  // Puts one section back exactly as it was (order and ids included) without
+  // touching the others: importAll leaves sections missing from the data alone.
+  function restoreSection(snapshot, key) {
+    return () => store.importAll({ format: snapshot.format, version: snapshot.version, [key]: snapshot[key] });
+  }
+
+  // ---------------------------------------------------------------------------
   // Profile
   // ---------------------------------------------------------------------------
   const profileForm = el('profile-form');
@@ -258,21 +301,56 @@
             autocomplete: f.autocomplete || 'off',
             placeholder: f.placeholder || '',
             inputmode: f.inputmode,
-            spellcheck: 'false'
+            spellcheck: 'false',
+            'aria-describedby': f.hint ? id + '-hint' : null
           });
           control.addEventListener('blur', () => saveProfileField(f.key, control));
           control.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); control.blur(); } });
         }
+        if (f.options && f.hint) control.setAttribute('aria-describedby', id + '-hint');
         profileControls[f.key] = control;
-        grid.appendChild(make('label', { className: 'field' + (f.wide ? ' wide' : ''), for: id }, [
-          make('span', { className: 'field-label', text: f.label }),
-          control
+        // Hints are always visible under the field, so they work on touch and
+        // keyboard too (no hover-only tooltips).
+        grid.appendChild(make('div', { className: 'field' + (f.wide ? ' wide' : '') }, [
+          make('label', { className: 'field-label', for: id, text: f.label }),
+          f.stepper ? stepper(f, control) : control,
+          f.hint ? make('span', { className: 'field-hint', id: id + '-hint', text: f.hint }) : null
         ]));
       });
       set.appendChild(grid);
       profileForm.appendChild(set);
     });
     profileForm.addEventListener('submit', e => e.preventDefault());
+  }
+
+  // Whole-number fields get -/+ buttons. The input stays a text box so a typed
+  // value like "2.5" still saves as written; the buttons round to whole steps.
+  function stepper(f, control) {
+    const cfg = f.stepper;
+    const name = f.label.toLowerCase();
+    const bump = delta => {
+      const n = parseFloat(control.value);
+      const base = isNaN(n) ? cfg.start : Math.round(n) + delta;
+      control.value = String(Math.min(cfg.max, Math.max(cfg.min, base)));
+      saveProfileField(f.key, control);
+    };
+    const button = (text, label, delta) => {
+      const b = make('button', { type: 'button', className: 'step-btn', 'aria-label': label, title: label, text });
+      b.addEventListener('click', e => { e.preventDefault(); bump(delta); });
+      return b;
+    };
+    control.classList.add('step-input');
+    control.addEventListener('keydown', e => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        bump(e.key === 'ArrowUp' ? 1 : -1);
+      }
+    });
+    return make('div', { className: 'stepper' }, [
+      button('\u2212', 'Decrease ' + name, -1),
+      control,
+      button('+', 'Increase ' + name, 1)
+    ]);
   }
 
   function fillProfileForm(profile) {
@@ -313,8 +391,8 @@
     const download = el('resume-download');
     if (!resume) {
       el('resume-name').textContent = 'No resume uploaded';
-      el('resume-meta').textContent = '';
-      el('resume-upload-btn').textContent = 'Upload';
+      el('resume-meta').textContent = 'Upload one so LIT can attach it when an application asks for a resume.';
+      el('resume-upload-btn').textContent = 'Upload resume';
       download.removeAttribute('href');
       show(download, false);
       show(el('resume-remove-btn'), false);
@@ -358,12 +436,14 @@
     }
   });
 
-  armedDelete(el('resume-remove-btn'), async () => {
+  armedDelete(el('resume-remove-btn'), 'Yes, remove resume', async () => {
+    const previous = await store.getResume();
     await write(store.clearResume());
     renderResume(null);
     el('resume-remove-btn').disabled = false;
     el('resume-remove-btn').classList.remove('armed');
     el('resume-remove-btn').textContent = 'Remove';
+    if (previous) offerUndo('Resume removed.', () => store.saveResume(previous));
   });
 
   // ---------------------------------------------------------------------------
@@ -384,11 +464,28 @@
     answersList.textContent = '';
     visible.forEach(a => answersList.appendChild(answerItem(a)));
     const empty = el('answers-empty');
-    empty.textContent = answers.length
-      ? 'No saved answers match "' + answersSearch.value.trim() + '".'
-      : 'No saved answers yet. They are added when you write a long answer on an application, or with Add answer.';
+    empty.textContent = '';
+    if (answers.length) {
+      empty.appendChild(make('p', { text: 'No saved answers match "' + answersSearch.value.trim() + '".' }));
+    } else {
+      // Starting points instead of a blank list: each opens the new-answer
+      // form with the question filled in.
+      empty.appendChild(make('p', { text: 'No saved answers yet. LIT adds one when you write a long answer on an application. Or start from a common question:' }));
+      empty.appendChild(make('div', { className: 'template-list' }, ANSWER_TEMPLATES.map(q => {
+        const b = make('button', { type: 'button', className: 'btn btn-ghost btn-sm template-btn', text: q });
+        b.addEventListener('click', () => openNewAnswer(q));
+        return b;
+      })));
+    }
     show(empty, !visible.length);
   }
+
+  const ANSWER_TEMPLATES = [
+    'Why do you want to work here?',
+    'Tell us about yourself.',
+    'Describe a challenging project you worked on.',
+    'Is there anything else you would like us to know?'
+  ];
 
   function answerItem(a) {
     const qInput = make('input', { type: 'text', className: 'input', value: a.question, 'aria-label': 'Question', autocomplete: 'off' });
@@ -426,34 +523,45 @@
     };
     qInput.addEventListener('blur', commit);
     aText.addEventListener('blur', commit);
-    armedDelete(del, async () => {
+    armedDelete(del, 'Yes, delete answer', async () => {
+      const snapshot = await store.exportAll({ includeResume: false });
       await write(store.deleteAnswer(a.id));
       answers = answers.filter(x => x.id !== a.id);
       renderAnswers();
+      offerUndo('Answer deleted.', restoreSection(snapshot, 'answers'));
     });
     return item;
   }
 
   answersSearch.addEventListener('input', renderAnswers);
 
+  // While the new-answer form is open its Save button is the one primary
+  // action in this section, so Add answer steps aside.
   const newForm = el('answer-new');
-  el('answer-add-btn').addEventListener('click', () => {
+  function openNewAnswer(question) {
     show(newForm, true);
-    el('answer-new-question').focus();
-  });
-  el('answer-new-cancel').addEventListener('click', () => {
+    show(el('answer-add-btn'), false);
+    if (question) {
+      el('answer-new-question').value = question;
+      el('answer-new-text').focus();
+    } else {
+      el('answer-new-question').focus();
+    }
+  }
+  function closeNewAnswer() {
     newForm.reset();
     show(el('answer-new-error'), false);
     show(newForm, false);
-  });
+    show(el('answer-add-btn'), true);
+  }
+  el('answer-add-btn').addEventListener('click', () => openNewAnswer(''));
+  el('answer-new-cancel').addEventListener('click', closeNewAnswer);
   newForm.addEventListener('submit', async e => {
     e.preventDefault();
     const errBox = el('answer-new-error');
     try {
       await write(store.saveAnswer({ question: el('answer-new-question').value, answer: el('answer-new-text').value }));
-      newForm.reset();
-      show(errBox, false);
-      show(newForm, false);
+      closeNewAnswer();
       answers = await store.getAnswers();
       renderAnswers();
     } catch (err) {
@@ -483,10 +591,12 @@
     visible.forEach(rule => {
       const target = describeTarget(rule);
       const del = make('button', { type: 'button', className: 'btn btn-danger-ghost btn-sm', text: 'Delete' });
-      armedDelete(del, async () => {
+      armedDelete(del, 'Yes, delete rule', async () => {
+        const snapshot = await store.exportAll({ includeResume: false });
         await write(store.deleteRule(rule.id));
         rules = rules.filter(r => r.id !== rule.id);
         renderRules();
+        offerUndo('Rule deleted.', restoreSection(snapshot, 'rules'));
       });
       body.appendChild(make('tr', null, [
         make('td', { className: 'mono' }, [rule.host === '*' ? make('span', { className: 'chip', text: 'All sites' }) : rule.host]),
@@ -497,9 +607,24 @@
     });
     show(el('rules-table'), visible.length > 0);
     const empty = el('rules-empty');
-    empty.textContent = rules.length
-      ? 'No rules match "' + rulesSearch.value.trim() + '".'
-      : 'No learned rules yet. When you fix a field after autofill, LIT remembers it here.';
+    empty.textContent = '';
+    if (rules.length) {
+      empty.appendChild(make('p', { text: 'No rules match "' + rulesSearch.value.trim() + '".' }));
+    } else if (!currentSettings.autoLearn) {
+      // The likely reason for an empty list, with the fix one click away.
+      empty.appendChild(make('p', { text: 'No learned rules yet. Learn from corrections is off, so fixes you make on applications are not saved.' }));
+      const on = make('button', { type: 'button', className: 'btn btn-ghost btn-sm', text: 'Turn on Learn from corrections' });
+      on.addEventListener('click', async () => {
+        try {
+          renderSettings(await write(store.saveSettings({ autoLearn: true })));
+        } catch (e) {
+          // Shown by reportError.
+        }
+      });
+      empty.appendChild(on);
+    } else {
+      empty.appendChild(make('p', { text: 'No learned rules yet. Autofill an application, then fix any field LIT got wrong. LIT remembers the fix here and uses it next time.' }));
+    }
     show(empty, !visible.length);
   }
 
@@ -509,9 +634,13 @@
   // Settings
   // ---------------------------------------------------------------------------
   const switches = Array.from(document.querySelectorAll('[data-setting]'));
+  let currentSettings = {};
 
   function renderSettings(settings) {
-    switches.forEach(input => { input.checked = !!settings[input.dataset.setting]; });
+    const learnChanged = !!currentSettings.autoLearn !== !!settings.autoLearn;
+    currentSettings = settings || {};
+    switches.forEach(input => { input.checked = !!currentSettings[input.dataset.setting]; });
+    if (learnChanged) renderRules();
   }
 
   switches.forEach(input => {
@@ -543,30 +672,59 @@
     }
   });
 
+  // Import replaces data, so the file is read first and an inline panel asks
+  // before anything changes. A snapshot taken just before makes it undoable.
   const importFile = el('import-file');
+  const importPanel = el('import-confirm');
+  let pendingImport = null;
+
+  function closeImportPanel() {
+    pendingImport = null;
+    show(importPanel, false);
+  }
+
   el('import-btn').addEventListener('click', () => importFile.click());
   importFile.addEventListener('change', async () => {
     const file = importFile.files && importFile.files[0];
     importFile.value = '';
     if (!file) return;
     try {
-      const text = await file.text();
-      if (!window.confirm('Import "' + file.name + '"? It replaces your profile, saved answers, learned rules, settings, and resume with the ones in the file.')) return;
-      const counts = await write(store.importAll(text));
+      pendingImport = { name: file.name, text: await file.text() };
+      el('import-confirm-title').textContent = 'Replace your autofill data with "' + file.name + '"?';
+      show(importPanel, true);
+      el('import-cancel').focus();
+    } catch (err) {
+      reportError(err);
+    }
+  });
+  el('import-cancel').addEventListener('click', () => {
+    closeImportPanel();
+    el('import-btn').focus();
+  });
+  el('import-confirm-btn').addEventListener('click', async () => {
+    const job = pendingImport;
+    closeImportPanel();
+    if (!job) return;
+    try {
+      const snapshot = await store.exportAll();
+      const counts = await write(store.importAll(job.text));
       await loadAll();
       setStatus('Imported ' + counts.answers + ' answers, ' + counts.rules + ' rules', 'saved');
+      offerUndo('Imported "' + job.name + '".', () => store.importAll(snapshot));
     } catch (err) {
       reportError(err);
     }
   });
 
-  armedDelete(el('clear-all-btn'), async () => {
+  armedDelete(el('clear-all-btn'), 'Yes, erase everything', async () => {
+    const snapshot = await store.exportAll();
     await write(store.clearAll());
     await loadAll();
     const btn = el('clear-all-btn');
     btn.disabled = false;
     btn.classList.remove('armed');
     btn.textContent = 'Erase all autofill data';
+    offerUndo('All autofill data erased.', () => store.importAll(snapshot));
   });
 
   // ---------------------------------------------------------------------------
@@ -657,8 +815,37 @@
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Section nav: marks the section in view
+  // ---------------------------------------------------------------------------
+  const navLinks = Array.from(document.querySelectorAll('.section-nav a'));
+  let navFrame = 0;
+
+  function markActiveSection() {
+    navFrame = 0;
+    const offset = document.querySelector('.topbar').offsetHeight + 24;
+    let current = navLinks[0];
+    navLinks.forEach(link => {
+      const section = document.getElementById(link.getAttribute('href').slice(1));
+      if (section && section.getBoundingClientRect().top <= offset) current = link;
+    });
+    // At the bottom of the page the last short sections never reach the top.
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+      current = navLinks[navLinks.length - 1];
+    }
+    navLinks.forEach(link => {
+      if (link === current) link.setAttribute('aria-current', 'true');
+      else link.removeAttribute('aria-current');
+    });
+  }
+
+  window.addEventListener('scroll', () => {
+    if (!navFrame) navFrame = requestAnimationFrame(markActiveSection);
+  }, { passive: true });
+
   buildProfileForm();
   loadTheme();
+  markActiveSection();
   loadAll().catch(reportError);
 
   try {

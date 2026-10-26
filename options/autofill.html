@@ -18,9 +18,6 @@
       </div>
       <div class="topbar-actions">
         <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
-        <button type="button" class="btn btn-ghost btn-sm" id="import-btn">Import</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="export-btn">Export</button>
-        <input type="file" id="import-file" accept="application/json,.json" class="hidden">
       </div>
     </div>
     <nav class="section-nav" aria-label="Sections">
@@ -29,6 +26,7 @@
       <a href="#answers">Saved answers</a>
       <a href="#rules">Learned rules</a>
       <a href="#settings">Settings</a>
+      <a href="#data">Data</a>
     </nav>
   </header>
 
@@ -51,12 +49,12 @@
       <div class="resume-row">
         <div class="resume-info" id="resume-info">
           <div class="resume-name" id="resume-name">No resume uploaded</div>
-          <div class="resume-meta" id="resume-meta"></div>
+          <div class="resume-meta" id="resume-meta">Upload one so LIT can attach it when an application asks for a resume.</div>
         </div>
         <div class="resume-actions">
-          <button type="button" class="btn btn-accent btn-sm" id="resume-upload-btn">Upload</button>
-          <a class="btn btn-ghost btn-sm hidden" id="resume-download">Download</a>
           <button type="button" class="btn btn-danger-ghost btn-sm hidden" id="resume-remove-btn">Remove</button>
+          <a class="btn btn-ghost btn-sm hidden" id="resume-download">Download</a>
+          <button type="button" class="btn btn-accent btn-sm" id="resume-upload-btn">Upload resume</button>
         </div>
         <input type="file" id="resume-file" accept=".pdf,.doc,.docx,.rtf,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf" class="hidden">
       </div>
@@ -70,16 +68,16 @@
       </div>
       <div class="toolbar">
         <input type="search" id="answers-search" class="input" placeholder="Search questions and answers" aria-label="Search saved answers">
-        <button type="button" class="btn btn-ghost btn-sm" id="answer-add-btn">Add answer</button>
+        <button type="button" class="btn btn-accent btn-sm" id="answer-add-btn">Add answer</button>
       </div>
       <form id="answer-new" class="answer-item answer-new hidden" novalidate>
         <label class="field">
           <span class="field-label">Question</span>
-          <input type="text" class="input" id="answer-new-question" autocomplete="off">
+          <input type="text" class="input" id="answer-new-question" autocomplete="off" placeholder="e.g. Why do you want to work here?">
         </label>
         <label class="field">
           <span class="field-label">Answer</span>
-          <textarea class="input textarea" id="answer-new-text" rows="4"></textarea>
+          <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Write it once. You can still edit it on each application before you submit."></textarea>
         </label>
         <div class="row-actions">
           <button type="button" class="btn btn-ghost btn-sm" id="answer-new-cancel">Cancel</button>
@@ -88,7 +86,7 @@
         <div id="answer-new-error" class="field-error hidden" role="alert"></div>
       </form>
       <div id="answers-list" class="answers-list"></div>
-      <p id="answers-empty" class="empty hidden"></p>
+      <div id="answers-empty" class="empty hidden"></div>
     </section>
 
     <section id="rules" class="card" aria-labelledby="rules-title">
@@ -107,7 +105,7 @@
           <tbody id="rules-body"></tbody>
         </table>
       </div>
-      <p id="rules-empty" class="empty hidden"></p>
+      <div id="rules-empty" class="empty hidden"></div>
     </section>
 
     <section id="settings" class="card" aria-labelledby="settings-title">
@@ -139,16 +137,34 @@
       </div>
     </section>
 
-    <section class="card danger-zone" aria-labelledby="data-title">
+    <section id="data" class="card" aria-labelledby="data-title">
       <div class="card-head">
         <h2 id="data-title">Data</h2>
-        <p class="card-note">Everything on this page is stored only in this browser. Export makes a JSON backup that includes your resume.</p>
+        <p class="card-note">Everything on this page is stored only in this browser. Export makes a JSON backup that includes your resume. Import asks before it replaces anything.</p>
       </div>
       <div class="row-actions start">
+        <button type="button" class="btn btn-ghost btn-sm" id="export-btn">Export backup</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="import-btn">Import from file</button>
+        <input type="file" id="import-file" accept="application/json,.json" class="hidden">
+      </div>
+      <div id="import-confirm" class="confirm-panel hidden" role="group" aria-labelledby="import-confirm-title">
+        <p class="confirm-title" id="import-confirm-title"></p>
+        <p class="confirm-text">This replaces your profile, saved answers, learned rules, settings, and resume with the ones in the file. You can undo it right after.</p>
+        <div class="row-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="import-cancel">Keep my data</button>
+          <button type="button" class="btn btn-danger btn-sm" id="import-confirm-btn">Replace with file</button>
+        </div>
+      </div>
+      <div class="erase-row">
         <button type="button" class="btn btn-danger-ghost btn-sm" id="clear-all-btn">Erase all autofill data</button>
       </div>
     </section>
   </main>
+
+  <div id="undo-bar" class="undo-bar hidden" role="status" aria-live="polite">
+    <span id="undo-text"></span>
+    <button type="button" class="undo-btn" id="undo-btn">Undo</button>
+  </div>
 
   <script src="../shared/autofill-store.js"></script>
   <script src="autofill.js"></script>
