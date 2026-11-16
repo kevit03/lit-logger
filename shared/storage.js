@@ -84,7 +84,11 @@ const TrackerStorage = (() => {
     timerDesktop: true,
     universalTracking: false,
     digestDismissedWeek: '',
-    duplicateWarnings: true
+    duplicateWarnings: true,
+    // Daily check-in: the service worker opens reminder/reminder.html at
+    // reminderTime (local HH:MM) every day while reminderEnabled is on.
+    reminderEnabled: true,
+    reminderTime: '14:30'
   };
 
   function formatSecondsToMMSS(totalSeconds) {
@@ -2029,8 +2033,12 @@ const TrackerStorage = (() => {
       };
     },
 
+    // daysCount is a number of days ending today, or 'all' for everything
+    // from the first logged day (a week at minimum, so a new account still
+    // gets a chart).
     async getActivityHistory(daysCount = 30, metricId = null, userEmailOverride) {
-      const days = Math.max(1, Math.min(366, parseInt(daysCount, 10) || 30));
+      const wantAll = daysCount === 'all';
+      let days = wantAll ? 7 : Math.max(1, Math.min(366, parseInt(daysCount, 10) || 30));
       let targetMetricId = null;
       let targetEmailOverride = userEmailOverride;
       if (typeof metricId === 'string' && metricId.includes('@')) {
@@ -2046,6 +2054,18 @@ const TrackerStorage = (() => {
         backend.aggregates(userKeyOf(targetEmail))
       ]);
       const todayStr = getLocalDateStr(new Date());
+      if (wantAll) {
+        let earliest = null;
+        aggs.forEach(a => {
+          Object.keys(a.days || {}).forEach(date => {
+            if (!isDateStr(date) || date > todayStr) return;
+            const counts = a.days[date] || {};
+            const has = targetMetricId ? (counts[targetMetricId] || 0) > 0 : Object.keys(counts).some(k => counts[k] > 0);
+            if (has && (!earliest || date < earliest)) earliest = date;
+          });
+        });
+        if (earliest) days = Math.max(days, daysBetween(earliest, todayStr) + 1);
+      }
       const firstStr = addDays(todayStr, -(days - 1));
       const { dailyMap } = buildDailyMap(aggs.filter(a => a.month >= monthOf(firstStr)));
 

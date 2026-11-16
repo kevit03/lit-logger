@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LIT check-in</title>
+  <link rel="stylesheet" href="reminder.css">
+</head>
+<body>
+  <main class="checkin">
+    <header class="checkin-head">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/></svg></span>
+      <span class="kicker" id="kicker">Daily check-in</span>
+    </header>
+
+    <div class="checkin-title">
+      <h1 class="title">Are you just living day to day?</h1>
+      <p class="tally" id="tally" aria-live="polite"></p>
+    </div>
+
+    <div class="video">
+      <iframe id="player" title="Are you just living day to day?" src="https://www.youtube-nocookie.com/embed/amXl7FG7J4c?autoplay=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="btn btn-accent" id="done-btn">Back to it</button>
+      <div class="quiet-actions">
+        <label class="time-field">
+          <span>Every day at</span>
+          <input type="time" id="time-input" value="14:30" />
+        </label>
+        <button type="button" class="btn btn-quiet" id="off-btn">Turn off</button>
+      </div>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="../shared/auth.js"></script>
+  <script src="../shared/db.js"></script>
+  <script src="../shared/storage.js"></script>
+  <script src="reminder.js"></script>
+</body>
+</html>

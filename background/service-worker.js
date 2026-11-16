@@ -19,6 +19,9 @@
 //                   setting on, a tiny bootstrap runs on every page and asks
 //                   for the full universal tracker only on job pages.
 //   Maintenance     A periodic alarm takes the weekly local snapshot.
+//   Reminder        One alarm a day, at the time in prefs (2:30 PM by
+//                   default), opens reminder/reminder.html: a short video
+//                   check-in. Turned off or moved from the popup's settings.
 //
 // The solve timers are persisted as a DEADLINE, never as a decrementing
 // counter. A counter driven by setInterval dies with its page and is throttled
@@ -62,6 +65,8 @@ const MAX_LAPS = 50;
 
 const MAINTENANCE_ALARM = 'pt-maintenance';
 const MAINTENANCE_PERIOD_MINUTES = 360;
+const REMINDER_ALARM = 'pt-reminder';
+const REMINDER_PAGE = 'reminder/reminder.html';
 
 const MENU_LOG_PAGE = 'lit-log-page';
 const MENU_LOG_ACTION = 'lit-log-page-action';
@@ -260,9 +265,64 @@ async function runMaintenance() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Daily reminder
+// ---------------------------------------------------------------------------
+// The next occurrence of HH:MM in local time, strictly after `now`. An alarm
+// with a fixed `when` is used instead of a 24h period so a clock change or a
+// moved time never drifts it.
+function nextReminderAt(timeStr, now = Date.now()) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr || ''));
+  const hours = m ? Math.min(23, parseInt(m[1], 10)) : 14;
+  const minutes = m ? Math.min(59, parseInt(m[2], 10)) : 30;
+  const at = new Date(now);
+  at.setHours(hours, minutes, 0, 0);
+  if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+
+async function scheduleReminder() {
+  let prefs;
+  try {
+    prefs = await TrackerStorage.getPrefs();
+  } catch (err) {
+    return null;
+  }
+  await chrome.alarms.clear(REMINDER_ALARM);
+  if (!prefs.reminderEnabled) return null;
+  const when = nextReminderAt(prefs.reminderTime);
+  await chrome.alarms.create(REMINDER_ALARM, { when });
+  return when;
+}
+
+// Opens the check-in page once per firing and books the next day. A page
+// already open (the user left yesterday's tab) is focused rather than
+// duplicated.
+async function showReminder() {
+  const url = chrome.runtime.getURL(REMINDER_PAGE);
+  try {
+    const open = await new Promise(resolve => chrome.tabs.query({ url }, tabs => resolve(tabs || [])));
+    if (open.length && open[0].id != null) {
+      await chrome.tabs.update(open[0].id, { active: true, url });
+      if (open[0].windowId != null && chrome.windows && chrome.windows.update) {
+        await chrome.windows.update(open[0].windowId, { focused: true }).catch(() => {});
+      }
+    } else {
+      await chrome.tabs.create({ url, active: true });
+    }
+  } catch (err) {
+    console.warn('LIT: could not open the daily reminder:', err && err.message);
+  }
+  await scheduleReminder();
+}
+
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === MAINTENANCE_ALARM) {
     runMaintenance();
+    return;
+  }
+  if (alarm.name === REMINDER_ALARM) {
+    showReminder();
     return;
   }
   const key = Object.keys(TIMER_SURFACES).find(k => TIMER_SURFACES[k].alarm === alarm.name);
@@ -604,6 +664,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const before = changes.pt_prefs.oldValue || {};
     const after = changes.pt_prefs.newValue || {};
     if (before.universalTracking !== after.universalTracking) syncUniversalRegistration().catch(() => {});
+    if (before.reminderEnabled !== after.reminderEnabled || before.reminderTime !== after.reminderTime) scheduleReminder();
   }
 });
 
@@ -623,6 +684,7 @@ function exposeSessionStorage() {
 async function onStartup() {
   await reconcileTimers();
   await ensureMaintenanceAlarm();
+  await scheduleReminder();
   await syncUniversalRegistration().catch(() => false);
 }
 
@@ -648,6 +710,9 @@ if (typeof module !== 'undefined' && module.exports) {
     autofillTab,
     syncUniversalRegistration,
     runMaintenance,
+    nextReminderAt,
+    scheduleReminder,
+    showReminder,
     createMenus,
     staticMatches,
     UNIVERSAL_SCRIPT_ID,

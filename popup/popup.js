@@ -662,6 +662,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('timer-desktop-btn').setAttribute('aria-pressed', prefs.timerDesktop ? 'true' : 'false');
     el('sound-switch').setAttribute('aria-checked', prefs.timerSound ? 'true' : 'false');
     el('desktop-switch').setAttribute('aria-checked', prefs.timerDesktop ? 'true' : 'false');
+    el('reminder-switch').setAttribute('aria-checked', prefs.reminderEnabled ? 'true' : 'false');
+    el('reminder-time-row').classList.toggle('hidden', !prefs.reminderEnabled);
+    if (document.activeElement !== el('reminder-time')) el('reminder-time').value = prefs.reminderTime || '14:30';
   }
 
   async function setPref(patch, message) {
@@ -679,6 +682,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('timer-desktop-btn').addEventListener('click', () => setPref({ timerDesktop: !prefs.timerDesktop }, prefs.timerDesktop ? 'Desktop alerts off.' : 'Desktop alerts on.'));
   el('sound-switch').addEventListener('click', () => setPref({ timerSound: !prefs.timerSound }));
   el('desktop-switch').addEventListener('click', () => setPref({ timerDesktop: !prefs.timerDesktop }));
+  el('reminder-switch').addEventListener('click', () => setPref({ reminderEnabled: !prefs.reminderEnabled }, prefs.reminderEnabled ? 'Daily check-in off.' : 'Daily check-in on.'));
+  el('reminder-time').addEventListener('change', (e) => {
+    const value = e.target.value;
+    if (/^\d{2}:\d{2}$/.test(value)) setPref({ reminderTime: value }, 'Check-in moved to ' + value + '.');
+  });
 
   // ---------------------------------------------------------------------------
   // Account chip and menu
@@ -969,9 +977,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const hasAnyData = stats.totalLogs > 0;
     el('first-run-card').classList.toggle('hidden', hasAnyData);
     if (!hasAnyData) {
-      el('first-run-tips').textContent = 'Press "' + el('quick-add-label').textContent + '" to log one, or use Add details for a company and role. '
-        + 'Applications you submit on Greenhouse, Lever, Workday, Workable, and other job sites, and problems you solve on LeetCode, log themselves. '
-        + 'Press / to search, and Alt+Shift+A logs +1 from any tab.';
+      el('first-run-tips').textContent = 'Press "' + el('quick-add-label').textContent + '" to log one. '
+        + 'Job sites and LeetCode log themselves.';
     }
 
     renderWidgets();
@@ -1175,9 +1182,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('ring-wrap').classList.toggle('met', met);
 
     el('metric-unit-label').textContent = (current.unit || 'items') + ' logged today';
-    const sub = el('counter-sub');
-    sub.textContent = met ? 'Daily goal reached' : (goal - today) + ' to go for today\'s goal';
-    sub.classList.toggle('met', met);
+    el('ring-wrap').title = met ? 'Daily goal reached' : (goal - today) + ' to go for today\'s goal';
 
     const weekly = current.weeklyGoal || 0;
     const weekCount = (stats.weekToDate && stats.weekToDate[current.id]) || 0;
@@ -1337,10 +1342,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       row.appendChild(detail);
       rows.appendChild(row);
     });
-    const foot = [];
-    if (summary.responses > 0) foot.push(summary.responses + (summary.responses === 1 ? ' application heard back' : ' applications heard back'));
-    foot.push(foot.length ? 'keep it going' : 'Keep the chain going this week');
-    el('digest-foot').textContent = foot.join(' · ');
+    card.title = summary.responses > 0
+      ? summary.responses + (summary.responses === 1 ? ' application heard back' : ' applications heard back')
+      : '';
     card.classList.remove('hidden');
   }
 
@@ -1387,7 +1391,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function widgetTitle(item) {
-    if (item.type === 'activity') return item.options.days + '-day activity';
+    if (item.type === 'activity') return item.options.days === WidgetLayout.ALL_DAYS ? 'All-time activity' : item.options.days + '-day activity';
     return WidgetLayout.TYPES[item.type].name;
   }
 
@@ -1758,9 +1762,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         body.appendChild(funnel);
         const foot = make('div', 'funnel-foot');
         foot.appendChild(make('span', '', summary.total + (summary.total === 1 ? ' application' : ' applications')));
-        foot.appendChild(make('span', '', pipelineFilter
+        funnel.title = pipelineFilter
           ? 'Recent list shows ' + statusMeta(pipelineFilter).short
-          : 'Select a stage to filter'));
+          : 'Select a stage to filter the recent list';
         const edit = make('button', 'pipeline-edit-btn', 'Edit counts');
         edit.type = 'button';
         foot.appendChild(edit);
@@ -1839,7 +1843,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         if (legend.firstChild) wrap.appendChild(legend);
         const meta = s.total === 0
-          ? 'Move applications past Applied as you hear back to see your rate.'
+          ? 'No applications yet.'
           : s.responded + ' of ' + s.total + ' heard back' + (s.avgTurnaroundDays !== null
             ? '. Replies take ' + s.avgTurnaroundDays + (s.avgTurnaroundDays === 1 ? ' day' : ' days') + ' on average.'
             : '.');
@@ -1943,7 +1947,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const emptyNote = body.querySelector('.activity-empty');
     if (emptyNote) {
-      emptyNote.textContent = 'Nothing logged in the last ' + item.options.days + ' days. Each entry you log adds to this chart.';
+      emptyNote.textContent = item.options.days === WidgetLayout.ALL_DAYS ? 'Nothing logged yet.' : 'Nothing logged in the last ' + item.options.days + ' days.';
       emptyNote.classList.toggle('hidden', history.totalCount > 0);
     }
 
@@ -2067,18 +2071,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     const note = el('leetcode-time-note');
     if (!s.sessionCount) {
       el('lc-spark-wrap').classList.add('hidden');
-      note.textContent = 'Start the Solve Timer before a problem and log it with the plus button to record how long it took.';
+      note.textContent = 'Time a solve to see your trend.';
       note.classList.remove('hidden');
       return;
     }
+    note.classList.add('hidden');
     renderSpark(s);
+    // The trend reads from the sparkline; the sentence lives in its tooltip.
     let trend;
     if (s.sessionCount < 2) trend = 'your first timed solve.';
     else if (s.latestSeconds < s.medianSeconds) trend = fmt(s.medianSeconds - s.latestSeconds) + ' faster than your median.';
     else if (s.latestSeconds > s.medianSeconds) trend = fmt(s.latestSeconds - s.medianSeconds) + ' slower than your median.';
     else trend = 'right on your median.';
-    note.textContent = 'Latest solve ' + fmt(s.latestSeconds) + ', ' + trend;
-    note.classList.remove('hidden');
+    el('lc-spark-wrap').title = 'Latest solve ' + fmt(s.latestSeconds) + ', ' + trend;
   }
 
   function renderSpark(s) {
@@ -2449,7 +2454,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const name = make('div', 'widget-picker-name', t.name);
       if (t.isNew) name.appendChild(make('span', 'new-tag', 'New'));
       text.appendChild(name);
-      text.appendChild(make('div', 'widget-picker-desc', t.description));
+      row.title = t.description;
       const btn = make('button', 'widget-add-btn' + (t.added ? ' added' : ''), t.added ? 'Added' : 'Add');
       btn.type = 'button';
       btn.setAttribute('aria-label', (t.added ? 'Already added: ' : 'Add ') + t.name);
@@ -2648,7 +2653,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     ['widget-token-chart', 'widget-token-days', 'widget-token-stats'].forEach(id => el(id).classList.toggle('hidden', !isActivity));
     if (isActivity) {
       el('widget-chart-btn').textContent = CHART_LABELS[widgetDraft.chart];
-      el('widget-days-btn').textContent = widgetDraft.days + ' days';
+      const allDays = widgetDraft.days === WidgetLayout.ALL_DAYS;
+      const daysInput = el('widget-days-input');
+      if (!allDays && document.activeElement !== daysInput) daysInput.value = String(widgetDraft.days);
+      if (allDays) daysInput.value = '';
+      daysInput.disabled = allDays;
+      el('widget-days-unit').classList.toggle('hidden', allDays);
+      daysInput.classList.toggle('hidden', allDays);
+      el('widget-days-all-btn').setAttribute('aria-pressed', allDays ? 'true' : 'false');
       const statsBtn = el('widget-stats-btn');
       statsBtn.textContent = widgetDraft.showStats ? 'Shown' : 'Hidden';
       statsBtn.setAttribute('aria-pressed', widgetDraft.showStats ? 'true' : 'false');
@@ -2668,7 +2680,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     widgetRemoveArmed = false;
     widgetDraft = {
       metricId: metricById(item.options.metricId) ? item.options.metricId : WidgetLayout.ACTIVE,
-      days: item.options.days || 30,
+      days: WidgetLayout.normalizeDays(item.options.days, 30),
       showStats: item.options.showStats !== false,
       size: item.options.size,
       chart: item.options.chart || 'bar'
@@ -2679,11 +2691,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const remove = el('remove-widget-btn');
     remove.querySelector('span').textContent = 'Remove widget';
     remove.classList.remove('armed');
-    el('widget-settings-hint').textContent = spec.leetcodeOnly
-      ? 'This widget only appears while the LeetCode tracker is selected.'
-      : spec.jobsOnly
-        ? 'This widget only appears while the Job Applications tracker is selected.'
-        : (spec.singleton ? 'Removing this widget hides it; add it back any time with Add widget.' : 'Removing a widget never deletes any logged data.');
+    remove.title = spec.singleton
+      ? 'Hides this widget. Add it back any time with Add widget.'
+      : 'Removing a widget never deletes logged data.';
     openModal(el('widget-settings-modal'), 'metricId' in spec.defaults ? 'widget-metric-btn' : 'widget-size-btn');
   }
 
@@ -2724,16 +2734,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  el('widget-days-btn').addEventListener('click', () => {
+  // Length is typed, not picked: any count up to a year, or the word "all".
+  // The draft only moves on a valid value, so a half-typed number keeps the
+  // last good length until the field settles.
+  function readDaysInput() {
     if (!widgetDraft) return;
-    const items = WidgetLayout.ACTIVITY_DAYS.map(d => ({ value: String(d), label: d + ' days', selected: widgetDraft.days === d }));
-    openTokenPopover(el('widget-days-btn'), items, (value) => {
-      const days = parseInt(value, 10);
-      if (days === widgetDraft.days) return;
-      widgetDraft.days = days;
-      renderWidgetTokens();
-      flashToken(el('widget-days-btn'));
-    });
+    const raw = el('widget-days-input').value;
+    const days = WidgetLayout.normalizeDays(raw, null);
+    if (days === null || days === widgetDraft.days) return;
+    widgetDraft.days = days;
+    if (days === WidgetLayout.ALL_DAYS) renderWidgetTokens();
+  }
+  el('widget-days-input').addEventListener('input', readDaysInput);
+  el('widget-days-input').addEventListener('blur', () => {
+    readDaysInput();
+    renderWidgetTokens();
+  });
+  el('widget-days-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+  });
+  el('widget-days-all-btn').addEventListener('click', () => {
+    if (!widgetDraft) return;
+    const turningOn = widgetDraft.days !== WidgetLayout.ALL_DAYS;
+    widgetDraft.days = turningOn ? WidgetLayout.ALL_DAYS : 30;
+    renderWidgetTokens();
+    flashToken(el('widget-days-all-btn'));
+    if (!turningOn) { const i = el('widget-days-input'); i.focus(); i.select(); }
   });
 
   el('widget-stats-btn').addEventListener('click', () => {
@@ -2881,10 +2907,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     deleteBtn.textContent = 'Delete tracker';
     deleteBtn.classList.remove('armed');
     deleteBtn.classList.toggle('hidden', isBuiltIn);
-    el('metric-settings-hint').textContent = (isBuiltIn
-      ? 'Built-in trackers cannot be removed. '
-      : 'Deleting this tracker removes its tab; entries you already logged stay in storage and in your exports. ')
-      + 'Leave the weekly goal empty to turn it off.';
     openModal(el('metric-settings-modal'), focusId || 'metric-settings-goal');
   }
 
@@ -3288,9 +3310,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const s = await TrackerStorage.getStorageInfo();
       const where = s.backend === 'indexeddb' ? 'IndexedDB' : 'chrome.storage.local';
-      info.textContent = s.logCount.toLocaleString() + (s.logCount === 1 ? ' entry' : ' entries') + ' on this device (' + where + ').';
+      info.textContent = s.logCount.toLocaleString() + (s.logCount === 1 ? ' entry' : ' entries');
+      info.title = 'Stored in ' + where;
     } catch (err) {
-      info.textContent = 'Could not read storage: ' + errMsg(err);
+      info.textContent = 'Unavailable';
+      info.title = 'Could not read storage: ' + errMsg(err);
     }
   }
 
@@ -3306,7 +3330,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     list.textContent = '';
     if (!snaps.length) {
-      list.appendChild(make('li', 'snap-meta', 'No snapshots yet. LIT takes one automatically each week, or take one now.'));
+      list.appendChild(make('li', 'snap-empty', 'No snapshots yet'));
       return;
     }
     snaps.forEach(s => {

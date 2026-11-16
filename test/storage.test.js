@@ -372,6 +372,14 @@ async function run() {
     const jobsTotal = logs.filter(l => l.metricId === 'jobs' && l.date > TrackerStorage.addDays(today, -60)).reduce((s, l) => s + l.count, 0);
     assert.strictEqual(history.totalCount, jobsTotal, '60-day history reads from the aggregates');
 
+    const all = await TrackerStorage.getActivityHistory('all', 'jobs');
+    const earliestJobs = logs.filter(l => l.metricId === 'jobs').map(l => l.date).sort()[0];
+    assert.strictEqual(all.days[0].date, earliestJobs, 'entire history starts on the first logged day for that tracker');
+    assert.strictEqual(all.days[all.days.length - 1].date, today, 'and ends today');
+    assert.strictEqual(all.totalCount, logs.filter(l => l.metricId === 'jobs').reduce((s, l) => s + l.count, 0), 'entire history counts everything');
+    const fresh = await TrackerStorage.getActivityHistory('all', 'nothing-logged-here');
+    assert.strictEqual(fresh.days.length, 7, 'an empty history still charts a week');
+
     console.log('[PASS] Daily aggregates match the logs through edits and deletes (' + flavor + ')');
     cleanup();
   }

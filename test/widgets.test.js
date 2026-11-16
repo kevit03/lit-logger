@@ -47,7 +47,7 @@ async function run() {
       null,
       { id: 't1', type: 'timer' },
       { id: 't2', type: 'timer' },
-      { id: 'c', type: 'activity', options: { days: 12, showStats: 'yes', collapsed: 1, metricId: '', chart: 'pie', size: 'huge' } },
+      { id: 'c', type: 'activity', options: { days: -12, showStats: 'yes', collapsed: 1, metricId: '', chart: 'pie', size: 'huge' } },
       { id: 'd', type: 'activity', options: { days: '60', showStats: false, chart: 'heatmap', size: 'compact' } },
       { id: 'p', type: 'pipeline', options: { metricId: 'leetcode', size: 'compact', collapsed: 'yes', junk: 1 } },
       { id: 'proto', type: '__proto__' },
@@ -120,8 +120,17 @@ async function run() {
     items = await W.update(actId, { days: 14, metricId: 'jobs', collapsed: true, chart: 'area', size: 'compact' });
     const act = items.find(i => i.id === actId);
     assert.deepStrictEqual(act.options, { metricId: 'jobs', days: 14, chart: 'area', showStats: true, size: 'compact', collapsed: true });
-    items = await W.update(actId, { options: { days: 99 } });
+    items = await W.update(actId, { options: { days: 999 } });
     assert.strictEqual(items.find(i => i.id === actId).options.days, 30, 'an invalid update falls back to the default, not the old value');
+    items = await W.update(actId, { days: 99 });
+    assert.strictEqual(items.find(i => i.id === actId).options.days, 99, 'any day count up to a year is accepted');
+    items = await W.update(actId, { days: 'all' });
+    assert.strictEqual(items.find(i => i.id === actId).options.days, 'all', 'the entire history is an option');
+    assert.strictEqual(W.normalizeDays(' All ', 30), 'all');
+    assert.strictEqual(W.normalizeDays('0', 30), 30);
+    assert.strictEqual(W.normalizeDays('367', 30), 30);
+    assert.strictEqual(W.normalizeDays('12.5', 30), 30);
+    assert.strictEqual(W.normalizeDays(366, 30), 366);
     assert.strictEqual(items.find(i => i.id === actId).options.metricId, 'jobs', 'untouched options survive an update');
 
     // Drag and drop: drop before a neighbour, or at the end.

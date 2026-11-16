@@ -79,7 +79,7 @@
     },
     {
       title: 'EEO',
-      note: 'Voluntary self-identification. Each answer is left blank unless you pick one, and nothing here is filled unless "Fill EEO questions" is on in Settings.',
+      note: 'Filled only while "Fill EEO questions" is on in Settings.',
       fields: [
         { key: 'eeo.gender', label: 'Gender', options: opts(['Male', 'Female', 'Non-binary', 'Decline to self-identify']) },
         { key: 'eeo.race', label: 'Race or ethnicity', options: opts([
@@ -301,20 +301,18 @@
             autocomplete: f.autocomplete || 'off',
             placeholder: f.placeholder || '',
             inputmode: f.inputmode,
-            spellcheck: 'false',
-            'aria-describedby': f.hint ? id + '-hint' : null
+            spellcheck: 'false'
           });
           control.addEventListener('blur', () => saveProfileField(f.key, control));
           control.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); control.blur(); } });
         }
-        if (f.options && f.hint) control.setAttribute('aria-describedby', id + '-hint');
+        // Hints ride along as the control's tooltip (and accessible
+        // description) instead of a line of text under every field.
+        if (f.hint) control.title = f.hint;
         profileControls[f.key] = control;
-        // Hints are always visible under the field, so they work on touch and
-        // keyboard too (no hover-only tooltips).
         grid.appendChild(make('div', { className: 'field' + (f.wide ? ' wide' : '') }, [
           make('label', { className: 'field-label', for: id, text: f.label }),
-          f.stepper ? stepper(f, control) : control,
-          f.hint ? make('span', { className: 'field-hint', id: id + '-hint', text: f.hint }) : null
+          f.stepper ? stepper(f, control) : control
         ]));
       });
       set.appendChild(grid);
@@ -391,7 +389,7 @@
     const download = el('resume-download');
     if (!resume) {
       el('resume-name').textContent = 'No resume uploaded';
-      el('resume-meta').textContent = 'Upload one so LIT can attach it when an application asks for a resume.';
+      el('resume-meta').textContent = 'PDF, DOC, DOCX, RTF or TXT, up to 5 MB';
       el('resume-upload-btn').textContent = 'Upload resume';
       download.removeAttribute('href');
       show(download, false);
@@ -470,7 +468,7 @@
     } else {
       // Starting points instead of a blank list: each opens the new-answer
       // form with the question filled in.
-      empty.appendChild(make('p', { text: 'No saved answers yet. LIT adds one when you write a long answer on an application. Or start from a common question:' }));
+      empty.appendChild(make('p', { text: 'No saved answers yet. Start from a common question:' }));
       empty.appendChild(make('div', { className: 'template-list' }, ANSWER_TEMPLATES.map(q => {
         const b = make('button', { type: 'button', className: 'btn btn-ghost btn-sm template-btn', text: q });
         b.addEventListener('click', () => openNewAnswer(q));
@@ -612,8 +610,8 @@
       empty.appendChild(make('p', { text: 'No rules match "' + rulesSearch.value.trim() + '".' }));
     } else if (!currentSettings.autoLearn) {
       // The likely reason for an empty list, with the fix one click away.
-      empty.appendChild(make('p', { text: 'No learned rules yet. Learn from corrections is off, so fixes you make on applications are not saved.' }));
-      const on = make('button', { type: 'button', className: 'btn btn-ghost btn-sm', text: 'Turn on Learn from corrections' });
+      empty.appendChild(make('p', { text: 'No rules yet. Learn from corrections is off.' }));
+      const on = make('button', { type: 'button', className: 'btn btn-ghost btn-sm', text: 'Turn it on' });
       on.addEventListener('click', async () => {
         try {
           renderSettings(await write(store.saveSettings({ autoLearn: true })));
@@ -623,7 +621,7 @@
       });
       empty.appendChild(on);
     } else {
-      empty.appendChild(make('p', { text: 'No learned rules yet. Autofill an application, then fix any field LIT got wrong. LIT remembers the fix here and uses it next time.' }));
+      empty.appendChild(make('p', { text: 'No rules yet. Fix a field after autofill and LIT remembers it here.' }));
     }
     show(empty, !visible.length);
   }
@@ -823,7 +821,11 @@
 
   function markActiveSection() {
     navFrame = 0;
-    const offset = document.querySelector('.topbar').offsetHeight + 24;
+    // A section is current once it has scrolled up to where an anchor jump
+    // lands it (html scroll-padding-top covers the sticky bar on narrow
+    // layouts), plus a little slack.
+    const padding = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+    const offset = padding + 24;
     let current = navLinks[0];
     navLinks.forEach(link => {
       const section = document.getElementById(link.getAttribute('href').slice(1));

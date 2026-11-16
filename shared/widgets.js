@@ -14,7 +14,8 @@
 //   collapsed  accordion state; a collapsed widget shows only its header
 // Options some widgets have:
 //   metricId   'active' (follow the selected tab) or a tracker id
-//   days       activity chart length
+//   days       activity chart length: a day count (1 to 366) or 'all' for
+//              the entire history
 //   chart      'bar' | 'area' | 'heatmap'
 //   showStats  activity totals row
 //
@@ -24,7 +25,11 @@ const WidgetLayout = (() => {
   const STORAGE_KEY = 'pt_widgets';
   const VERSION = 2;
   const ACTIVE = 'active';
-  const ACTIVITY_DAYS = [7, 14, 30, 60];
+  // Quick picks for the activity length; any count up to MAX_ACTIVITY_DAYS
+  // can be typed, and ALL_DAYS charts the entire history.
+  const ACTIVITY_DAYS = [7, 14, 30, 60, 90, 180, 365];
+  const ALL_DAYS = 'all';
+  const MAX_ACTIVITY_DAYS = 366;
   const CHART_MODES = ['bar', 'area', 'heatmap'];
   const SIZES = ['compact', 'expanded'];
 
@@ -45,7 +50,7 @@ const WidgetLayout = (() => {
     },
     activity: {
       name: 'Activity Chart',
-      description: 'Bars, a sparkline, or a contribution heatmap for the last 7 to 60 days.',
+      description: 'Bars, a sparkline, or a contribution heatmap for any number of days, or your entire history.',
       singleton: false,
       defaultSize: 'expanded',
       defaults: { metricId: ACTIVE, days: 30, chart: 'bar', showStats: true }
@@ -180,6 +185,16 @@ const WidgetLayout = (() => {
     }
   }
 
+  // 'all', or a whole number of days from 1 to MAX_ACTIVITY_DAYS; anything
+  // else is the fallback.
+  function normalizeDays(value, fallback) {
+    if (value === ALL_DAYS) return ALL_DAYS;
+    if (typeof value === 'string' && value.trim().toLowerCase() === ALL_DAYS) return ALL_DAYS;
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^\s*\d+\s*$/.test(value) ? parseInt(value, 10) : NaN);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_ACTIVITY_DAYS) return fallback;
+    return n;
+  }
+
   function normalizeOptions(type, raw) {
     const spec = TYPES[type];
     const out = Object.assign({}, spec.defaults);
@@ -188,8 +203,7 @@ const WidgetLayout = (() => {
       out.metricId = typeof input.metricId === 'string' && input.metricId ? input.metricId : ACTIVE;
     }
     if (type === 'activity') {
-      const days = parseInt(input.days, 10);
-      out.days = ACTIVITY_DAYS.includes(days) ? days : spec.defaults.days;
+      out.days = normalizeDays(input.days, spec.defaults.days);
       out.chart = CHART_MODES.includes(input.chart) ? input.chart : spec.defaults.chart;
       out.showStats = input.showStats === undefined ? spec.defaults.showStats : !!input.showStats;
     }
@@ -337,6 +351,9 @@ const WidgetLayout = (() => {
     VERSION,
     ACTIVE,
     ACTIVITY_DAYS,
+    ALL_DAYS,
+    MAX_ACTIVITY_DAYS,
+    normalizeDays,
     CHART_MODES,
     SIZES,
     TYPES,

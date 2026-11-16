@@ -112,7 +112,17 @@ function extendChrome(mock) {
   };
   mock.windows = { created: [], async create(opts) { this.created.push(opts); return { id: 9 }; } };
   mock.notifications = { created: [], create(id, opts) { this.created.push({ id, opts }); } };
-  mock.tabs = { active: null, query(q, cb) { cb(this.active ? [this.active] : []); } };
+  mock.tabs = {
+    active: null,
+    created: [],
+    updated: [],
+    query(q, cb) {
+      if (q && q.url) { cb(this.created.filter(t => t.url === q.url)); return; }
+      cb(this.active ? [this.active] : []);
+    },
+    async create(opts) { const tab = Object.assign({ id: 100 + this.created.length, windowId: 1 }, opts); this.created.push(tab); return tab; },
+    async update(id, opts) { this.updated.push({ id, opts }); return { id }; }
+  };
   mock.runtime.onStartup = bus();
   mock.runtime.onInstalled = bus();
   mock.runtime.getManifest = () => require(path.join(ROOT, 'manifest.json'));
@@ -463,6 +473,44 @@ async function run() {
     assert.strictEqual((await storage.listSnapshots()).length, 1, 'at most one automatic snapshot a week');
     unload();
     console.log('[PASS] Maintenance: alarm and menus on install; one automatic snapshot a week');
+  }
+
+  // 8. Daily reminder: one alarm at the preferred local time; firing opens
+  // the check-in page once and books tomorrow; prefs move or clear it.
+  {
+    const { mock, sw, storage } = loadWorker();
+    const noon = new Date(2026, 0, 5, 12, 0, 0).getTime();
+    const todayAt1430 = new Date(2026, 0, 5, 14, 30, 0).getTime();
+    assert.strictEqual(sw.nextReminderAt('14:30', noon), todayAt1430, 'later today when the time is still ahead');
+    assert.strictEqual(sw.nextReminderAt('09:00', noon), new Date(2026, 0, 6, 9, 0, 0).getTime(), 'tomorrow once it has passed');
+    assert.strictEqual(sw.nextReminderAt('garbage', noon), todayAt1430, 'an unreadable time falls back to 2:30 PM');
+
+    mock.runtime.onInstalled.emit({ reason: 'install' });
+    await settle(80);
+    const booked = mock.alarms.store.get('pt-reminder');
+    assert.ok(booked && booked.when > Date.now(), 'install books the reminder');
+    assert.strictEqual(booked.periodInMinutes, undefined, 'a fixed time, not a period');
+
+    mock.alarms.onAlarm.emit({ name: 'pt-reminder' });
+    await settle(80);
+    assert.strictEqual(mock.tabs.created.length, 1, 'firing opens the reminder page');
+    assert.ok(mock.tabs.created[0].url.endsWith('reminder/reminder.html'));
+    assert.ok(mock.alarms.store.get('pt-reminder'), 'and books the next one');
+
+    mock.alarms.onAlarm.emit({ name: 'pt-reminder' });
+    await settle(80);
+    assert.strictEqual(mock.tabs.created.length, 1, 'an open reminder tab is reused');
+    assert.strictEqual(mock.tabs.updated.length, 1);
+
+    await storage.setPrefs({ reminderTime: '09:15' });
+    await settle(80);
+    assert.strictEqual(new Date(mock.alarms.store.get('pt-reminder').when).getHours(), 9, 'a new time rebooks the alarm');
+
+    await storage.setPrefs({ reminderEnabled: false });
+    await settle(80);
+    assert.strictEqual(mock.alarms.store.get('pt-reminder'), undefined, 'turning it off clears the alarm');
+    unload();
+    console.log('[PASS] Daily reminder: booked on install, opens the page once, follows the prefs');
   }
 
   console.log('--- test/service-worker.test.js COMPLETED SUCCESSFULLY ---\n');
