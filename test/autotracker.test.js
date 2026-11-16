@@ -584,6 +584,7 @@ async function run() {
   {
     installMockChrome();
     const core = fresh('shared/auto-tracker-core.js');
+    loadJobMeta();
     loadAdapters(core, ATS_ADAPTERS);
     const ats = global.AutoTrackerATS;
     const MO = dom.FakeMutationObserver;
@@ -596,9 +597,14 @@ async function run() {
     assert.deepStrictEqual(ats.parseTitle('Acme - Software Engineer', { companyFirst: true }), { company: 'Acme', role: 'Software Engineer' });
     assert.deepStrictEqual(ats.parseTitle('Software Engineer | Acme Careers'), { role: 'Software Engineer', company: 'Acme' });
     assert.deepStrictEqual(ats.parseTitle(''), { role: '', company: '' });
+    assert.deepStrictEqual(ats.parseTitle('Engineer at Scale @ Acme'), { role: 'Engineer at Scale', company: 'Acme' });
 
-    // Greenhouse: confirmation URL logs on mount, with metadata.
+    const reset = () => { ats._reset(); installMockChrome(); core._resetSharedCache(); };
+    const freshNav = type => ({ performance: { getEntriesByType: () => [{ type }] } });
+
+    // Greenhouse: confirmation URL logs on arrival, with metadata.
     {
+      reset();
       const doc = dom.installDom();
       doc.title = 'Job Application for Research Engineer at Anthropic';
       doc.body.appendChild(dom.el(doc, 'h1.app-title', { text: 'Research Engineer' }));
@@ -607,6 +613,7 @@ async function run() {
       const adapter = core.getActiveAdapter(href);
       const onSuccess = collect();
       const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      await settle();
       assert.strictEqual(onSuccess.calls.length, 1);
       assert.deepStrictEqual(onSuccess.calls[0], { id: 'job-4012345', title: 'Research Engineer at Anthropic', company: 'Anthropic', role: 'Research Engineer' });
       assert.strictEqual(MO.activeCount(), 0, 'URL-confirmed mount leaves no observer behind');
@@ -614,8 +621,63 @@ async function run() {
       teardown();
     }
 
+    // A reloaded or restored confirmation page is not a new application.
+    for (const type of ['reload', 'back_forward']) {
+      reset();
+      const doc = dom.installDom();
+      const href = 'https://job-boards.greenhouse.io/anthropic/jobs/4012345/confirmation';
+      const onSuccess = collect();
+      const ctx = Object.assign(makeCtx(doc, href), { window: freshNav(type) });
+      const teardown = core.getActiveAdapter(href).init(onSuccess, ctx);
+      await settle();
+      assert.strictEqual(onSuccess.calls.length, 0, type + ' of a confirmation page logs nothing');
+      teardown();
+    }
+
+    // Greenhouse embed (the form companies host on their own careers page):
+    // the job is ?token=, and the thank-you page carries a custom heading and
+    // no role. The role and company come from the form seen before it.
+    {
+      reset();
+      const formDoc = dom.installDom();
+      formDoc.title = 'Job Application for Abuse Investigator (Remote - US) at Stripe';
+      formDoc.body.appendChild(dom.el(formDoc, 'h2.section-header', { text: 'Apply for this job' }));
+      const submit = dom.el(formDoc, 'button[type="submit"]', { text: 'Submit application' });
+      formDoc.body.appendChild(submit);
+      const formHref = 'https://job-boards.greenhouse.io/embed/job_app?for=stripe&token=8172508';
+      const adapter = core.getActiveAdapter(formHref);
+      const quiet = collect();
+      const td1 = adapter.init(quiet, makeCtx(formDoc, formHref));
+      assert.deepStrictEqual(adapter._internals.readDetails(new URL(formHref), formDoc), { company: 'Stripe', role: 'Abuse Investigator', id: 'job-8172508' });
+      submit.dispatchEvent(dom.makeEvent('click', submit));
+      await settle();
+      td1();
+      assert.strictEqual(quiet.calls.length, 0);
+
+      // Full page load of the confirmation: module memory is gone, session
+      // storage is not.
+      ats._reset();
+      const doneDoc = dom.installDom();
+      doneDoc.title = 'Thank you';
+      doneDoc.body.appendChild(dom.el(doneDoc, 'h1', { text: 'Thanks for your interest in Stripe! We review every application we receive' }));
+      const doneHref = 'https://job-boards.greenhouse.io/embed/job_app/confirmation?for=stripe&token=8172508';
+      const onSuccess = collect();
+      const td2 = core.getActiveAdapter(doneHref).init(onSuccess, Object.assign(makeCtx(doneDoc, doneHref), { window: freshNav('navigate') }));
+      await settle();
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual(onSuccess.calls[0], { id: 'job-8172508', title: 'Abuse Investigator at Stripe', company: 'Stripe', role: 'Abuse Investigator' });
+      td2();
+
+      // A second role at the same company the same day has its own id.
+      const other = adapter._internals.buildPayload(new URL('https://job-boards.greenhouse.io/embed/job_app/confirmation?for=stripe&token=8172999'), doneDoc);
+      assert.strictEqual(other.id, 'job-8172999');
+      assert.strictEqual(other.company, 'Stripe');
+      assert.strictEqual(other.role, '', 'a thank-you heading is never taken for the role');
+    }
+
     // Greenhouse: job page, in-place confirmation requires an interaction first.
     {
+      reset();
       const doc = dom.installDom();
       doc.title = 'Job Application for Research Engineer at Anthropic';
       doc.body.appendChild(dom.el(doc, 'h1.app-title', { text: 'Research Engineer' }));
@@ -627,8 +689,9 @@ async function run() {
       const adapter = core.getActiveAdapter(href);
       const onSuccess = collect();
       const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      await settle();
       assert.strictEqual(onSuccess.calls.length, 0, 'a job page is not a confirmation');
-      assert.strictEqual(MO.activeCount(), 1, 'one body observer while waiting');
+      assert.strictEqual(MO.activeCount(), 0, 'nothing is observed before the user acts');
 
       const stale = dom.el(doc, 'div#application_confirmation', { text: 'Thank you for applying' });
       doc.body.appendChild(stale);
@@ -636,19 +699,23 @@ async function run() {
       assert.strictEqual(onSuccess.calls.length, 0, 'confirmation markup without any interaction is ignored');
 
       form.dispatchEvent(dom.makeEvent('submit', form));
-      const real = dom.el(doc, 'div', { children: [dom.el(doc, 'h1', { text: 'Research Engineer' }), dom.el(doc, 'div#application_confirmation', { text: 'Thank you for applying' })] });
+      assert.strictEqual(onSuccess.calls.length, 0, 'a message already on screen when the button was pressed is not a confirmation');
+      assert.strictEqual(MO.activeCount(), 1, 'one body observer while waiting');
+      const real = dom.el(doc, 'div', { children: [dom.el(doc, 'h1', { text: 'Research Engineer' }), dom.el(doc, 'div.application-confirmation', { text: 'Thank you for applying' })] });
       doc.body.appendChild(real);
       dom.emitAdded(real);
       assert.strictEqual(onSuccess.calls.length, 1, 'confirmation after a submit counts, even when it is not the first heading in the container');
       assert.strictEqual(onSuccess.calls[0].id, 'job-4012345');
       assert.strictEqual(onSuccess.calls[0].company, 'Anthropic');
+      assert.strictEqual(onSuccess.calls[0].role, 'Research Engineer');
       assert.strictEqual(MO.activeCount(), 0);
       assert.strictEqual(doc.body.listenerCount(), 0, 'fired adapter tore itself down');
       teardown();
     }
 
-    // Greenhouse embedded iframe: company from ?for=.
+    // Greenhouse embedded iframe: company from ?for=, job from ?token=.
     {
+      reset();
       const doc = dom.installDom();
       doc.body.appendChild(dom.el(doc, 'h1.app-title', { text: 'Designer' }));
       const href = 'https://boards.greenhouse.io/embed/job_app?for=acme-labs&token=99';
@@ -656,36 +723,44 @@ async function run() {
       const p = adapter._internals.buildPayload(new URL(href), doc);
       assert.strictEqual(p.company, 'Acme Labs');
       assert.strictEqual(p.role, 'Designer');
-      assert.strictEqual(p.id, 'acme-labs-designer', 'no job id in the embed URL, so company+role is the item id');
+      assert.strictEqual(p.id, 'job-99');
     }
 
-    // Lever: /thanks.
+    // Lever: the posting names the job; /thanks does not.
     {
-      const doc = dom.installDom();
-      doc.title = 'Acme - Backend Engineer';
-      doc.body.appendChild(dom.el(doc, 'div.posting-headline', { children: [dom.el(doc, 'h2', { text: 'Backend Engineer' })] }));
-      const href = 'https://jobs.lever.co/acme/8f1a2b3c-1111-2222-3333-444455556666/thanks';
-      const adapter = core.getActiveAdapter(href);
-      const onSuccess = collect();
-      adapter.init(onSuccess, makeCtx(doc, href))();
-      assert.strictEqual(onSuccess.calls.length, 1);
-      assert.deepStrictEqual(onSuccess.calls[0], { id: 'posting-8f1a2b3c-1111-2222-3333-444455556666', title: 'Backend Engineer at Acme', company: 'Acme', role: 'Backend Engineer' });
-      const apply = core.getActiveAdapter('https://jobs.lever.co/acme/8f1a2b3c-1111-2222-3333-444455556666/apply');
+      reset();
+      const posting = dom.installDom();
+      posting.title = 'Acme - Backend Engineer';
+      posting.body.appendChild(dom.el(posting, 'div.posting-headline', { children: [dom.el(posting, 'h2', { text: 'Backend Engineer' })] }));
+      const base = 'https://jobs.lever.co/acme/8f1a2b3c-1111-2222-3333-444455556666';
       const quiet = collect();
-      const td = apply.init(quiet, makeCtx(dom.installDom(), 'https://jobs.lever.co/acme/8f1a2b3c-1111-2222-3333-444455556666/apply'));
+      const td = core.getActiveAdapter(base + '/apply').init(quiet, makeCtx(posting, base + '/apply'));
+      await settle();
       assert.strictEqual(quiet.calls.length, 0, '/apply is not a confirmation');
       td();
       assert.strictEqual(MO.activeCount(), 0);
+
+      ats._reset();
+      const thanks = dom.installDom();
+      thanks.title = 'Acme';
+      thanks.body.appendChild(dom.el(thanks, 'h3', { text: 'Application submitted!' }));
+      const onSuccess = collect();
+      core.getActiveAdapter(base + '/thanks').init(onSuccess, makeCtx(thanks, base + '/thanks'));
+      await settle();
+      assert.strictEqual(onSuccess.calls.length, 1);
+      assert.deepStrictEqual(onSuccess.calls[0], { id: 'posting-8f1a2b3c-1111-2222-3333-444455556666', title: 'Backend Engineer at Acme', company: 'Acme', role: 'Backend Engineer' });
     }
 
-    // Ashby: in-place success block after clicking submit.
+    // Ashby: in-place success block after clicking submit. Headings inside
+    // the job description are not the role.
     {
+      reset();
       const doc = dom.installDom();
-      doc.title = 'Product Engineer @ Acme';
-      doc.body.appendChild(dom.el(doc, 'h1', { text: 'Product Engineer' }));
+      doc.title = 'Software Engineer, Security, Cloud @ Ramp';
+      doc.body.appendChild(dom.el(doc, 'h1', { text: 'About the Role' }));
       const button = dom.el(doc, 'button', { text: 'Submit Application' });
       doc.body.appendChild(button);
-      const href = 'https://jobs.ashbyhq.com/acme/8f1a2b3c-1111-2222-3333-444455556666/application';
+      const href = 'https://jobs.ashbyhq.com/ramp/8f1a2b3c-1111-2222-3333-444455556666/application';
       const adapter = core.getActiveAdapter(href);
       const onSuccess = collect();
       const teardown = adapter.init(onSuccess, makeCtx(doc, href));
@@ -694,29 +769,55 @@ async function run() {
       doc.body.appendChild(success);
       dom.emitAdded(success);
       assert.strictEqual(onSuccess.calls.length, 1);
-      assert.deepStrictEqual(onSuccess.calls[0], { id: 'job-8f1a2b3c-1111-2222-3333-444455556666', title: 'Product Engineer at Acme', company: 'Acme', role: 'Product Engineer' });
+      assert.deepStrictEqual(onSuccess.calls[0], { id: 'job-8f1a2b3c-1111-2222-3333-444455556666', title: 'Software Engineer, Security, Cloud at Ramp', company: 'Ramp', role: 'Software Engineer, Security, Cloud' });
       teardown();
       assert.strictEqual(MO.activeCount(), 0);
     }
 
-    // Workday: text banner after the submit click; company from the tenant.
+    // A message in a plain paragraph, and one written into an existing node,
+    // both count once the user has pressed a button.
     {
+      reset();
       const doc = dom.installDom();
-      doc.title = 'Software Engineer II';
-      doc.body.appendChild(dom.el(doc, 'h2[data-automation-id="jobPostingHeader"]', { text: 'Software Engineer II' }));
+      doc.title = 'Designer @ Acme';
+      const button = dom.el(doc, 'button', { text: 'Submit' });
+      const status = dom.el(doc, 'p', { text: 'Submitting...' });
+      doc.body.appendChild(button);
+      doc.body.appendChild(status);
+      const href = 'https://jobs.ashbyhq.com/acme/8f1a2b3c-1111-2222-3333-444455556666/application';
+      const onSuccess = collect();
+      const teardown = core.getActiveAdapter(href).init(onSuccess, makeCtx(doc, href));
+      button.dispatchEvent(dom.makeEvent('click', button));
+      dom.setText(status, 'Your application was successfully submitted.');
+      assert.strictEqual(onSuccess.calls.length, 1, 'an in-place text change is a confirmation');
+      teardown();
+    }
+
+    // Workday: text banner after the submit click; company from the tenant,
+    // role from the listing segment when the step has no posting header. The
+    // arm survives the route change between steps.
+    {
+      reset();
+      const doc = dom.installDom();
+      doc.title = 'Careers';
+      doc.body.appendChild(dom.el(doc, 'h2', { text: 'My Experience' }));
       const button = dom.el(doc, 'button[data-automation-id="bottom-navigation-next-button"]', { text: 'Submit' });
       doc.body.appendChild(button);
-      const href = 'https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Software-Engineer-II_JR1990001/apply/applyManually';
-      const adapter = core.getActiveAdapter(href);
-      const onSuccess = collect();
-      const teardown = adapter.init(onSuccess, makeCtx(doc, href));
+      const base = 'https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Software-Engineer-II_JR1990001';
+      const adapter = core.getActiveAdapter(base + '/apply/applyManually');
+      const stepOne = collect();
+      const td1 = adapter.init(stepOne, makeCtx(doc, base + '/apply/applyManually'));
 
+      button.dispatchEvent(dom.makeEvent('click', button));
       const noise = dom.el(doc, 'div[data-automation-id="progressBar"]', { text: 'Step 4 of 4: Review' });
       doc.body.appendChild(noise);
       dom.emitAdded(noise);
       assert.strictEqual(MO.activeCount(), 1, 'Workday automation-id noise does not spawn scoped observers');
+      td1();
 
-      button.dispatchEvent(dom.makeEvent('click', button));
+      const onSuccess = collect();
+      const td2 = adapter.init(onSuccess, makeCtx(doc, base + '/apply/review'));
+      assert.strictEqual(MO.activeCount(), 1, 'still armed after the route change');
       const banner = dom.el(doc, 'div[data-automation-id="applicationSubmittedMessage"]', { text: 'Congratulations, your application has been submitted.' });
       doc.body.appendChild(banner);
       dom.emitAdded(banner);
@@ -724,12 +825,13 @@ async function run() {
       assert.strictEqual(onSuccess.calls[0].company, 'Nvidia');
       assert.strictEqual(onSuccess.calls[0].role, 'Software Engineer II');
       assert.strictEqual(onSuccess.calls[0].id, 'job-Software-Engineer-II_JR1990001');
-      teardown();
+      td2();
       assert.strictEqual(MO.activeCount(), 0);
     }
 
     // Arm window: an interaction long ago does not validate a later confirmation.
     {
+      reset();
       const doc = dom.installDom();
       const button = dom.el(doc, 'button', { text: 'Next' });
       doc.body.appendChild(button);
@@ -755,8 +857,9 @@ async function run() {
 
     core._setClock(null);
     core.clearAdapters();
+    delete global.JobMeta;
     uninstallMockChrome();
-    console.log('[PASS] ATS adapters: URL and in-place confirmations, interaction gating, metadata for all four systems');
+    console.log('[PASS] ATS adapters: URL and in-place confirmations, interaction gating, remembered job details, metadata for all four systems');
   }
 
   // -------------------------------------------------------------------------
@@ -948,6 +1051,35 @@ async function run() {
     assert.strictEqual(meta.cleanRole('Acme Careers - Backend Engineer', 'Acme'), 'Backend Engineer');
     assert.strictEqual(meta.cleanRole('Data Analyst | Globex Jobs', ''), 'Data Analyst');
     assert.strictEqual(meta.cleanRole('Thank you for applying', 'Acme'), '', 'generic headings are not roles');
+    // Entries are named by the role and the company, nothing else.
+    for (const [raw, company, expected] of [
+      ['Job Application for Abuse Investigator at Stripe', 'Stripe', 'Abuse Investigator'],
+      ['Senior Software Engineer, Backend (Remote - US)', '', 'Senior Software Engineer, Backend'],
+      ['Software Engineer II - REQ12345', '', 'Software Engineer II'],
+      ['Software Engineer (R-0012345)', '', 'Software Engineer'],
+      ['Staff Engineer - New York, NY', '', 'Staff Engineer'],
+      ['Account Executive, Mid-Market | Hybrid', '', 'Account Executive, Mid-Market'],
+      ['Software Engineer Intern - Summer 2026', '', 'Software Engineer Intern - Summer 2026'],
+      ['Remote Support Agent', '', 'Remote Support Agent'],
+      ['Thanks for your interest in Stripe!', 'Stripe', ''],
+      ['Your application has been received', '', '']
+    ]) {
+      assert.strictEqual(meta.cleanRole(raw, company), expected, 'role for ' + raw);
+    }
+    const longRole = meta.cleanRole('Principal Machine Learning Engineer, Applied Research and Large Scale Distributed Training Infrastructure Platform Team, Search Ranking', '');
+    assert.strictEqual(longRole, 'Principal Machine Learning Engineer', 'a long title is cut at a separator');
+    assert.ok(meta.cleanRole('A'.repeat(30) + ' ' + 'B'.repeat(200), '').length <= meta.ROLE_MAX);
+    assert.strictEqual(meta.cleanCompany('Stripe, Inc.'), 'Stripe');
+    assert.strictEqual(meta.cleanCompany('at Anthropic'), 'Anthropic');
+    assert.strictEqual(meta.companyFromUrl('https://www.linkedin.com/jobs/view/4001'), '', 'a job board is never the employer');
+    {
+      const board = jobPage({ title: 'Staff Engineer | Hooli | LinkedIn' });
+      const d = meta.extract(board, 'https://www.linkedin.com/jobs/view/4001');
+      assert.deepStrictEqual([d.company, d.role], ['Hooli', 'Staff Engineer']);
+    }
+    assert.ok(meta.isSuccessText('Thank you for your job application.'));
+    assert.ok(meta.isSuccessText('Your application was successfully submitted.'));
+    assert.ok(meta.atsFor('acme.teamtailor.com') && meta.atsFor('jobs.gem.com') && meta.atsFor('eeho.fa.us2.oraclecloud.com'));
     assert.strictEqual(meta.cleanCompany('Vandelay Industries Careers'), 'Vandelay Industries');
     assert.strictEqual(meta.cleanCompany('Workable'), '', 'an ATS name is never the employer');
 
@@ -1039,7 +1171,7 @@ async function run() {
       assert.strictEqual(p.role, 'Senior Robotics Engineer');
       assert.strictEqual(p.id, 'apply.workable.com:4f2c9a1b7d');
       assert.strictEqual(p.url, 'https://apply.workable.com/acme-robotics/j/4F2C9A1B7D/apply/');
-      assert.strictEqual(p.notes, 'Auto-logged from Workable | Senior Robotics Engineer at Acme Robotics');
+      assert.strictEqual(p.notes, 'Auto-logged from Workable');
       assert.strictEqual(MO.activeCount(), 0, 'fired adapter disconnects everything');
       teardown();
       assert.strictEqual(doc.body.listenerCount(), 0);
@@ -1187,6 +1319,37 @@ async function run() {
       assert.deepStrictEqual([onNext.calls[0].company, onNext.calls[0].role, onNext.calls[0].id], ['Vandelay Industries', 'Import Export Analyst', 'careers.vandelay.com:909']);
       assert.ok(!chrome.storage.session.store[adapter._internals.ARM_STORE_KEY]['https://careers.vandelay.com'], 'the intent is consumed');
       td2();
+    }
+
+    // 8b. Server-rendered systems post the form and render the thank-you
+    // message at a URL that says nothing. The persisted intent still counts,
+    // and the message is already on the page when the script arrives.
+    {
+      adapter._internals.reset();
+      const form = dom.el(dom.installDom(), 'form');
+      const doc = jobPage({ meta: [['og:site_name', 'Initech Careers']], body: [d => dom.el(d, 'h1', { text: 'TPS Report Analyst (Remote - US)' }), form] });
+      const td = adapter.init(collect(), makeCtx(doc, 'https://careers.initech.com/jobs/3141/apply'));
+      form.dispatchEvent(dom.makeEvent('submit', form));
+      await settle();
+      td();
+
+      adapter = load();
+      const next = jobPage({ title: 'Initech', body: [d => dom.el(d, 'h2', { text: 'Thank you for applying!' })] });
+      const onNext = collect();
+      const td2 = adapter.init(onNext, makeCtx(next, 'https://careers.initech.com/portal/step?id=77'));
+      await settle();
+      assert.strictEqual(onNext.calls.length, 1, 'a thank-you page at an unremarkable URL is logged after a submit');
+      assert.deepStrictEqual([onNext.calls[0].company, onNext.calls[0].role], ['Initech', 'TPS Report Analyst']);
+      assert.strictEqual(onNext.calls[0].notes, 'Auto-logged from careers.initech.com');
+      td2();
+
+      // Without a submit first, the same page logs nothing.
+      adapter = load();
+      const cold = collect();
+      const td3 = adapter.init(cold, makeCtx(jobPage({ title: 'Initech', body: [d => dom.el(d, 'h2', { text: 'Thank you for applying!' })] }), 'https://careers.initech.com/portal/step?id=77'));
+      await settle();
+      assert.strictEqual(cold.calls.length, 0);
+      td3();
     }
 
     // 9. SmartRecruiters: loaded straight at a confirmation URL with the
@@ -1378,38 +1541,38 @@ async function run() {
     assert.deepStrictEqual(toastTexts(doc, core), ['Removed application at Hooli XYZ — Senior Data Scientist']);
     assert.strictEqual(await core.getDedupeCache().has(first.key), false, 'Undo releases the dedupe claim');
 
-    // Applied to the same company 24 days ago: ask before logging again.
+    // Applied to the same company 24 days ago: logged without asking.
     const today = storage.getLocalDateStr();
     await storage.addLog({ metricId: 'jobs', company: 'Globex Corporation', role: 'SRE', date: storage.addDays(today, -24) });
     const doc2 = dom.installDom();
     core._resetSharedCache();
-    const dup = await core.dispatch(adapter, { id: 'globex:77', title: 'Platform Engineer at Globex', company: 'Globex', role: 'Platform Engineer' }, { document: doc2, storage });
-    assert.strictEqual(dup.logged, false);
-    assert.strictEqual(dup.reason, 'possible-duplicate');
-    assert.strictEqual(dup.prior.daysAgo, 24);
+    const again = await core.dispatch(adapter, { id: 'globex:77', title: 'Platform Engineer at Globex', company: 'Globex', role: 'Platform Engineer' }, { document: doc2, storage });
+    assert.strictEqual(again.logged, true, 'a company applied to before is logged again');
+    assert.strictEqual(again.log.notes, 'Auto-logged from Career site', 'notes do not repeat the role and company');
     const text = toastTexts(doc2, core)[0];
-    assert.ok(/^Note: You applied to Globex Corporation 24 days ago on [A-Z][a-z]{2} \d{1,2}, \d{4}\. Log again anyway\?$/.test(text), text);
-    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 1, 'nothing logged until the user answers');
-    clickToastButton(doc2, core, 'Log anyway');
-    await settle(20);
-    const all = await storage.getLogs({ metricId: 'jobs' });
-    assert.strictEqual(all.length, 2, 'Log anyway logs it');
-    assert.strictEqual(all[0].company, 'Globex');
+    assert.strictEqual(text, 'Logged application at Globex — Platform Engineer');
 
-    // Skip leaves storage alone.
-    const doc3 = dom.installDom();
-    core._resetSharedCache();
-    const skipped = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'GLOBEX corp' }, { document: doc3, storage });
-    assert.strictEqual(skipped.reason, 'possible-duplicate');
-    clickToastButton(doc3, core, 'Skip');
-    await settle();
-    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 2);
-    assert.strictEqual(toastTexts(doc3, core).length, 0, 'Skip dismisses the prompt');
+    // Another role at the same company, minutes later: its own entry.
+    const second = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'Globex', role: 'Data Engineer' }, { document: doc2, storage });
+    assert.strictEqual(second.logged, true);
+
+    // The same listing detected twice for one submit is one entry; applying
+    // to it again later is another.
+    let clock = Date.now();
+    core._setClock(() => clock);
+    const twice = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'Globex', role: 'Data Engineer' }, { document: doc2, storage });
+    assert.strictEqual(twice.logged, false);
+    assert.strictEqual(twice.reason, 'duplicate');
+    clock += core.JOB_DEDUPE_WINDOW_MS + 1000;
+    const later = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'Globex', role: 'Data Engineer' }, { document: doc2, storage });
+    assert.strictEqual(later.logged, true, 'the same listing applied to again is logged again');
+    core._setClock(null);
+    assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 4);
 
     const EMOJI = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/u;
     assert.ok(!EMOJI.test(text + toastButtons(doc2, core).map(b => b.textContent).join('')), 'toast text is emoji-free');
     uninstallMockChrome();
-    console.log('[PASS] Job toasts: inline Edit details and Undo; 90-day duplicate prompt with Log anyway and Skip');
+    console.log('[PASS] Job toasts: inline Edit details and Undo; repeat applications and other roles at a company are logged without a prompt');
   }
 
   // -------------------------------------------------------------------------
@@ -1449,12 +1612,11 @@ async function run() {
     assert.deepStrictEqual(toastTexts(doc, core), ['Logged application at Pied Piper — Senior Compression Engineer']);
     assert.strictEqual(typeof global.window.__ptQuickLog, 'function', 'later clicks reuse the injected script');
 
-    // A second run on the same company warns first.
+    // A second run on the same listing opens the same plain card.
     global.window.__ptQuickLog();
     await settle(80);
-    const texts = host.querySelectorAll('.detail').map(d => d.textContent);
-    assert.ok(texts.some(t => /^Note: You already logged this Pied Piper listing earlier today on /.test(t)), texts.join(' / '));
-    assert.ok(host.querySelectorAll('button').some(b => b.textContent === 'Log anyway'));
+    assert.ok(host.querySelectorAll('button').some(b => b.textContent === 'Log application'));
+    assert.ok(!host.querySelectorAll('button').some(b => b.textContent === 'Log anyway'));
 
     delete global.document;
     delete global.location;
@@ -1463,7 +1625,7 @@ async function run() {
     delete global.AutoTrackerCore;
     delete global.JobMeta;
     uninstallMockChrome();
-    console.log('[PASS] Quick log: pre-filled card, editable fields, duplicate note on a repeat, reusable entry point');
+    console.log('[PASS] Quick log: pre-filled card, editable fields, no prompt on a repeat, reusable entry point');
   }
 
   console.log('--- test/autotracker.test.js COMPLETED SUCCESSFULLY ---\n');

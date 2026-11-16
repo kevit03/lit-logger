@@ -1,7 +1,7 @@
 // "Log application from this page": injected on demand by the service worker
 // (context menu on the page or the toolbar icon). Reads the company and role
-// the page describes, shows them in an editable card, warns when the same
-// company was applied to in the last 90 days, and logs on confirmation.
+// the page describes, shows them in an editable card, and logs on
+// confirmation. A repeat application is logged like any other.
 //
 // Needs shared/auth.js, shared/storage.js, shared/auto-tracker-core.js, and
 // shared/job-meta.js in the same isolated world; the worker injects whichever
@@ -28,20 +28,12 @@
     if (!toast) return;
     open = toast;
 
-    let prior = null;
-    try {
-      prior = await TrackerStorage.findRecentApplication({ company: details.company, sourceId, url: details.url });
-    } catch (e) {
-      prior = null;
-    }
-    if (prior) toast.setDetail(core.formatDuplicateMessage(prior, details.company));
-
     toast.showForm({
       fields: [
         { name: 'company', label: 'Company', value: details.company, placeholder: 'e.g. Acme Corp' },
         { name: 'role', label: 'Role', value: details.role, placeholder: 'e.g. Software Engineer' }
       ],
-      submitLabel: prior ? 'Log anyway' : 'Log application',
+      submitLabel: 'Log application',
       onSubmit: async values => {
         if (!values.company && !values.role) {
           toast.setDetail('Add a company or a role first.');

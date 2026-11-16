@@ -106,22 +106,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     return shortDate(dateStr, n > 300);
   }
 
-  function daysAgoText(n) {
-    if (n <= 0) return 'earlier today';
-    if (n === 1) return 'yesterday';
-    return n + ' days ago';
-  }
-
-  // Same wording as the in-page prompt (shared/auto-tracker-core.js).
-  function duplicateMessage(prior, company) {
-    const name = (prior.log && prior.log.company) || company || 'this company';
-    const when = daysAgoText(prior.daysAgo) + ' on ' + shortDate(prior.log.date, true);
-    const lead = prior.sameListing
-      ? 'Note: You already logged this ' + name + ' listing ' + when + '.'
-      : 'Note: You applied to ' + name + ' ' + when + '.';
-    return lead + ' Log again anyway?';
-  }
-
   // Picks a readable foreground for text on a solid fill of the given color.
   // Tracker colors are user-chosen, so amber and other light fills must get
   // dark text rather than the white that suits blue.
@@ -2967,7 +2951,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('cancel-settings-btn').addEventListener('click', () => closeModal(el('metric-settings-modal')));
 
   // ---------------------------------------------------------------------------
-  // Add details form, with the 90-day duplicate check for applications
+  // Add details form
   // ---------------------------------------------------------------------------
   let dupConfirmedFor = null;
 
@@ -2985,26 +2969,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     const metricId = el('details-form').dataset.metricId || activeMetricId;
     const company = el('detail-company').value.trim();
-    const companyKey = TrackerStorage.normalizeCompany(company);
-
-    if (metricId === 'jobs' && companyKey && dupConfirmedFor !== companyKey) {
-      let prior = null;
-      try {
-        prior = await TrackerStorage.findRecentApplication({ company });
-      } catch (err) {
-        prior = null;
-      }
-      if (prior) {
-        dupConfirmedFor = companyKey;
-        const note = el('dup-note');
-        note.textContent = duplicateMessage(prior, company);
-        note.classList.remove('hidden');
-        el('details-submit-btn').textContent = 'Log anyway';
-        el('details-submit-btn').focus();
-        return;
-      }
-    }
-
+    // A repeat application, or another role at the same company, is saved
+    // like any other entry.
     let notes = el('detail-notes').value.trim();
     let solveTimeSeconds = 0;
     if (metricId === 'leetcode' && timerState.targetSeconds > 0) {

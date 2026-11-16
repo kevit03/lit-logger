@@ -13,7 +13,7 @@ const JobMeta = (() => {
 
   // High-confidence confirmation wording. Deliberately phrased around
   // "application" so an order, a newsletter, or a comment never matches.
-  const SUCCESS_TEXT = /(thank(s| you) for (applying|your application|your interest in (joining|working))|application (has been |was )?(submitted|received|sent|complete)|we('ve| have) received your application|your application (has been |was )?(sent|submitted|received)( successfully)?|successfully (submitted|applied|sent your application)|you('ve| have) (successfully )?applied)/i;
+  const SUCCESS_TEXT = /(thank(s| you) for (applying|submitting your application|your (job )?application|your interest in (joining|working))|application (has been |was |is )?(successfully )?(submitted|received|sent|complete)|we('ve| have)? (successfully )?(received|got) your (job )?application|your (job )?application (has been |was |is )?(successfully )?(sent|submitted|received|complete)|successfully (submitted|applied|sent your application)|you('ve| have) (successfully |already )?applied|you applied (to|for) )/i;
 
   // Wording that means the success message is about something else.
   const NEGATIVE_TEXT = /\b(newsletter|subscri(be|bed|bing|ption)|your order|order (number|#|confirmed|confirmation)|shopping cart|checkout|shipping|receipt|purchase|payment|password|reset link|verify your email|comment (has been )?(posted|submitted)|your comment|reply posted|credit card|loan|mortgage|rental|scholarship|grant application|visa application|membership)\b/i;
@@ -36,6 +36,18 @@ const JobMeta = (() => {
     { name: 'Breezy HR', host: /(^|\.)breezy\.hr$/, tenant: (u, labels) => labels[0] },
     { name: 'Recruitee', host: /(^|\.)recruitee\.com$/, tenant: (u, labels) => labels[0] },
     { name: 'Pinpoint', host: /(^|\.)pinpointhq\.com$/, tenant: (u, labels) => labels[0] },
+    { name: 'Teamtailor', host: /(^|\.)teamtailor\.com$/, tenant: (u, labels) => labels[0] },
+    { name: 'Personio', host: /(^|\.)jobs\.personio\.(com|de)$/, tenant: (u, labels) => labels[0].replace(/-jobs$/, '') },
+    { name: 'Eightfold', host: /(^|\.)eightfold\.ai$/, tenant: (u, labels) => labels[0] },
+    { name: 'Gem', host: /^jobs\.gem\.com$/, tenant: u => seg(u, 0) },
+    { name: 'Avature', host: /(^|\.)avature\.net$/, tenant: (u, labels) => labels[0] },
+    { name: 'Oracle Recruiting', host: /(^|\.)oraclecloud\.com$/, tenant: () => '' },
+    { name: 'SuccessFactors', host: /(^|\.)(successfactors\.(com|eu)|sapsf\.(com|eu))$/, tenant: u => u.searchParams.get('company') || '' },
+    { name: 'UKG', host: /(^|\.)ultipro\.com$/, tenant: () => '' },
+    { name: 'Paylocity', host: /^recruiting\.paylocity\.com$/, tenant: () => '' },
+    { name: 'ADP', host: /(^|\.)adp\.com$/, tenant: () => '' },
+    { name: 'Dayforce', host: /(^|\.)dayforcehcm\.com$/, tenant: u => (/^[a-z]{2}-[A-Z]{2}$/.test(seg(u, 0)) ? seg(u, 1) : seg(u, 0)) },
+    { name: 'Cornerstone', host: /(^|\.)csod\.com$/, tenant: (u, labels) => labels[0] },
     { name: 'Greenhouse', host: /(^|\.)greenhouse\.io$/, tenant: u => u.searchParams.get('for') || (seg(u, 0) === 'embed' ? '' : seg(u, 0)) },
     { name: 'Lever', host: /(^|\.)lever\.co$/, tenant: u => seg(u, 0) },
     { name: 'Ashby', host: /(^|\.)ashbyhq\.com$/, tenant: u => seg(u, 0) },
@@ -45,10 +57,13 @@ const JobMeta = (() => {
   // Site names that are the ATS or a job board, never the employer.
   const PLATFORM_NAMES = /^(workable|greenhouse|lever|ashby|workday|icims|taleo|oracle|smartrecruiters|jobvite|bamboohr|bamboo hr|breezy|breezy hr|recruitee|pinpoint|jazzhr|jazz hr|rippling|linkedin|indeed|glassdoor|ziprecruiter|wellfound|angellist|careers?|jobs?|home|apply)$/i;
 
+  // Job boards list other companies' roles; their own domain is not the employer.
+  const BOARD_HOST = /(^|\.)(linkedin|indeed|glassdoor|ziprecruiter|wellfound|angel|monster|dice|simplyhired|builtin|workatastartup|ycombinator|handshake|joinhandshake|otta|welcometothejungle|google)\.[a-z.]+$/i;
+
   const TWO_LEVEL_SUFFIXES = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.jp', 'co.in', 'co.kr', 'co.za', 'com.br', 'com.mx', 'com.sg', 'com.hk', 'com.tr', 'com.cn', 'com.tw', 'co.il', 'com.ar']);
   const GENERIC_LABELS = /^(www\d*|careers?|jobs?|apply|hire|hiring|recruit(ing|ment)?|talent|work|join|boards?|app|portal|en|us)$/i;
 
-  const GENERIC_HEADING = /^(thank(s| you)|apply( now| for this job)?|application( form)?|careers?|jobs?|join us|success|submitted|congratulations|confirmation|open (roles|positions)|welcome|sign in|log in|home)\b/i;
+  const GENERIC_HEADING = /^(thank(s| you)|apply( now| for this job)?|application( form)?|careers?|jobs?|job (details|description|search|openings?)|join us|success|submitted|congratulations|confirmation|open (roles|positions)|welcome|sign in|log in|create (an )?account|home|we('ve| have)? (received|got)|your application|you('ve| have)? applied|my (information|experience|profile)|personal information|review( and submit)?|about (us|the (role|job|team|company))|search (jobs|results))\b/i;
 
   function seg(url, i) {
     return url.pathname.split('/').filter(Boolean)[i] || '';
@@ -97,7 +112,7 @@ const JobMeta = (() => {
       if (tenant && !GENERIC_LABELS.test(tenant)) return humanize(tenant);
       return '';
     }
-    if (labels.length < 2) return '';
+    if (labels.length < 2 || BOARD_HOST.test(host)) return '';
     const lastTwo = labels.slice(-2).join('.');
     const idx = TWO_LEVEL_SUFFIXES.has(lastTwo) ? labels.length - 3 : labels.length - 2;
     const label = labels[idx];
@@ -151,26 +166,59 @@ const JobMeta = (() => {
     return out;
   }
 
+  // Stored names stay short: the role and the company, nothing else.
+  const ROLE_MAX = 80;
+  const COMPANY_MAX = 60;
+
+  // Cuts at the last separator or word that fits, never mid-word.
+  function clip(text, max) {
+    const s = String(text || '');
+    if (s.length <= max) return s;
+    const head = s.slice(0, max + 1);
+    const sep = Math.max(head.lastIndexOf(' - '), head.lastIndexOf(' | '), head.lastIndexOf(', '), head.lastIndexOf(' ('), head.lastIndexOf(' – '), head.lastIndexOf(' — '));
+    if (sep >= 15) return head.slice(0, sep).trim();
+    const space = head.lastIndexOf(' ');
+    return (space >= 15 ? head.slice(0, space) : s.slice(0, max)).replace(/[\s,;:|(–—-]+$/, '').trim();
+  }
+
   function cleanCompany(name) {
     const s = String(name || '')
       .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^(at|@)\s+/i, '')
       .replace(/\s*[-|:]\s*(careers?|jobs?|job board|hiring|open (roles|positions)).*$/i, '')
       .replace(/^(careers?|jobs?)\s+(at|@)\s+/i, '')
       .replace(/\s+(careers?|jobs?)$/i, '')
+      .replace(/(,\s*(inc|llc|l\.l\.c|ltd|corp|corporation|co|gmbh|plc)|\s+(inc|llc|ltd|gmbh|plc))\.?$/i, '')
       .trim();
     if (!s || PLATFORM_NAMES.test(s)) return '';
-    return s.slice(0, 120);
+    return clip(s, COMPANY_MAX);
   }
 
   function escapeRe(s) {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  // "Senior Engineer - Careers | Airbnb" -> "Senior Engineer".
+  const WORK_MODE = '(?:remote|hybrid|on-?site|in-?office|in[- ]person)';
+  const TRAILING_NOISE = [
+    // "(Remote - US)", "(Hybrid)"
+    new RegExp('\\s*\\((?=[^)]*\\b' + WORK_MODE + '\\b)[^)]*\\)\\s*$', 'i'),
+    // "- Remote", "| Hybrid, NYC", ", Remote (US)"
+    new RegExp('\\s*[-|,\\u2013\\u2014]\\s*' + WORK_MODE + '\\b[^|]*$', 'i'),
+    // "- New York, NY", "(San Francisco, CA)"
+    /\s+[-|–—]\s+[A-Z][A-Za-z .']+,\s*[A-Z]{2}\s*$/,
+    /\s*\([A-Z][A-Za-z .']+,\s*[A-Z]{2}\)\s*$/,
+    // "(R-12345)", "- REQ12345", "#12345", "_JR1990001", "- 1234567"
+    /\s*(?:[-|_,:–—]\s*|\(|#)\s*(?:(?:req(?:uisition)?|job(?: id)?|jr|r|id|ref)[\s#:._-]*)#?\d{3,}[A-Za-z]?\)?\s*$/i,
+    /\s*(?:[-|_:–—]\s*|\(|#)\s*#?\d{5,}\)?\s*$/
+  ];
+
+  // "Senior Engineer - Careers | Airbnb" -> "Senior Engineer";
+  // "Job Application for Designer (Remote - US) at Acme" -> "Designer".
   function cleanRole(title, company) {
     let s = String(title || '').replace(/\s+/g, ' ').trim();
     if (!s) return '';
-    s = s.replace(/^(job application for|apply(ing)? (for|to)|application for|job details:?)\s+/i, '');
+    s = s.replace(/^(job application for|apply(ing)? (for|to)|application for|job details:?|job posting:?)\s+/i, '');
     if (company) {
       const c = escapeRe(company);
       s = s.replace(new RegExp('\\s*(\\bat\\b|@|[-|:\\u2013\\u2014])\\s*' + c + '(\\s+(careers?|jobs?))?\\s*$', 'i'), '');
@@ -178,9 +226,23 @@ const JobMeta = (() => {
     }
     s = s.replace(/\s*[-|:–—]\s*(careers?|jobs?|job board|apply( now)?|job details|job description|open roles?)\s*$/i, '');
     s = s.replace(/\s*[-|–—]\s*[^-|–—]*\b(careers?|jobs?)\s*$/i, '');
-    s = s.trim();
-    if (!s || GENERIC_HEADING.test(s)) return '';
-    return s.slice(0, 160);
+    for (let pass = 0; pass < 3; pass++) {
+      const before = s;
+      TRAILING_NOISE.forEach(re => {
+        const next = s.replace(re, '').trim();
+        // Never strip a role down to nothing ("Remote Support Agent").
+        if (next.length >= 3) s = next;
+      });
+      if (s === before) break;
+    }
+    s = s.replace(/[\s,;:|–—-]+$/, '').trim();
+    if (!s || GENERIC_HEADING.test(s) || SUCCESS_TEXT.test(s)) return '';
+    return clip(s, ROLE_MAX);
+  }
+
+  function isGenericHeading(text) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    return !s || GENERIC_HEADING.test(s) || SUCCESS_TEXT.test(s);
   }
 
   function firstText(doc, selectors) {
@@ -267,9 +329,21 @@ const JobMeta = (() => {
       if (fromUrl) { company = fromUrl; companySource = 'domain'; }
     }
 
+    // A job board's own title: "Role | Company | LinkedIn".
+    let boardRole = '';
+    if (!company && doc && doc.title) {
+      const parts = String(doc.title).split(/\s+\|\s+/).map(x => x.trim()).filter(Boolean);
+      if (parts.length >= 3 && PLATFORM_NAMES.test(parts[parts.length - 1]) && cleanCompany(parts[1])) {
+        company = cleanCompany(parts[1]);
+        companySource = 'title';
+        boardRole = cleanRole(parts[0], company);
+      }
+    }
+
     let role = '';
     let roleSource = '';
-    if (ld && cleanRole(ld.title, company)) { role = cleanRole(ld.title, company); roleSource = 'json-ld'; }
+    if (boardRole) { role = boardRole; roleSource = 'title'; }
+    if (!role && ld && cleanRole(ld.title, company)) { role = cleanRole(ld.title, company); roleSource = 'json-ld'; }
     if (!role) {
       const og = cleanRole(metaContent(doc, 'meta[property="og:title"]'), company);
       if (og) { role = og; roleSource = 'og:title'; }
@@ -382,6 +456,9 @@ const JobMeta = (() => {
     readJsonLd,
     cleanCompany,
     cleanRole,
+    isGenericHeading,
+    ROLE_MAX,
+    COMPANY_MAX,
     extract,
     jobSignals,
     isConfirmationUrl,

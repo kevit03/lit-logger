@@ -289,6 +289,17 @@ const AutofillStore = (() => {
     };
   }
 
+  // Sanitizes an imported list, dropping invalid entries and all but the
+  // first entry for each key.
+  function cleanUnique(list, clean, keyOf) {
+    const seen = new Set();
+    return list.map(clean).filter(item => {
+      if (!item || seen.has(keyOf(item))) return false;
+      seen.add(keyOf(item));
+      return true;
+    });
+  }
+
   function tokenSet(labelKey) {
     return new Set(labelKey.split(' ').filter(Boolean));
   }
@@ -553,26 +564,11 @@ const AutofillStore = (() => {
       if (isPlainObject(parsed.profile)) items[KEYS.PROFILE] = mergeProfile(null, parsed.profile);
       if (isPlainObject(parsed.settings)) items[KEYS.SETTINGS] = cleanSettings(null, parsed.settings);
       if (Array.isArray(parsed.rules)) {
-        const seen = new Set();
-        const rules = [];
-        parsed.rules.map(cleanRule).filter(Boolean).forEach(r => {
-          const k = r.host + '\n' + r.labelKey;
-          if (seen.has(k)) return;
-          seen.add(k);
-          rules.push(r);
-        });
-        items[KEYS.RULES] = rules.slice(0, MAX_RULES);
+        items[KEYS.RULES] = cleanUnique(parsed.rules, cleanRule, r => r.host + '\n' + r.labelKey).slice(0, MAX_RULES);
         counts.rules = items[KEYS.RULES].length;
       }
       if (Array.isArray(parsed.answers)) {
-        const seen = new Set();
-        const answers = [];
-        parsed.answers.map(cleanAnswer).filter(Boolean).forEach(a => {
-          if (seen.has(a.labelKey)) return;
-          seen.add(a.labelKey);
-          answers.push(a);
-        });
-        items[KEYS.ANSWERS] = answers.slice(0, MAX_ANSWERS);
+        items[KEYS.ANSWERS] = cleanUnique(parsed.answers, cleanAnswer, a => a.labelKey).slice(0, MAX_ANSWERS);
         counts.answers = items[KEYS.ANSWERS].length;
       }
       if (Object.prototype.hasOwnProperty.call(parsed, 'resume')) {

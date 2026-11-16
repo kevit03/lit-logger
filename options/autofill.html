@@ -7,131 +7,132 @@
   <link rel="stylesheet" href="autofill.css">
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
+  <header class="topbar">
+    <div class="topbar-inner">
       <div class="brand">
         <img src="../icons/icon48.png" alt="" width="28" height="28">
-        <div class="brand-text">
-          <span class="brand-kicker">LIT</span>
-          <h1>Autofill</h1>
-        </div>
+        <h1>Autofill</h1>
       </div>
-      <nav class="section-nav" aria-label="Sections">
-        <a href="#profile">Profile</a>
-        <a href="#resume">Resume</a>
-        <a href="#answers">Saved answers</a>
-        <a href="#rules">Learned rules</a>
-        <a href="#settings">Settings</a>
-        <a href="#data">Data</a>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button type="button" role="tab" id="tab-profile" data-tab="profile" aria-controls="profile">Profile</button>
+        <button type="button" role="tab" id="tab-resume" data-tab="resume" aria-controls="resume">Resume</button>
+        <button type="button" role="tab" id="tab-answers" data-tab="answers" aria-controls="answers">Answers<span class="count" id="count-answers"></span></button>
+        <button type="button" role="tab" id="tab-rules" data-tab="rules" aria-controls="rules">Rules<span class="count" id="count-rules"></span></button>
+        <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-controls="settings">Settings</button>
       </nav>
       <span id="save-status" class="save-status is-idle is-visible" role="status" aria-live="polite">Saves automatically</span>
-    </aside>
+    </div>
+  </header>
 
-    <main class="page">
-      <div id="page-error" class="banner banner-danger hidden" role="alert"></div>
+  <main class="page">
+    <div id="page-error" class="banner hidden" role="alert"></div>
 
-      <section id="profile" class="card" aria-labelledby="profile-title">
-        <div class="card-head">
-          <h2 id="profile-title">Profile</h2>
+    <section id="profile" class="panel" role="tabpanel" aria-labelledby="tab-profile">
+      <div class="panel-head">
+        <h2>Profile</h2>
+        <div class="progress">
+          <span id="progress-text" class="progress-text"></span>
+          <div class="meter" aria-hidden="true"><span id="progress-bar"></span></div>
         </div>
-        <form id="profile-form" class="profile-form" novalidate></form>
-      </section>
+      </div>
+      <form id="profile-form" class="profile-form" novalidate></form>
+    </section>
 
-      <section id="resume" class="card" aria-labelledby="resume-title">
-        <div class="card-head">
-          <h2 id="resume-title">Resume</h2>
+    <section id="resume" class="panel hidden" role="tabpanel" aria-labelledby="tab-resume">
+      <div class="panel-head">
+        <h2>Resume</h2>
+      </div>
+      <div id="resume-drop" class="dropzone is-empty">
+        <span class="file-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
+        </span>
+        <div class="resume-info">
+          <div class="resume-name" id="resume-name"></div>
+          <div class="resume-meta" id="resume-meta"></div>
         </div>
-        <div class="resume-row">
-          <span class="file-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
-          </span>
-          <div class="resume-info" id="resume-info">
-            <div class="resume-name" id="resume-name">No resume uploaded</div>
-            <div class="resume-meta" id="resume-meta">PDF, DOC, DOCX, RTF or TXT, up to 5 MB</div>
-          </div>
-          <div class="resume-actions">
-            <button type="button" class="btn btn-danger-ghost hidden" id="resume-remove-btn">Remove</button>
-            <a class="btn btn-ghost hidden" id="resume-download">Download</a>
-            <button type="button" class="btn btn-accent" id="resume-upload-btn">Upload resume</button>
-          </div>
-          <input type="file" id="resume-file" accept=".pdf,.doc,.docx,.rtf,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf" class="hidden">
+        <div class="resume-actions">
+          <button type="button" class="btn btn-danger-ghost hidden" id="resume-remove-btn">Remove</button>
+          <a class="btn btn-ghost hidden" id="resume-download">Download</a>
+          <button type="button" class="btn btn-accent" id="resume-upload-btn">Choose file</button>
         </div>
-        <div id="resume-error" class="field-error hidden" role="alert"></div>
-      </section>
+        <input type="file" id="resume-file" accept=".pdf,.doc,.docx,.rtf,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf" class="hidden">
+      </div>
+      <div id="resume-error" class="field-error hidden" role="alert"></div>
+    </section>
 
-      <section id="answers" class="card" aria-labelledby="answers-title">
-        <div class="card-head">
-          <h2 id="answers-title">Saved answers</h2>
-          <div class="head-actions">
-            <input type="search" id="answers-search" class="input input-search" placeholder="Search" aria-label="Search saved answers">
-            <button type="button" class="btn btn-accent" id="answer-add-btn">Add answer</button>
-          </div>
+    <section id="answers" class="panel hidden" role="tabpanel" aria-labelledby="tab-answers">
+      <div class="panel-head">
+        <h2>Saved answers</h2>
+        <div class="head-actions">
+          <input type="search" id="answers-search" class="input input-search" placeholder="Search" aria-label="Search saved answers">
+          <button type="button" class="btn btn-accent" id="answer-add-btn">Add answer</button>
         </div>
-        <form id="answer-new" class="answer-item answer-new hidden" novalidate>
-          <div class="field">
-            <label class="field-label" for="answer-new-question">Question</label>
-            <input type="text" class="input" id="answer-new-question" autocomplete="off" placeholder="e.g. Why do you want to work here?">
-          </div>
-          <div class="field">
-            <label class="field-label" for="answer-new-text">Answer</label>
-            <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Your answer"></textarea>
-          </div>
+      </div>
+      <form id="answer-new" class="card answer-new hidden" novalidate>
+        <div class="field">
+          <label class="field-label" for="answer-new-question">Question</label>
+          <input type="text" class="input" id="answer-new-question" autocomplete="off" placeholder="e.g. Why do you want to work here?">
+        </div>
+        <div class="field">
+          <label class="field-label" for="answer-new-text">Answer</label>
+          <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Your answer"></textarea>
+        </div>
+        <div class="row-actions">
+          <button type="button" class="btn btn-ghost" id="answer-new-cancel">Cancel</button>
+          <button type="submit" class="btn btn-accent">Save answer</button>
+        </div>
+        <div id="answer-new-error" class="field-error hidden" role="alert"></div>
+      </form>
+      <div id="answers-list" class="answers-list"></div>
+      <div id="answers-empty" class="empty hidden"></div>
+    </section>
+
+    <section id="rules" class="panel hidden" role="tabpanel" aria-labelledby="tab-rules">
+      <div class="panel-head">
+        <h2>Learned rules</h2>
+        <div class="head-actions">
+          <input type="search" id="rules-search" class="input input-search" placeholder="Filter by site or label" aria-label="Filter learned rules">
+        </div>
+      </div>
+      <div class="card table-wrap" id="rules-card">
+        <table class="rules-table">
+          <thead>
+            <tr><th scope="col">Site</th><th scope="col">Label</th><th scope="col">Maps to</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+          </thead>
+          <tbody id="rules-body"></tbody>
+        </table>
+      </div>
+      <div id="rules-empty" class="empty hidden"></div>
+    </section>
+
+    <section id="settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings">
+      <div class="panel-head">
+        <h2>Settings</h2>
+      </div>
+      <div class="card rows">
+        <label class="row" title="Adds an Autofill button to job application pages">
+          <span class="row-title">Show the Autofill button</span>
+          <input type="checkbox" class="switch" data-setting="showButton" aria-label="Show the Autofill button">
+        </label>
+        <label class="row" title="Fills gender, race, veteran and disability questions from the EEO answers in your profile">
+          <span class="row-title">Fill EEO questions</span>
+          <input type="checkbox" class="switch" data-setting="fillEeo" aria-label="Fill EEO questions">
+        </label>
+        <label class="row" title="Saves a rule whenever you fix or fill a field after autofill">
+          <span class="row-title">Learn from corrections</span>
+          <input type="checkbox" class="switch" data-setting="autoLearn" aria-label="Learn from corrections">
+        </label>
+      </div>
+
+      <h3 class="panel-subhead" id="data">Data</h3>
+      <div class="card rows">
+        <div class="row">
+          <span class="row-title">Backup</span>
           <div class="row-actions">
-            <button type="button" class="btn btn-ghost" id="answer-new-cancel">Cancel</button>
-            <button type="submit" class="btn btn-accent">Save answer</button>
+            <button type="button" class="btn btn-ghost" id="export-btn" title="Downloads a JSON backup of everything on this page, including your resume">Export</button>
+            <button type="button" class="btn btn-ghost" id="import-btn" title="Restores a backup file. Asks before replacing anything">Import</button>
+            <input type="file" id="import-file" accept="application/json,.json" class="hidden">
           </div>
-          <div id="answer-new-error" class="field-error hidden" role="alert"></div>
-        </form>
-        <div id="answers-list" class="answers-list"></div>
-        <div id="answers-empty" class="empty hidden"></div>
-      </section>
-
-      <section id="rules" class="card" aria-labelledby="rules-title">
-        <div class="card-head">
-          <h2 id="rules-title">Learned rules</h2>
-          <div class="head-actions">
-            <input type="search" id="rules-search" class="input input-search" placeholder="Filter by site or label" aria-label="Filter learned rules">
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table class="rules-table" id="rules-table">
-            <thead>
-              <tr><th scope="col">Site</th><th scope="col">Label</th><th scope="col">Maps to</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
-            </thead>
-            <tbody id="rules-body"></tbody>
-          </table>
-        </div>
-        <div id="rules-empty" class="empty hidden"></div>
-      </section>
-
-      <section id="settings" class="card" aria-labelledby="settings-title">
-        <div class="card-head">
-          <h2 id="settings-title">Settings</h2>
-        </div>
-        <div class="settings-list">
-          <label class="toggle-row" title="Adds an Autofill button to job application pages">
-            <span class="toggle-title">Show the Autofill button</span>
-            <input type="checkbox" class="switch" data-setting="showButton" aria-label="Show the Autofill button">
-          </label>
-          <label class="toggle-row" title="Fills gender, race, veteran and disability questions from the EEO answers in your profile">
-            <span class="toggle-title">Fill EEO questions</span>
-            <input type="checkbox" class="switch" data-setting="fillEeo" aria-label="Fill EEO questions">
-          </label>
-          <label class="toggle-row" title="Saves a rule whenever you fix or fill a field after autofill">
-            <span class="toggle-title">Learn from corrections</span>
-            <input type="checkbox" class="switch" data-setting="autoLearn" aria-label="Learn from corrections">
-          </label>
-        </div>
-      </section>
-
-      <section id="data" class="card" aria-labelledby="data-title">
-        <div class="card-head">
-          <h2 id="data-title">Data</h2>
-        </div>
-        <div class="row-actions start">
-          <button type="button" class="btn btn-ghost" id="export-btn" title="Downloads a JSON backup of everything on this page, including your resume">Export backup</button>
-          <button type="button" class="btn btn-ghost" id="import-btn" title="Restores a backup file. Asks before replacing anything">Import from file</button>
-          <input type="file" id="import-file" accept="application/json,.json" class="hidden">
         </div>
         <div id="import-confirm" class="confirm-panel hidden" role="group" aria-labelledby="import-confirm-title">
           <p class="confirm-title" id="import-confirm-title"></p>
@@ -141,12 +142,13 @@
             <button type="button" class="btn btn-danger" id="import-confirm-btn">Replace with file</button>
           </div>
         </div>
-        <div class="erase-row">
-          <button type="button" class="btn btn-danger-ghost" id="clear-all-btn">Erase all autofill data</button>
+        <div class="row">
+          <span class="row-title">Erase all autofill data</span>
+          <button type="button" class="btn btn-danger-ghost" id="clear-all-btn">Erase</button>
         </div>
-      </section>
-    </main>
-  </div>
+      </div>
+    </section>
+  </main>
 
   <div id="undo-bar" class="undo-bar hidden" role="status" aria-live="polite">
     <span id="undo-text"></span>

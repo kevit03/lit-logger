@@ -9,7 +9,7 @@
 //               observed before that. The mark survives an SPA route change
 //               (module state) and a full page load on the same site
 //               (chrome.storage.session), so a POST-and-redirect to a
-//               /thank-you page still counts.
+//               thank-you page still counts, whatever its URL.
 //   Job page    JobMeta.jobSignals scores the page (ATS host, careers path,
 //               JSON-LD JobPosting, a resume upload, application wording). A
 //               newsletter, a checkout, a password reset, or a blog comment
@@ -154,7 +154,7 @@
       company,
       role,
       url: details.url || (url.origin + url.pathname),
-      notes: 'Auto-logged from ' + siteName(url) + (title ? ' | ' + title : ''),
+      notes: 'Auto-logged from ' + siteName(url),
       meta: { detection: reason }
     };
   }
@@ -282,6 +282,19 @@
     } else if (currentArm()) {
       // An SPA step change remounted us mid-application; keep watching.
       startWatching();
+    } else {
+      // A full page load after the submit (server-rendered systems such as
+      // Taleo, iCIMS, and JazzHR post the form and render the thank-you page
+      // at a URL that says nothing). The message is already on the page.
+      readArm(origin).then(stored => {
+        if (fired || cleanup.isDone() || !stored || currentArm()) return;
+        lastArm = stored;
+        if (findSuccess(root) && jobOk(stored)) {
+          fire('message', stored);
+          return;
+        }
+        startWatching();
+      }).catch(() => {});
     }
 
     return cleanup;

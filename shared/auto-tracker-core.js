@@ -14,9 +14,11 @@
 //              page CSS cannot restyle it and it cannot leak styles out. A
 //              toast can carry actions (Undo, Edit details) and an inline
 //              form, and stays up while the pointer is over it.
-//   dispatch   Turns an ActivityPayload into TrackerStorage.addLog(). Job
-//              entries are checked against the last 90 days first; a likely
-//              repeat asks "Log again anyway?" instead of logging.
+//   dispatch   Turns an ActivityPayload into TrackerStorage.addLog(). A job
+//              application is always logged, including a repeat application
+//              to the same listing or another role at the same company; only
+//              a second detection of the same submit (inside ten minutes) is
+//              dropped.
 //   dom        observe / listen / waitFor / watchUrl. Each returns a teardown
 //              function, and an adapter collects them on a Cleanup so leaving
 //              a page disconnects every observer in one call. No setInterval
@@ -60,6 +62,9 @@ const AutoTrackerCore = (() => {
   // guaranteed unreachable and only costs storage.
   const DEDUPE_TTL_MS = 36 * 60 * 60 * 1000;
   const DEDUPE_MAX_ENTRIES = 500;
+  // One submit can be detected twice (a confirmation URL and its message, two
+  // frames, a quick refresh). Anything further apart is a new application.
+  const JOB_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 
   // Injectable clock so TTL expiry can be driven headlessly in tests.
   let nowMs = () => Date.now();
@@ -224,7 +229,10 @@ const AutoTrackerCore = (() => {
         .filter(([, ts]) => Number.isFinite(ts))
         .sort((a, b) => a[1] - b[1]);
       for (const [key, ts] of pairs) {
-        if (!entries.has(key)) entries.set(key, ts);
+        if (!entries.has(key) || entries.get(key) < ts) {
+          entries.delete(key);
+          entries.set(key, ts);
+        }
       }
       prune();
     }
@@ -259,20 +267,24 @@ const AutoTrackerCore = (() => {
       return ok;
     }
 
+    // With a window, an entry older than the window no longer counts.
+    const live = (key, windowMs) => entries.has(key) && (!windowMs || nowMs() - entries.get(key) <= windowMs);
+
     return {
-      async has(key) {
+      async has(key, windowMs) {
         await load();
         prune();
-        return entries.has(key);
+        return live(key, windowMs);
       },
       // Re-reads storage right before marking so a sibling tab that logged the
       // same item a moment ago is seen. Returns false when the key was already
       // present, which is the signal to skip logging.
-      async mark(key) {
+      async mark(key, windowMs) {
         await load();
         if (activeArea) absorb(await areaGet(activeArea, storageKey));
         prune();
-        if (entries.has(key)) return false;
+        if (live(key, windowMs)) return false;
+        entries.delete(key);
         entries.set(key, nowMs());
         prune();
         await persist();
@@ -752,14 +764,17 @@ const AutoTrackerCore = (() => {
   function buildLog(adapter, payload) {
     const detail = describeMeta(payload.meta);
     const source = `Auto-logged from ${adapter.label || adapter.id}`;
+    const metricId = payload.metricId || adapter.metricId;
+    // A job entry's name is its company and role fields; repeating them in
+    // the notes only makes the entry longer.
     const notes = payload.notes
       ? String(payload.notes)
-      : [source, payload.title, detail].filter(Boolean).join(' | ');
+      : (metricId === 'jobs' ? source : [source, payload.title, detail].filter(Boolean).join(' | '));
     const log = {
-      metricId: payload.metricId || adapter.metricId,
+      metricId,
       count: Math.max(1, parseInt(payload.count, 10) || 1),
-      company: payload.company || '',
-      role: payload.role || '',
+      company: String(payload.company || '').trim().slice(0, 80),
+      role: String(payload.role || '').trim().slice(0, 100),
       notes,
       source: 'auto',
       sourceId: (adapter.dedupeScope || adapter.id) + ':' + slugify(payload.id)
@@ -846,56 +861,27 @@ const AutoTrackerCore = (() => {
     try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
-  // Result: { logged, reason?, key, log?, prior? }. reason is 'duplicate'
-  // (already logged today), 'possible-duplicate' (logged within 90 days;
-  // the user is asked), 'write-failed', 'no-storage', or 'invalid'.
+  // Result: { logged, reason?, key, log? }. reason is 'duplicate' (the same
+  // activity was already logged: today for a solved problem, in the last ten
+  // minutes for a job application), 'write-failed', 'no-storage', or
+  // 'invalid'.
   function dispatch(adapter, payload, options = {}) {
     const run = async () => {
       if (!adapter || !payload || !payload.id) return { logged: false, reason: 'invalid' };
       const storage = options.storage || (typeof TrackerStorage !== 'undefined' ? TrackerStorage : null);
       if (!storage || typeof storage.addLog !== 'function') return { logged: false, reason: 'no-storage' };
 
-      const cache = options.cache || getDedupeCache();
-      const key = buildDedupeKey(adapter.dedupeScope || adapter.id, payload.id, payload.date);
-      if (await cache.has(key)) return { logged: false, reason: 'duplicate', key };
-
       const entry = buildLog(adapter, payload);
       const isJob = entry.metricId === 'jobs';
-      if (isJob && !options.skipDuplicateCheck && typeof storage.findRecentApplication === 'function') {
-        let prior = null;
-        try {
-          prior = await storage.findRecentApplication({ company: entry.company, sourceId: entry.sourceId, url: entry.url });
-        } catch (e) {
-          prior = null;
-        }
-        if (prior) {
-          if (options.toast !== false) {
-            showToast(formatDuplicateMessage(prior, entry.company), {
-              document: options.document,
-              variant: 'warn',
-              sticky: true,
-              detail: formatJobMessage(entry.company, entry.role, 'Detected'),
-              actions: [
-                {
-                  label: 'Log anyway',
-                  primary: true,
-                  onClick: t => {
-                    t.dismiss();
-                    dispatch(adapter, payload, Object.assign({}, options, { skipDuplicateCheck: true })).catch(() => {});
-                  }
-                },
-                { label: 'Skip', onClick: t => t.dismiss() }
-              ]
-            });
-          }
-          return { logged: false, reason: 'possible-duplicate', key, prior };
-        }
-      }
+      const windowMs = isJob ? JOB_DEDUPE_WINDOW_MS : 0;
+      const cache = options.cache || getDedupeCache();
+      const key = buildDedupeKey(adapter.dedupeScope || adapter.id, payload.id, payload.date);
+      if (await cache.has(key, windowMs)) return { logged: false, reason: 'duplicate', key };
 
       // Claim the key before writing: mark() re-reads storage, so a sibling
       // tab that claimed it a moment ago wins. A failed write releases the
       // claim so the activity stays retryable.
-      if (!(await cache.mark(key))) return { logged: false, reason: 'duplicate', key };
+      if (!(await cache.mark(key, windowMs))) return { logged: false, reason: 'duplicate', key };
 
       let log;
       try {
@@ -1128,6 +1114,7 @@ const AutoTrackerCore = (() => {
     DEDUPE_STORAGE_KEY,
     DEDUPE_TTL_MS,
     DEDUPE_MAX_ENTRIES,
+    JOB_DEDUPE_WINDOW_MS,
 
     registerAdapter,
     getAdapters,

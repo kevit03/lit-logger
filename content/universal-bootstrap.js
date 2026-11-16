@@ -38,9 +38,19 @@
     return false;
   }
 
+  // The page a submitted application lands on often has no form and a URL
+  // that only says "thank you"; it is still a job page when the page before
+  // it on this site was one.
+  function cameFromJobPage() {
+    let ref;
+    try { ref = new URL(document.referrer); } catch (e) { return false; }
+    if (ref.origin !== location.origin) return false;
+    return JOB_HOST.test(ref.hostname) || JOB_PATH.test(ref.pathname + ref.search + ref.hash);
+  }
+
   function looksLikeJobPage() {
     if (!/^https?:$/.test(location.protocol)) return false;
-    return JOB_HOST.test(location.hostname) || JOB_PATH.test(location.pathname + location.search + location.hash) || hasJobPostingLd();
+    return JOB_HOST.test(location.hostname) || JOB_PATH.test(location.pathname + location.search + location.hash) || hasJobPostingLd() || cameFromJobPage();
   }
 
   // Field labels, placeholders, and accessible names; never the whole page

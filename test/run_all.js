@@ -19,6 +19,7 @@ const SUITES = [
   { name: 'Calendar Overlay Suite', file: './calendar.test.js' },
   { name: 'Autofill Engine Suite', file: './autofill-core.test.js' },
   { name: 'Autofill Store Suite', file: './autofill-store.test.js' },
+  { name: 'Autofill Profile Page Suite', file: './autofill-options.test.js' },
   { name: 'Autofill Button & Learning Suite', file: './autofill-ui.test.js' },
   { name: 'Autofill Site Adapter Suite', file: './autofill-sites.test.js' },
   { name: 'Zero-Emoji Compliance Suite', file: './emoji.test.js' },
