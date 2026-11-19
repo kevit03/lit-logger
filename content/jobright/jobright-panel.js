@@ -6,9 +6,11 @@
 // background orchestrator does the rest (LIT_BATCH_START). While a batch
 // exists the sheet becomes a live view of `lit_batch`.
 //
-// Every job is preselected except sign-in walls and ones already applied to:
-// the batch runs on its own and leaves anything it cannot finish open for
-// the user. On open it asks LIT_BATCH_CAPS and says, in one quiet line each,
+// Every job is preselected except sign-in walls: the batch runs on its own
+// and leaves anything it cannot finish open for the user. The list is fetched
+// fresh each time the sheet opens, so it matches what Jobright shows now
+// (Jobright drops jobs you applied to from its list), and jobs LIT already
+// submitted (lit_batch_done) are left out. On open it asks LIT_BATCH_CAPS and says, in one quiet line each,
 // when company sites cannot be reached (no all-sites access) or open
 // questions cannot be written (no Claude key; links to the options page via
 // LIT_OPEN_OPTIONS).
@@ -226,7 +228,6 @@
     .tag-supported { color: var(--accent-text); background: var(--accent-soft); }
     .tag-signin { color: var(--warn); background: var(--warn-soft); }
     .tag-unsupported { color: var(--text-3); background: transparent; border: 1px solid var(--border-soft); padding: 2px 7px; }
-    .tag-done { color: var(--success); background: var(--success-soft); }
     .pill-opening, .pill-filling, .pill-submitting { color: var(--accent-text); background: var(--accent-soft); }
     .pill-submitted, .pill-ready { color: var(--success); background: var(--success-soft); }
     .pill-needs-you { color: var(--warn); background: var(--warn-soft); }
@@ -299,6 +300,7 @@
     pageSize: 0,
     exhausted: false,
     loading: null,         // the in-flight load promise
+    gen: 0,                // bumped on reload; stale responses are dropped
     error: '',
     prefs: Object.assign({}, DEFAULT_PREFS),
     done: {},
@@ -394,6 +396,8 @@
       // Prefer the direct ATS link; originalUrl is often the job board's page.
       const url = hostOf(jr.applyLink) ? String(jr.applyLink).trim() : (hostOf(jr.originalUrl) ? String(jr.originalUrl).trim() : '');
       if (!jobId || !url || ids.has(jobId)) return;
+      // Jobright does not show these on the page either.
+      if (jr.hiddenJob === true || jr.isDeleted === true) return;
       ids.add(jobId);
       out.push({
         jobId,
@@ -486,7 +490,10 @@
     st.error = '';
     const position = st.position;
     const size = st.pageSize;
+    const gen = st.gen;
+    const current = () => gen === st.gen;
     st.loading = fetchPage(position, size).then(({ jobs, size: got }) => {
+      if (!current()) return;
       const known = new Set(st.jobs.map(j => j.jobId));
       jobs.forEach(job => {
         if (known.has(job.jobId)) return;
@@ -501,13 +508,27 @@
       st.position = position + size;
       if (got < size) st.exhausted = true;
     }).catch(err => {
-      st.error = (err && err.message) || 'Could not load jobs.';
+      if (current()) st.error = (err && err.message) || 'Could not load jobs.';
     }).then(() => {
+      if (!current()) return;
       st.loading = null;
       render();
     });
     render();
     return st.loading;
+  }
+
+  // Start over from the top of Jobright's list. Selections the user made
+  // stay (st.seen / st.selected); jobs no longer listed simply drop out.
+  function reloadJobs() {
+    st.gen += 1;
+    st.jobs = [];
+    st.position = 0;
+    st.pageSize = 0;
+    st.exhausted = false;
+    st.error = '';
+    st.loading = null;
+    return loadMore();
   }
 
   // --- chrome plumbing -------------------------------------------------------
@@ -587,12 +608,17 @@
       dirty = true;
     }
     if (dirty) render();
-    if (changes[BATCH_KEY] && !st.batch) ensureJobs();
+    if (changes[BATCH_KEY] && changes[BATCH_KEY].oldValue && !st.batch) reloadIfPicking();
   }
 
   // --- actions ---------------------------------------------------------------
+  // What the picker shows: Jobright's current list minus jobs LIT submitted.
+  function listedJobs() {
+    return st.jobs.filter(j => !st.done[j.jobId]);
+  }
+
   function selectedJobs() {
-    return st.jobs.filter(j => st.selected.has(j.jobId));
+    return listedJobs().filter(j => st.selected.has(j.jobId));
   }
 
   // Full autonomy: everything LIT can get into on its own. Sign-in walls stay
@@ -602,7 +628,7 @@
   }
 
   function selectableOpen() {
-    return st.jobs.filter(preselectable);
+    return listedJobs().filter(preselectable);
   }
 
   function toggleAll() {
@@ -666,7 +692,7 @@
   const focusJob = jobId => action({ type: 'LIT_BATCH_FOCUS', jobId });
   async function clearBatch() {
     const response = await action({ type: 'LIT_BATCH_CLEAR' });
-    if (response.ok) { await readStorage(); await ensureJobs(); }
+    if (response.ok) { await readStorage(); await reloadIfPicking(); }
     return response;
   }
 
@@ -835,7 +861,8 @@
   }
 
   function renderPicker() {
-    const n = st.jobs.length;
+    const listed = listedJobs();
+    const n = listed.length;
     const picked = selectedJobs().length;
     ui.sub.textContent = n ? picked + ' of ' + n + ' selected' : 'Jobs from your Jobright list';
 
@@ -844,21 +871,14 @@
     } else if (!n && st.error) {
       ui.body.appendChild(problem(st.error));
     } else if (!n) {
-      ui.body.appendChild(h('p', 'note', 'No jobs found.'));
+      ui.body.appendChild(h('p', 'note', st.jobs.length ? 'You have applied to every job loaded so far.' : 'No jobs found.'));
+      if (st.jobs.length && !st.exhausted) ui.body.appendChild(loadMoreRow());
     } else {
       const list = h('div', 'list');
-      st.jobs.forEach(job => list.appendChild(pickerRow(job)));
+      listed.forEach(job => list.appendChild(pickerRow(job)));
       ui.body.appendChild(list);
       if (st.error) ui.body.appendChild(problem(st.error));
-      else if (!st.exhausted) {
-        const more = h('div', 'more');
-        const b = button('btn', st.loading ? 'Loading...' : 'Load more', () => { loadMore(); });
-        b.classList.add('load-more');
-        keyed(b, 'load-more');
-        b.disabled = !!st.loading;
-        more.appendChild(b);
-        ui.body.appendChild(more);
-      }
+      else if (!st.exhausted) ui.body.appendChild(loadMoreRow());
     }
 
     const count = h('div', 'ctl');
@@ -916,9 +936,18 @@
     ui.foot.appendChild(actions);
   }
 
+  function loadMoreRow() {
+    const more = h('div', 'more');
+    const b = button('btn', st.loading ? 'Loading...' : 'Load more', () => { loadMore(); });
+    b.classList.add('load-more');
+    keyed(b, 'load-more');
+    b.disabled = !!st.loading;
+    more.appendChild(b);
+    return more;
+  }
+
   function pickerRow(job) {
     const kind = classifyHost(job.host);
-    const done = !!st.done[job.jobId];
     const row = h('label', 'job');
     row.setAttribute('data-job-id', job.jobId);
     const cb = h('input', 'check');
@@ -937,7 +966,7 @@
     main.appendChild(title);
     main.appendChild(h('div', 'job-meta', [job.company, shortHost(job.host)].filter(Boolean).join(' · ')));
     row.appendChild(main);
-    row.appendChild(done ? h('span', 'tag tag-done', 'Applied') : h('span', 'tag tag-' + kind, KIND_LABEL[kind]));
+    row.appendChild(h('span', 'tag tag-' + kind, KIND_LABEL[kind]));
     return row;
   }
 
@@ -1004,15 +1033,17 @@
   // --- open / close / route --------------------------------------------------
   function open() {
     if (!ui || !st.onRoute) return Promise.resolve();
+    if (st.open) return st.loading || Promise.resolve();
     st.open = true;
     render();
-    return Promise.all([ensureJobs(), loadCaps()]).then(() => undefined);
+    return Promise.all([reloadIfPicking(), loadCaps()]).then(() => undefined);
   }
 
-  // The picker needs a list; a panel that opened into a batch view has none.
-  function ensureJobs() {
-    if (st.open && st.onRoute && !st.batch && !st.jobs.length && !st.loading && !st.error) return loadMore();
-    return st.loading || Promise.resolve();
+  // The picker always shows Jobright's list as it is now, never a copy from
+  // an earlier open; a panel showing a batch has no picker to fill.
+  function reloadIfPicking() {
+    if (st.open && st.onRoute && !st.batch) return reloadJobs();
+    return Promise.resolve();
   }
 
   function close() {
@@ -1077,8 +1108,8 @@
       onRoute: st.onRoute,
       open: st.open && st.onRoute,
       launcherShown: !!ui && st.onRoute,
-      jobs: st.jobs.map(j => Object.assign({ kind: classifyHost(j.host), applied: !!st.done[j.jobId] }, j)),
-      selected: st.jobs.filter(j => st.selected.has(j.jobId)).map(j => j.jobId),
+      jobs: listedJobs().map(j => Object.assign({ kind: classifyHost(j.host) }, j)),
+      selected: selectedJobs().map(j => j.jobId),
       prefs: Object.assign({}, st.prefs),
       loading: !!st.loading,
       error: st.error,

@@ -315,6 +315,7 @@ async function testListUrl() {
 async function testOpenAndPreselect() {
   const store = { lit_batch_done: { [IDS.applied]: 1700000000000 } };
   const entries = [{ name: 'https://jobright.ai/swan/recommend/list/jobs?refresh=false&sortCondition=0&position=0&count=20&syncRerank=false' }];
+  const open7 = [IDS.gh, IDS.ashby, IDS.lever, IDS.rippling, IDS.dice, IDS.site, IDS.fallback].sort();
   await withPage({ store, entries }, async ({ doc, win, api }) => {
     assert.ok(api.state().launcherShown);
     assert.ok(isHidden(q(doc, '.panel')), 'panel starts closed');
@@ -326,8 +327,9 @@ async function testOpenAndPreselect() {
     assert.ok(win.fetch.calls[0].url.startsWith('https://jobright.ai/swan/recommend/list/jobs?'));
 
     const s = api.state();
-    assert.strictEqual(s.jobs.length, 9);
-    assert.deepStrictEqual(s.selected.sort(), [IDS.gh, IDS.ashby, IDS.lever, IDS.fallback].sort(), 'only supported, not applied');
+    assert.strictEqual(s.jobs.length, 8, 'the job LIT already submitted is left out');
+    assert.strictEqual(row(doc, IDS.applied), null, 'no row for a submitted job');
+    assert.deepStrictEqual(s.selected.sort(), open7, 'everything but sign-in walls');
     const kinds = Object.fromEntries(s.jobs.map(j => [j.jobId, j.kind]));
     assert.strictEqual(kinds[IDS.rippling], 'generic');
     assert.strictEqual(kinds[IDS.workday], 'signin');
@@ -337,40 +339,91 @@ async function testOpenAndPreselect() {
     assert.strictEqual(tag(IDS.gh), 'Supported');
     assert.strictEqual(tag(IDS.rippling), 'Generic form');
     assert.strictEqual(tag(IDS.workday), 'Sign-in needed');
-    assert.strictEqual(tag(IDS.site), 'Not supported');
-    assert.strictEqual(tag(IDS.applied), 'Applied');
-    assert.strictEqual(row(doc, IDS.applied).querySelector('.check').checked, false, 'applied job unchecked');
+    assert.strictEqual(tag(IDS.site), 'Company site');
+    assert.strictEqual(row(doc, IDS.workday).querySelector('.check').checked, false);
     assert.strictEqual(row(doc, IDS.gh).querySelector('.check').checked, true);
-    assert.strictEqual(row(doc, IDS.rippling).querySelector('.check').checked, false);
-    assert.ok(row(doc, IDS.dice).classList.contains('muted'), 'unsupported rows are muted');
-    assert.ok(!row(doc, IDS.gh).classList.contains('muted'));
-    assert.strictEqual(q(doc, '.start').textContent, 'Apply to 4');
-    assert.strictEqual(q(doc, '.sub').textContent, '4 of 9 selected');
+    assert.strictEqual(q(doc, '.start').textContent, 'Apply to 7');
+    assert.strictEqual(q(doc, '.sub').textContent, '7 of 8 selected');
 
-    // Unsupported rows are still selectable.
-    await toggle(row(doc, IDS.dice).querySelector('.check'), true);
-    assert.strictEqual(q(doc, '.start').textContent, 'Apply to 5');
-    // With every supported job on, the toggle clears; then it selects exactly
-    // the supported set.
-    assert.strictEqual(q(doc, '.select-supported').textContent, 'Clear selection');
-    await click(q(doc, '.select-supported'));
+    assert.strictEqual(q(doc, '.select-all').textContent, 'Clear selection');
+    await click(q(doc, '.select-all'));
     assert.strictEqual(api.state().selected.length, 0);
     assert.strictEqual(q(doc, '.start').disabled, true, 'Start disabled with nothing selected');
-    assert.strictEqual(q(doc, '.select-supported').textContent, 'Select all supported');
-    await toggle(row(doc, IDS.dice).querySelector('.check'), true);
-    await click(q(doc, '.select-supported'));
-    assert.deepStrictEqual(api.state().selected.sort(), [IDS.gh, IDS.ashby, IDS.lever, IDS.fallback].sort());
+    assert.strictEqual(q(doc, '.select-all').textContent, 'Select all');
+    await click(q(doc, '.select-all'));
+    assert.deepStrictEqual(api.state().selected.sort(), open7);
 
-    // A job finishing elsewhere unchecks it and shows Applied.
+    // A job finishing elsewhere drops out of the list.
     await chromeSet({ lit_batch_done: { [IDS.applied]: 1, [IDS.lever]: 2 } });
     assert.ok(!api.state().selected.includes(IDS.lever));
-    assert.strictEqual(tag(IDS.lever), 'Applied');
+    assert.strictEqual(row(doc, IDS.lever), null, 'submitted job removed from the picker');
+    assert.strictEqual(api.state().jobs.length, 7);
 
     // Escape closes.
     q(doc, '.panel').dispatchEvent(dom.makeEvent('keydown', q(doc, '.panel'), { key: 'Escape' }));
     assert.ok(isHidden(q(doc, '.panel')));
   });
-  console.log('[PASS] open loads jobs; supported preselected, others unchecked, done shows Applied');
+  console.log('[PASS] open loads jobs; all but sign-in preselected, submitted jobs hidden');
+}
+
+// Jobright drops a job from its list once you apply; the panel must not keep
+// showing a copy from an earlier open.
+async function testFreshOnOpen() {
+  const full = samplePayload();
+  const later = samplePayload();
+  later.result.jobList = later.result.jobList.filter(x => !(x && x.jobResult && [IDS.gh, IDS.ashby].includes(x.jobResult.jobId)));
+  let payload = full;
+  const fetchFn = async (url, init) => { fetchFn.calls.push(url); return response(200, JSON.stringify(payload)); };
+  fetchFn.calls = [];
+  await withPage({ fetch: fetchFn }, async ({ doc, api }) => {
+    await api.open();
+    assert.strictEqual(api.state().jobs.length, 9);
+    await toggle(row(doc, IDS.lever).querySelector('.check'), false);
+    await click(q(doc, '.launcher'));
+    assert.ok(isHidden(q(doc, '.panel')));
+
+    // Applied to two jobs on Jobright in the meantime.
+    payload = later;
+    await click(q(doc, '.launcher'));
+    await settle();
+    assert.strictEqual(fetchFn.calls.length, 2, 'reopening fetches again');
+    assert.strictEqual(new URL(fetchFn.calls[1]).searchParams.get('position'), '0', 'from the top');
+    const ids = api.state().jobs.map(j => j.jobId);
+    assert.ok(!ids.includes(IDS.gh) && !ids.includes(IDS.ashby), 'jobs gone from Jobright are gone here');
+    assert.strictEqual(ids.length, 7);
+    assert.strictEqual(row(doc, IDS.lever).querySelector('.check').checked, false, 'user unchecks are kept');
+    assert.ok(!api.state().selected.includes(IDS.gh), 'gone jobs are not sent');
+
+    // Hidden or deleted postings are not listed either.
+    const { mapJobs } = { mapJobs: api.mapJobs };
+    const hidden = item(hex(70), 'Hidden', 'X', 'https://jobs.lever.co/x/1', '');
+    hidden.jobResult.hiddenJob = true;
+    const deleted = item(hex(71), 'Deleted', 'Y', 'https://jobs.lever.co/y/1', '');
+    deleted.jobResult.isDeleted = true;
+    assert.deepStrictEqual(mapJobs({ result: { jobList: [hidden, deleted] } }), []);
+  });
+
+  // A response from before a reload never lands on top of the new list.
+  let release;
+  const slow = async url => {
+    slow.calls.push(url);
+    if (slow.calls.length === 1) await new Promise(r => { release = r; });
+    return response(200, JSON.stringify(slow.calls.length === 1 ? full : later));
+  };
+  slow.calls = [];
+  await withPage({ fetch: slow }, async ({ doc, api }) => {
+    const first = api.open();
+    await settle();
+    await click(q(doc, '.launcher'));
+    await click(q(doc, '.launcher'));
+    await settle();
+    release();
+    await first;
+    await settle();
+    assert.strictEqual(api.state().jobs.length, 7, 'stale first response dropped');
+    assert.strictEqual(api.state().loading, false);
+  });
+  console.log('[PASS] reopening refetches from the top; stale responses and hidden postings dropped');
 }
 
 async function chromeSet(items) {
@@ -415,7 +468,7 @@ async function testPrefs() {
     assert.strictEqual(q(doc, '[data-count="10"]').getAttribute('aria-pressed'), 'true');
     assert.strictEqual(qa(doc, '.seg button').length, 6, 'offers 5..10');
     assert.strictEqual(q(doc, '.switch').checked, false, 'fill-only means the switch is off');
-    assert.strictEqual(q(doc, '.start').textContent, 'Fill 5', 'nothing applied yet: all 5 supported');
+    assert.strictEqual(q(doc, '.start').textContent, 'Fill 8', 'nothing applied yet: all but the sign-in wall');
 
     await click(q(doc, '[data-count="7"]'));
     assert.deepStrictEqual(chrome.storage.local.store.lit_batch_prefs, { concurrency: 7, mode: 'fill-only' });
@@ -424,7 +477,7 @@ async function testPrefs() {
 
     await toggle(q(doc, '.switch'), true);
     assert.deepStrictEqual(chrome.storage.local.store.lit_batch_prefs, { concurrency: 7, mode: 'submit' });
-    assert.strictEqual(q(doc, '.start').textContent, 'Apply to 5');
+    assert.strictEqual(q(doc, '.start').textContent, 'Apply to 8');
   });
   await withPage({}, async ({ api }) => {
     assert.deepStrictEqual(api.state().prefs, { concurrency: 5, mode: 'submit' }, 'defaults');
@@ -436,16 +489,17 @@ async function testStart() {
   const respond = msg => (msg.type === 'LIT_BATCH_START' ? { ok: true } : { ok: true });
   await withPage({ respond, store: { lit_batch_prefs: { concurrency: 8, mode: 'submit' } } }, async ({ doc, api, received }) => {
     await api.open();
-    await toggle(row(doc, IDS.rippling).querySelector('.check'), true);
+    await toggle(row(doc, IDS.workday).querySelector('.check'), true);
     await click(q(doc, '.start'));
     await settle();
-    assert.strictEqual(received.length, 1);
-    const msg = received[0];
+    const starts = received.filter(m => m.type === 'LIT_BATCH_START');
+    assert.strictEqual(starts.length, 1);
+    const msg = starts[0];
     assert.deepStrictEqual(Object.keys(msg).sort(), ['concurrency', 'jobs', 'mode', 'type']);
     assert.strictEqual(msg.type, 'LIT_BATCH_START');
     assert.strictEqual(msg.concurrency, 8);
     assert.strictEqual(msg.mode, 'submit');
-    assert.deepStrictEqual(msg.jobs.map(j => j.jobId), [IDS.gh, IDS.ashby, IDS.lever, IDS.rippling, IDS.applied, IDS.fallback], 'list order');
+    assert.deepStrictEqual(msg.jobs.map(j => j.jobId), [IDS.gh, IDS.ashby, IDS.lever, IDS.rippling, IDS.dice, IDS.site, IDS.workday, IDS.applied, IDS.fallback], 'list order');
     msg.jobs.forEach(j => assert.deepStrictEqual(Object.keys(j).sort(), ['company', 'jobId', 'title', 'url']));
     assert.deepStrictEqual(msg.jobs[0], {
       jobId: IDS.gh, title: 'Software Engineer, Platform', company: 'Northwind Labs',
@@ -685,6 +739,7 @@ async function run() {
   await testMapJobs();
   await testListUrl();
   await testOpenAndPreselect();
+  await testFreshOnOpen();
   await testLoadMore();
   await testPrefs();
   await testStart();

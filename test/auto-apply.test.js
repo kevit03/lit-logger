@@ -737,7 +737,7 @@ test('hops: "Apply for this job" opens the chooser; "Apply manually" beats autof
 });
 
 test('hops: a target=_blank or cross-origin apply link is followed in the same tab', async () => {
-  const html = '<div><h1>Software Engineer</h1><a id="ext" href="https://boards.greenhouse.io/example/jobs/1" target="_blank" rel="noopener">Apply on company site ↗</a></div>';
+  const html = '<div><h1>Software Engineer</h1><a id="ext" href="https://boards.greenhouse.io/example/jobs/1" target="_blank" rel="noopener">Apply on company site \u2197</a></div>';
   const bg = m.fakeBackground({ url: 'https://jobright.ai/jobs/info/abc' });
   const p = m.page({ html, url: 'https://jobright.ai/jobs/info/abc', bg });
   const clicks = m.counter(p.doc.getElementById('ext'));
