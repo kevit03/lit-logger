@@ -427,6 +427,73 @@ const LitBatch = (() => {
     return { allSites, ai: !!(s.aiEnabled && typeof s.aiKey === 'string' && s.aiKey.trim()) };
   }
 
+  // --- jobs already applied to (LIT_BATCH_APPLIED) ---------------------------
+  // The Jobright panel asks which of its listed jobs the tracker already has
+  // as applications, so it can leave them out. A job matches a logged one by
+  // the same link, or by the same company and the same role title.
+  const APPLIED_LOOKBACK_DAYS = 180;
+  const MAX_LOOKUP = 200;
+
+  function companyKey(name) {
+    const fn = hooks.normalizeCompany ||
+      (typeof TrackerStorage !== 'undefined' && TrackerStorage.normalizeCompany) || null;
+    if (fn) return fn(name);
+    return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+
+  function titleKey(title) {
+    return String(title || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+
+  // host + path, so tracking parameters and trailing slashes do not matter.
+  function linkKey(url) {
+    try {
+      const u = new URL(String(url || ''));
+      if (!/^https?:$/.test(u.protocol)) return '';
+      return (u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/+$/, '')).toLowerCase();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function matchApplied(jobs, logs) {
+    const pairs = new Set();
+    const links = new Set();
+    (logs || []).forEach(l => {
+      if (!l || typeof l !== 'object') return;
+      const c = companyKey(l.company);
+      const t = titleKey(l.role);
+      if (c && t) pairs.add(c + '|' + t);
+      const k = linkKey(l.url);
+      if (k) links.add(k);
+    });
+    return (jobs || []).filter(j => {
+      if (!j || typeof j !== 'object') return false;
+      const c = companyKey(j.company);
+      const t = titleKey(j.title);
+      if (c && t && pairs.has(c + '|' + t)) return true;
+      const k = linkKey(j.url);
+      return !!k && links.has(k);
+    }).map(j => String(j.jobId));
+  }
+
+  async function jobLogs() {
+    if (typeof hooks.getJobLogs === 'function') return hooks.getJobLogs();
+    if (typeof TrackerStorage === 'undefined') return [];
+    const since = new Date(clock() - APPLIED_LOOKBACK_DAYS * 86400000);
+    const pad = n => String(n).padStart(2, '0');
+    const startDate = since.getFullYear() + '-' + pad(since.getMonth() + 1) + '-' + pad(since.getDate());
+    return TrackerStorage.getLogs({ metricId: 'jobs', startDate });
+  }
+
+  async function applied(msg) {
+    const jobs = Array.isArray(msg.jobs) ? msg.jobs.slice(0, MAX_LOOKUP) : [];
+    if (!jobs.length) return { ok: true, jobIds: [] };
+    const logs = await jobLogs();
+    return { ok: true, jobIds: matchApplied(jobs, Array.isArray(logs) ? logs : []) };
+  }
+
   async function openOptions() {
     try {
       await chrome.runtime.openOptionsPage();
@@ -451,6 +518,7 @@ const LitBatch = (() => {
     if (msg.type.indexOf('LIT_BATCH_') !== 0) return false;
     switch (msg.type) {
       case 'LIT_BATCH_CAPS': return respond(caps(), sendResponse, { allSites: false, ai: false });
+      case 'LIT_BATCH_APPLIED': return respond(applied(msg), sendResponse, { ok: false, jobIds: [] });
       case 'LIT_BATCH_START': return respond(start(msg), sendResponse, failed);
       case 'LIT_BATCH_STOP': return respond(stop(), sendResponse, failed);
       case 'LIT_BATCH_CLEAR': return respond(clear(), sendResponse, failed);
@@ -480,6 +548,7 @@ const LitBatch = (() => {
     // Test seams.
     _tick: tick,
     _whenIdle: () => chain,
+    matchApplied,
     KEY,
     DONE_KEY,
     ALARM,

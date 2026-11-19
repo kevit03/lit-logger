@@ -66,6 +66,16 @@
         "https://jobright.ai/*"
       ],
       "js": [
+        "content/jobright/jobright-list-tap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://jobright.ai/*"
+      ],
+      "js": [
         "content/jobright/jobright-panel.js"
       ],
       "run_at": "document_idle"

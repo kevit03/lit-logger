@@ -7,16 +7,21 @@
 // exists the sheet becomes a live view of `lit_batch`.
 //
 // Every job is preselected except sign-in walls: the batch runs on its own
-// and leaves anything it cannot finish open for the user. The list is fetched
-// fresh each time the sheet opens, so it matches what Jobright shows now
-// (Jobright drops jobs you applied to from its list), and jobs LIT already
-// submitted (lit_batch_done) are left out. On open it asks LIT_BATCH_CAPS and says, in one quiet line each,
+// and leaves anything it cannot finish open for the user.
+//
+// The list is the one the page is showing. content/jobright/jobright-list-tap.js
+// (page world) hands over each list response the page gets; asking the API
+// separately does not give the same set (refresh=false at position 0 returns
+// an older saved set). Only when nothing was handed over does the panel fetch
+// the first page itself, with refresh=true like the page. Left out: jobs LIT
+// submitted (lit_batch_done), jobs on Jobright's Applied list, and jobs the
+// tracker has logged as applications (LIT_BATCH_APPLIED). On open it asks LIT_BATCH_CAPS and says, in one quiet line each,
 // when company sites cannot be reached (no all-sites access) or open
 // questions cannot be written (no Claude key; links to the options page via
 // LIT_OPEN_OPTIONS).
 //
-// This script only reads Jobright's own list API (same origin, the user's
-// cookies) and only writes `lit_batch_prefs`. It never clicks anything on the
+// This script only reads Jobright's own list and applied-jobs APIs (same
+// origin, the user's cookies) and only writes `lit_batch_prefs`. It never clicks anything on the
 // Jobright page. Everything lives in a closed shadow root so neither side's
 // CSS leaks into the other.
 //
@@ -35,6 +40,10 @@
   const HOST_ID = 'lit-jobright-host';
   const HOST_TAG = 'lit-jobright';
   const LIST_PATH = '/swan/recommend/list/jobs';
+  const APPLIED_PATH = '/swan/job/applied/jobs-v3';
+  const APPLIED_PAGES = 4;
+  const APPLIED_PAGE_SIZE = 50;
+  const TAP_TAG = 'lit-jobright-list';
   const DEFAULT_LIST = LIST_PATH + '?refresh=false&sortCondition=0&position=0&count=20&syncRerank=false';
   const DEFAULT_PAGE = 20;
   const BATCH_KEY = 'lit_batch';
@@ -301,6 +310,9 @@
     exhausted: false,
     loading: null,         // the in-flight load promise
     gen: 0,                // bumped on reload; stale responses are dropped
+    feed: null,            // { jobs, next, size, exhausted }: what the page loaded
+    hidden: new Set(),     // jobIds already applied to (Jobright or the tracker)
+    appliedList: null,     // promise of Jobright's applied jobIds, once per open
     error: '',
     prefs: Object.assign({}, DEFAULT_PREFS),
     done: {},
@@ -438,13 +450,15 @@
     return n > 0 && n <= 50 ? n : DEFAULT_PAGE;
   }
 
-  function listUrl(position, count) {
+  // `fresh` only for the first page when the page's own list was not seen:
+  // like the page, it then asks with refresh=true, because refresh=false at
+  // position 0 returns an older saved set. Later pages continue with false.
+  function listUrl(position, count, fresh) {
     const origin = currentLocation().origin;
     const seen = pageListUrl();
     // Always same origin, whatever the entry said, so cookies apply.
     const u = seen ? new URL(seen.pathname + seen.search, origin) : new URL(DEFAULT_LIST, origin);
-    // refresh=true asks Jobright for a new set, which would not match the page.
-    if (u.searchParams.has('refresh')) u.searchParams.set('refresh', 'false');
+    u.searchParams.set('refresh', fresh ? 'true' : 'false');
     u.searchParams.set('position', String(Math.max(0, Math.floor(Number(position) || 0))));
     u.searchParams.set('count', String(count > 0 ? Math.floor(count) : defaultPageSize()));
     return u.toString();
@@ -459,12 +473,16 @@
     size: json => (json && json.result && Array.isArray(json.result.jobList) ? json.result.jobList.length : 0)
   };
 
-  async function fetchPage(position, count) {
-    const doFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : (typeof fetch === 'function' ? fetch : null);
+  function fetcher() {
+    return typeof window.fetch === 'function' ? window.fetch.bind(window) : (typeof fetch === 'function' ? fetch : null);
+  }
+
+  async function fetchPage(position, count, fresh) {
+    const doFetch = fetcher();
     if (!doFetch) throw new Error('Could not reach Jobright.');
     let res;
     try {
-      res = await doFetch(SOURCE.url(position, count), { credentials: 'include' });
+      res = await doFetch(SOURCE.url(position, count, fresh), { credentials: 'include' });
     } catch (e) {
       throw new Error('Could not reach Jobright. Check your connection.');
     }
@@ -492,21 +510,12 @@
     const size = st.pageSize;
     const gen = st.gen;
     const current = () => gen === st.gen;
-    st.loading = fetchPage(position, size).then(({ jobs, size: got }) => {
+    st.loading = fetchPage(position, size, position === 0).then(({ jobs, size: got }) => {
       if (!current()) return;
-      const known = new Set(st.jobs.map(j => j.jobId));
-      jobs.forEach(job => {
-        if (known.has(job.jobId)) return;
-        known.add(job.jobId);
-        st.jobs.push(job);
-        // Preselect once, when a job first appears; later the user decides.
-        if (!st.seen.has(job.jobId)) {
-          st.seen.add(job.jobId);
-          if (preselectable(job)) st.selected.add(job.jobId);
-        }
-      });
+      addJobs(jobs);
       st.position = position + size;
       if (got < size) st.exhausted = true;
+      return lookupApplied(jobs);
     }).catch(err => {
       if (current()) st.error = (err && err.message) || 'Could not load jobs.';
     }).then(() => {
@@ -518,8 +527,22 @@
     return st.loading;
   }
 
-  // Start over from the top of Jobright's list. Selections the user made
-  // stay (st.seen / st.selected); jobs no longer listed simply drop out.
+  function addJobs(jobs) {
+    const known = new Set(st.jobs.map(j => j.jobId));
+    jobs.forEach(job => {
+      if (known.has(job.jobId)) return;
+      known.add(job.jobId);
+      st.jobs.push(job);
+      // Preselect once, when a job first appears; later the user decides.
+      if (!st.seen.has(job.jobId)) {
+        st.seen.add(job.jobId);
+        if (preselectable(job)) st.selected.add(job.jobId);
+      }
+    });
+  }
+
+  // Start over from what the page is showing. Selections the user made stay
+  // (st.seen / st.selected); jobs no longer listed simply drop out.
   function reloadJobs() {
     st.gen += 1;
     st.jobs = [];
@@ -528,7 +551,108 @@
     st.exhausted = false;
     st.error = '';
     st.loading = null;
-    return loadMore();
+    st.appliedList = null;
+    if (!st.feed || !st.feed.jobs.length) return loadMore();
+    addJobs(st.feed.jobs);
+    st.position = st.feed.next;
+    st.pageSize = st.feed.size;
+    st.exhausted = st.feed.exhausted;
+    const gen = st.gen;
+    st.loading = lookupApplied(st.jobs).then(() => {
+      if (gen !== st.gen) return;
+      st.loading = null;
+      render();
+    });
+    render();
+    return st.loading;
+  }
+
+  // --- the page's own list (from jobright-list-tap.js) ------------------------
+  function onPageMessage(event) {
+    if (!event || event.source !== window) return;
+    const data = event.data;
+    if (!data || typeof data !== 'object' || data.source !== TAP_TAG) return;
+    if (typeof data.url !== 'string' || typeof data.body !== 'string') return;
+    if (!alive()) { destroy(); return; }
+    takePageList(data.url, data.body);
+  }
+
+  function takePageList(url, body) {
+    let u;
+    let json;
+    try {
+      u = new URL(url, currentLocation().origin);
+      json = JSON.parse(body);
+    } catch (e) {
+      return false;
+    }
+    if (u.origin !== currentLocation().origin || u.pathname !== LIST_PATH) return false;
+    if (!json || typeof json !== 'object' || json.success === false) return false;
+    const position = Math.max(0, parseInt(u.searchParams.get('position'), 10) || 0);
+    const asked = parseInt(u.searchParams.get('count'), 10);
+    const got = SOURCE.size(json);
+    const size = asked > 0 ? asked : (got || DEFAULT_PAGE);
+    // A new set (first page, or refresh=true after a filter change) replaces
+    // the old one; later pages extend it.
+    const restart = position === 0 || u.searchParams.get('refresh') === 'true' || !st.feed;
+    if (restart) st.feed = { jobs: [], next: 0, size, exhausted: false };
+    const feed = st.feed;
+    const known = new Set(feed.jobs.map(j => j.jobId));
+    SOURCE.map(json).forEach(j => { if (!known.has(j.jobId)) { known.add(j.jobId); feed.jobs.push(j); } });
+    feed.next = Math.max(feed.next, position + size);
+    feed.size = size;
+    feed.exhausted = got < size;
+    // An open picker follows the page (a filter change, say).
+    if (st.open && st.onRoute && !st.batch) reloadJobs();
+    return true;
+  }
+
+  // --- jobs already applied to ------------------------------------------------
+  // Jobright's Applied list, most recent first. One read per open.
+  async function jobrightApplied() {
+    const doFetch = fetcher();
+    const ids = new Set();
+    if (!doFetch) return ids;
+    const url = new URL(APPLIED_PATH, currentLocation().origin).toString();
+    let cursor = null;
+    for (let page = 0; page < APPLIED_PAGES; page++) {
+      let json;
+      try {
+        const res = await doFetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cursor, pageSize: APPLIED_PAGE_SIZE, applyStatus: 0 })
+        });
+        if (!res || !res.ok) break;
+        json = JSON.parse(await res.text());
+      } catch (e) {
+        break;
+      }
+      const r = json && json.result && typeof json.result === 'object' ? json.result : null;
+      if (!r || !Array.isArray(r.list)) break;
+      r.list.forEach(item => {
+        const id = item && item.jobResult ? clean(item.jobResult.jobId) : '';
+        if (id) ids.add(id);
+      });
+      if (!r.hasMore || !r.cursor) break;
+      cursor = r.cursor;
+    }
+    return ids;
+  }
+
+  // Marks which of `jobs` are already applied to; never fails the load.
+  async function lookupApplied(jobs) {
+    const list = (jobs || []).filter(j => !st.hidden.has(j.jobId));
+    if (!list.length) return;
+    if (!st.appliedList) st.appliedList = jobrightApplied().catch(() => new Set());
+    const [onJobright, logged] = await Promise.all([
+      st.appliedList,
+      send({ type: 'LIT_BATCH_APPLIED', jobs: list.map(j => ({ jobId: j.jobId, title: j.title, company: j.company, url: j.url })) })
+    ]);
+    list.forEach(j => { if (onJobright.has(j.jobId)) st.hidden.add(j.jobId); });
+    if (logged && logged.ok && Array.isArray(logged.jobIds)) logged.jobIds.forEach(id => st.hidden.add(String(id)));
+    dropDone();
   }
 
   // --- chrome plumbing -------------------------------------------------------
@@ -585,6 +709,7 @@
 
   function dropDone() {
     Object.keys(st.done).forEach(id => st.selected.delete(id));
+    st.hidden.forEach(id => st.selected.delete(id));
   }
 
   function onStorageChanged(changes, area) {
@@ -614,7 +739,7 @@
   // --- actions ---------------------------------------------------------------
   // What the picker shows: Jobright's current list minus jobs LIT submitted.
   function listedJobs() {
-    return st.jobs.filter(j => !st.done[j.jobId]);
+    return st.jobs.filter(j => !st.done[j.jobId] && !st.hidden.has(j.jobId));
   }
 
   function selectedJobs() {
@@ -1076,6 +1201,7 @@
       chrome.storage.onChanged.addListener(storageListener);
     } catch (e) { /* context gone; check() cleans up */ }
     window.addEventListener('popstate', onPopState);
+    window.addEventListener('message', onPageMessage);
     // Jobright is an SPA and a content script cannot see the page's own
     // pushState calls, so the URL is polled.
     pollTimer = setInterval(check, POLL_MS);
@@ -1092,7 +1218,10 @@
       try { chrome.storage.onChanged.removeListener(storageListener); } catch (e) { /* context gone */ }
       storageListener = null;
     }
-    try { window.removeEventListener('popstate', onPopState); } catch (e) { /* window gone */ }
+    try {
+      window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('message', onPageMessage);
+    } catch (e) { /* window gone */ }
     if (ui && ui.host && ui.host.parentNode) ui.host.parentNode.removeChild(ui.host);
     ui = null;
     st.open = false;
@@ -1135,6 +1264,7 @@
     close,
     check,
     loadMore,
+    takePageList,
     start,
     destroy,
     state

@@ -559,6 +559,41 @@ async function run() {
     console.log('[PASS] v2: 90 s / 6 min timeouts, LIT_BATCH_CAPS without the key, LIT_OPEN_OPTIONS, composed stored');
   }
 
+  {
+    // LIT_BATCH_APPLIED: which Jobright jobs the tracker already logged.
+    installMockChrome({});
+    delete require.cache[require.resolve(RUNNER)];
+    const LB = require(RUNNER);
+    const logs = [
+      { company: 'Northwind Labs, Inc.', role: 'Software Engineer - Platform', url: '' },
+      { company: 'Other Co', role: 'Whatever', url: 'https://jobs.lever.co/fabrikam/abc-123/?utm_source=x' },
+      { company: 'Contoso', role: '', url: '' },
+      null
+    ];
+    const jobs = [
+      { jobId: 'a', company: 'Northwind Labs', title: 'Software Engineer, Platform', url: 'https://x.example/1' },
+      { jobId: 'b', company: 'Fabrikam', title: 'Full Stack Engineer', url: 'https://jobs.lever.co/fabrikam/abc-123' },
+      { jobId: 'c', company: 'Northwind Labs', title: 'Data Engineer', url: 'https://x.example/2' },
+      { jobId: 'd', company: 'Contoso', title: 'Backend Engineer', url: '' }
+    ];
+    // The worker has TrackerStorage loaded; its normalizer is the one used.
+    global.TrackerStorage = require(path.resolve(__dirname, '..', 'shared', 'storage.js'));
+    assert.deepStrictEqual(LB.matchApplied(jobs, logs), ['a', 'b'],
+      'same company + role, or same link; same company alone is not enough');
+    delete global.TrackerStorage;
+    LB.install({ getJobLogs: async () => logs, normalizeCompany: n => String(n || '').toLowerCase().replace(/\b(inc)\b/g, '').replace(/[^a-z0-9]+/g, '') });
+    const ask = msg => new Promise(resolve => { LB.handleMessage(msg, {}, resolve); });
+    assert.deepStrictEqual(await ask({ type: 'LIT_BATCH_APPLIED', jobs }), { ok: true, jobIds: ['a', 'b'] });
+    assert.deepStrictEqual(await ask({ type: 'LIT_BATCH_APPLIED' }), { ok: true, jobIds: [] });
+    LB.install({ getJobLogs: async () => { throw new Error('db gone'); } });
+    assert.deepStrictEqual(await ask({ type: 'LIT_BATCH_APPLIED', jobs }), { ok: false, jobIds: [] }, 'failure is an empty answer');
+    await settle();
+    await LB._whenIdle();
+    await settle();
+    uninstallMockChrome();
+    console.log('[PASS] LIT_BATCH_APPLIED matches logged applications by company + role or link');
+  }
+
   console.log('--- test/batch-runner.test.js COMPLETED SUCCESSFULLY ---');
 }
 

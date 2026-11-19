@@ -108,7 +108,20 @@ async function page(options = {}) {
   const doc = dom.installDom();
   const chrome = installMockChrome(options.store || {});
   const win = createWindow();
-  win.fetch = options.fetch || jsonFetch(samplePayload());
+  // Jobright's Applied list is served here; everything else goes to the
+  // list fetch, whose .calls the tests count.
+  const listFetch = options.fetch || jsonFetch(samplePayload());
+  const appliedIds = options.applied || [];
+  win.fetch = async (url, init) => {
+    if (String(url).includes('/swan/job/applied/')) {
+      win.fetch.appliedCalls.push({ url, init });
+      const list = appliedIds.map(id => ({ jobResult: { jobId: id } }));
+      return response(200, JSON.stringify({ success: true, result: { list, cursor: null, hasMore: false } }));
+    }
+    return listFetch(url, init);
+  };
+  win.fetch.calls = listFetch.calls;
+  win.fetch.appliedCalls = [];
   const entries = options.entries || [];
   win.performance = { getEntriesByType: type => (type === 'resource' ? entries : []) };
   global.document = doc;
@@ -426,6 +439,148 @@ async function testFreshOnOpen() {
   console.log('[PASS] reopening refetches from the top; stale responses and hidden postings dropped');
 }
 
+// The panel lists what the page loaded (handed over by jobright-list-tap.js),
+// not a separate API read: refresh=false at position 0 returns an older set.
+async function testPageFeed() {
+  const pageSet = samplePayload();
+  pageSet.result.jobList = pageSet.result.jobList.slice(0, 3); // gh, ashby, lever
+  const pageUrl = 'https://jobright.ai/swan/recommend/list/jobs?refresh=true&sortCondition=0&position=0&count=3&syncRerank=false';
+  const stale = { success: true, result: { jobList: [item(hex(90), 'Old Role', 'Stale Co', 'https://jobs.lever.co/stale/1', '')] } };
+  const fetchFn = jsonFetch(stale);
+  await withPage({ fetch: fetchFn }, async ({ doc, win, api }) => {
+    // Delivered the way the tap does it.
+    const deliver = (url, payload, source) => win.listeners.message.forEach(fn => fn({ source: source || win, data: { source: 'lit-jobright-list', url, body: JSON.stringify(payload) } }));
+    deliver(pageUrl, pageSet, {}); // not from this window: ignored
+    deliver(pageUrl, pageSet);
+    await api.open();
+    assert.strictEqual(fetchFn.calls.length, 0, 'no list request when the page list is known');
+    assert.deepStrictEqual(api.state().jobs.map(j => j.jobId), [IDS.gh, IDS.ashby, IDS.lever], 'exactly the page list');
+    assert.strictEqual(api.state().exhausted, false, 'a full page: more may follow');
+
+    // Load more continues the page's set from where it stopped.
+    await click(q(doc, '.load-more'));
+    await settle();
+    const u = new URL(fetchFn.calls[0].url);
+    assert.strictEqual(u.searchParams.get('position'), '3');
+    assert.strictEqual(u.searchParams.get('refresh'), 'false');
+
+    // The page changes filters while the picker is open: it follows.
+    const next = samplePayload();
+    next.result.jobList = next.result.jobList.slice(3, 5); // rippling, dice
+    deliver(pageUrl.replace('count=3', 'count=20'), next);
+    await settle();
+    assert.deepStrictEqual(api.state().jobs.map(j => j.jobId), [IDS.rippling, IDS.dice]);
+    assert.strictEqual(api.state().exhausted, true, 'short page: the end');
+
+    // Junk is refused.
+    assert.strictEqual(api.takePageList('https://evil.example/swan/recommend/list/jobs?position=0', JSON.stringify(next)), false);
+    assert.strictEqual(api.takePageList(pageUrl, 'not json'), false);
+    assert.strictEqual(api.takePageList(pageUrl, JSON.stringify({ success: false })), false);
+  });
+
+  // Nothing handed over (page loaded before LIT): first page asks like the page.
+  const fallback = jsonFetch(samplePayload());
+  await withPage({ fetch: fallback }, async ({ api }) => {
+    await api.open();
+    assert.strictEqual(new URL(fallback.calls[0].url).searchParams.get('refresh'), 'true', 'first page uses refresh=true');
+    assert.strictEqual(new URL(api.listUrl(20, 20)).searchParams.get('refresh'), 'false', 'later pages do not');
+  });
+  console.log('[PASS] picker lists the page\'s own jobs; follows filter changes; fallback asks with refresh=true');
+}
+
+async function testAppliedHidden() {
+  const respond = msg => (msg.type === 'LIT_BATCH_APPLIED' ? { ok: true, jobIds: [IDS.ashby] } : { ok: true });
+  await withPage({ respond, applied: [IDS.gh] }, async ({ doc, win, api, received }) => {
+    await api.open();
+    await settle();
+    const ids = api.state().jobs.map(j => j.jobId);
+    assert.ok(!ids.includes(IDS.gh), 'on Jobright\'s Applied list: hidden');
+    assert.ok(!ids.includes(IDS.ashby), 'logged in the tracker: hidden');
+    assert.strictEqual(ids.length, 7);
+    assert.strictEqual(row(doc, IDS.gh), null);
+    assert.ok(!api.state().selected.includes(IDS.gh) && !api.state().selected.includes(IDS.ashby), 'never sent');
+    const ask = received.find(m => m.type === 'LIT_BATCH_APPLIED');
+    assert.ok(ask && ask.jobs.length === 9, 'asks about every listed job');
+    assert.deepStrictEqual(Object.keys(ask.jobs[0]).sort(), ['company', 'jobId', 'title', 'url']);
+    const ap = win.fetch.appliedCalls[0];
+    assert.strictEqual(ap.init.method, 'POST');
+    assert.strictEqual(ap.init.credentials, 'include');
+    assert.strictEqual(JSON.parse(ap.init.body).applyStatus, 0);
+  });
+  // The lookups failing never blocks the list.
+  await withPage({}, async ({ api }) => {
+    await api.open();
+    assert.strictEqual(api.state().jobs.length, 9);
+  });
+  console.log('[PASS] jobs on Jobright\'s Applied list or in the tracker are left out');
+}
+
+// content/jobright/jobright-list-tap.js, in a fake page world: it hands the
+// page's list responses over and leaves every request and response as is.
+async function testListTap() {
+  const TAP = path.join(ROOT, 'content/jobright/jobright-list-tap.js');
+  const posted = [];
+  class FakeXHR {
+    constructor() { this.listeners = {}; this.responseType = ''; }
+    open(method, url) { this.url = url; this.opened = true; }
+    send() { this.sent = true; }
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+    finish(status, text) { this.status = status; this.responseText = text; this.responseURL = new URL(this.url, 'https://jobright.ai').href; (this.listeners.load || []).forEach(fn => fn()); }
+  }
+  const realFetchCalls = [];
+  const win = {
+    XMLHttpRequest: FakeXHR,
+    fetch: async url => { realFetchCalls.push(url); return { status: 200, url: 'https://jobright.ai' + url, clone() { return { text: async () => '{"success":true,"result":{"jobList":[]}}' }; } }; },
+    postMessage: (data, origin) => posted.push({ data, origin })
+  };
+  global.window = win;
+  global.location = new URL('https://jobright.ai/jobs/recommend');
+  global.XMLHttpRequest = FakeXHR;
+  try {
+    delete require.cache[require.resolve(TAP)];
+    require(TAP);
+    const listUrl = '/swan/recommend/list/jobs?refresh=true&sortCondition=0&position=0&count=20&syncRerank=false';
+    const x = new win.XMLHttpRequest();
+    x.open('GET', listUrl);
+    x.send();
+    assert.ok(x.opened && x.sent, 'the request still goes out');
+    x.finish(200, '{"success":true}');
+    assert.strictEqual(posted.length, 1);
+    assert.strictEqual(posted[0].origin, 'https://jobright.ai', 'posted to the same origin only');
+    assert.deepStrictEqual(posted[0].data, { source: 'lit-jobright-list', url: 'https://jobright.ai' + listUrl, body: '{"success":true}' });
+
+    const other = new win.XMLHttpRequest();
+    other.open('GET', '/swan/credit/balance-v2');
+    other.send();
+    other.finish(200, '{}');
+    const failed = new win.XMLHttpRequest();
+    failed.open('GET', listUrl);
+    failed.send();
+    failed.finish(500, 'oops');
+    assert.strictEqual(posted.length, 1, 'other requests and errors are not handed over');
+
+    const res = await win.fetch(listUrl);
+    assert.strictEqual(res.status, 200, 'fetch result passes through');
+    await settle();
+    assert.strictEqual(realFetchCalls.length, 1);
+    assert.strictEqual(posted.length, 2, 'fetch responses too');
+
+    require(TAP); // a second injection does not wrap twice
+    delete require.cache[require.resolve(TAP)];
+    require(TAP);
+    const again = new win.XMLHttpRequest();
+    again.open('GET', listUrl);
+    again.send();
+    again.finish(200, '{"success":true}');
+    assert.strictEqual(posted.length, 3, 'one hand-over per response');
+  } finally {
+    delete global.window;
+    delete global.location;
+    delete global.XMLHttpRequest;
+  }
+  console.log('[PASS] list tap hands over list responses only and changes nothing');
+}
+
 async function chromeSet(items) {
   await global.chrome.storage.local.set(items);
   await settle();
@@ -612,7 +767,7 @@ async function testLiveView() {
 
     await click(q(doc, '.clear'));
     await settle();
-    assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_CLEAR' });
+    assert.ok(received.some(m => m.type === 'LIT_BATCH_CLEAR' && Object.keys(m).length === 1), 'Clear sent');
     assert.strictEqual(chrome.storage.local.store.lit_batch, undefined);
     assert.strictEqual(api.state().batch, null);
     assert.ok(q(doc, '.start'), 'back to the picker after Clear');
@@ -703,7 +858,7 @@ async function testInvalidated() {
   await withPage({}, async ({ doc, api, chrome, win }) => {
     await api.open();
     assert.strictEqual(chrome.storage.onChanged.listeners.size, 1);
-    assert.strictEqual(win.listenerCount(), 1);
+    assert.strictEqual(win.listenerCount(), 2, 'popstate and the page-list message');
     chrome.runtime.id = undefined; // what an orphaned content script sees
     api.check();
     assert.strictEqual(hostEl(doc), null, 'UI removed');
@@ -740,6 +895,9 @@ async function run() {
   await testListUrl();
   await testOpenAndPreselect();
   await testFreshOnOpen();
+  await testPageFeed();
+  await testAppliedHidden();
+  await testListTap();
   await testLoadMore();
   await testPrefs();
   await testStart();
