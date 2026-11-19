@@ -141,6 +141,7 @@ async function run() {
   const AUTOFILL_JS = [
     'shared/autofill-store.js',
     'shared/autofill-core.js',
+    'shared/discretion.js',
     'content/autofill/sites/greenhouse.js',
     'content/autofill/sites/lever.js',
     'content/autofill/sites/ashby.js',
@@ -168,6 +169,8 @@ async function run() {
   assert.ok(jobrightEntry, 'the Jobright panel is a content script');
   assert.deepStrictEqual(jobrightEntry.matches, ['https://jobright.ai/*'], 'the Jobright panel runs on jobright.ai only');
   assert.ok(/importScripts\([^)]*batch-runner\.js/.test(swText), 'the worker loads the batch orchestrator');
+  assert.ok(/importScripts\([^)]*ai-answer\.js/.test(swText), 'the worker loads the answer writer');
+  assert.ok(manifest.host_permissions.includes('https://api.anthropic.com/*'), 'the answer writer can reach the Claude API');
   const swSource = fs.readFileSync(swPath, 'utf8');
   assert.ok(/importScripts\('\.\.\/shared\/auth\.js', '\.\.\/shared\/db\.js', '\.\.\/shared\/storage\.js'\)/.test(swSource), 'the worker loads auth, db, then storage');
   assert.ok(/TrackerStorage\.serveRemote\(\)/.test(swSource), 'the worker answers content-script storage calls');

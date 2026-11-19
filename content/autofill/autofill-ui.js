@@ -1283,6 +1283,37 @@
     ]);
   }
 
+  // The company and role this page is for, so a saved answer can later be
+  // re-targeted to another job. JobMeta when it is loaded, else a title like
+  // "Job Application for Role at Company". Only known values are returned.
+  function pageJobContext() {
+    let company = '';
+    let role = '';
+    try {
+      if (typeof JobMeta !== 'undefined' && JobMeta && typeof JobMeta.extract === 'function') {
+        const meta = JobMeta.extract(document, location.href) || {};
+        company = String(meta.company || '').trim();
+        role = String(meta.role || '').trim();
+      }
+    } catch (e) {
+      // Fall back to the title.
+    }
+    if (!company || !role) {
+      const title = String(document.title || '').replace(/\s+/g, ' ').trim()
+        .replace(/^(job )?application for\s+|^apply (now )?(for|to)\s+/i, '')
+        .replace(/\s+[|\u2013\u2014-]\s+.*$/, '');
+      const m = title.match(/^(.+)\s+at\s+(.+)$/i);
+      if (m) {
+        if (!role) role = m[1].trim();
+        if (!company) company = m[2].trim();
+      }
+    }
+    const out = {};
+    if (company) out.company = company.slice(0, 120);
+    if (role) out.role = role.slice(0, 120);
+    return out;
+  }
+
   function offerAnswer(entry, value) {
     const desc = entry.desc;
     entry.offered = value;
@@ -1297,7 +1328,7 @@
         primary: true,
         onClick: async () => {
           try {
-            await store.saveAnswer({ question: desc.label || labelKeyOf(desc), answer: value });
+            await store.saveAnswer(Object.assign({ question: desc.label || labelKeyOf(desc), answer: value }, pageJobContext()));
             showToast('Saved to your answer bank.', { variant: 'success' });
           } catch (err) {
             showToast('Could not save that answer: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn' });

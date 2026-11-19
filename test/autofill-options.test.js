@@ -374,7 +374,9 @@ async function testSettingsResumeAndErase() {
   eeoSwitch.checked = true;
   eeoSwitch.fire('change');
   await page.settle();
-  assert.deepStrictEqual(page.stored().af_settings, { showButton: true, fillEeo: true, autoLearn: true });
+  assert.deepStrictEqual(page.stored().af_settings, {
+    showButton: true, fillEeo: true, autoLearn: true, aiEnabled: false, aiKey: '', aiModel: 'claude-opus-5-5'
+  });
   const before = page.stored();
 
   await page.confirm(page.el('resume-remove-btn'));
@@ -396,6 +398,76 @@ async function testSettingsResumeAndErase() {
   after.af_resume.savedAt = before.af_resume.savedAt;
   assert.deepStrictEqual(after, before, 'undo after erase restores everything');
   assert.strictEqual(page.el('pf-firstName').value, 'Sam');
+  uninstallMockChrome();
+}
+
+async function testAnswerWriting() {
+  const KEY = 'sk-ant-api03-test-key-WXYZ';
+  const seed = JSON.parse(JSON.stringify(SEED));
+  seed.af_answers[0].company = 'Stripe';
+  seed.af_answers[0].role = 'Software Engineering Intern';
+  const page = await openPage(seed, '#settings');
+
+  // Saved answers show the job they were written for, and search finds it.
+  const first = page.el('answers-list').children[0];
+  assert.ok(first.find(n => n.classList.contains('answer-context') && n.textContent === 'Software Engineering Intern at Stripe').length,
+    'the answer shows its company and role');
+  assert.strictEqual(page.el('answers-list').children[1].find(n => n.classList.contains('answer-context')).length, 0,
+    'no context, no chip');
+  page.el('answers-search').value = 'stripe';
+  page.el('answers-search').fire('input');
+  assert.strictEqual(page.el('answers-list').children.length, 1, 'search matches the company');
+  page.el('answers-search').value = '';
+  page.el('answers-search').fire('input');
+
+  const aiSwitch = page.doc.querySelectorAll('[data-setting="aiEnabled"]')[0];
+  const keyInput = page.el('ai-key');
+  assert.strictEqual(keyInput.getAttribute('type'), 'password', 'the key field is masked');
+  assert.strictEqual(page.el('ai-key-status').textContent, 'No key saved');
+  assert.ok(!page.el('ai-key-remove').visible, 'nothing to remove yet');
+  assert.strictEqual(page.el('ai-model').value, 'claude-opus-5-5');
+  assert.ok(/sent to Anthropic/.test(page.el('ai-note').textContent) && /api\.anthropic\.com/.test(page.el('ai-note').textContent),
+    'the page says what is sent where');
+
+  aiSwitch.checked = true;
+  aiSwitch.fire('change');
+  await page.settle();
+  assert.strictEqual(page.stored().af_settings.aiEnabled, true);
+  assert.ok(page.el('ai-key-status').classList.contains('is-warn'), 'on without a key asks for one');
+
+  // The key is saved on blur and never shown again.
+  await page.type(keyInput, '  ' + KEY + ' ');
+  assert.strictEqual(page.stored().af_settings.aiKey, KEY);
+  assert.strictEqual(keyInput.value, '', 'the field is cleared after saving');
+  assert.strictEqual(page.el('ai-key-status').textContent, 'Saved, ending in WXYZ');
+  assert.ok(!page.doc.body.find(n => n.value === KEY || n.textContent.includes(KEY)).length, 'the key is nowhere on the page');
+  assert.ok(page.el('ai-key-remove').visible);
+  // Blurring the empty field does not wipe the key.
+  await page.type(keyInput, '');
+  assert.strictEqual(page.stored().af_settings.aiKey, KEY);
+
+  // Model: saved on blur; cleared means the default.
+  await page.type(page.el('ai-model'), 'claude-sonnet-5-5');
+  assert.strictEqual(page.stored().af_settings.aiModel, 'claude-sonnet-5-5');
+  await page.type(page.el('ai-model'), '  ');
+  assert.strictEqual(page.stored().af_settings.aiModel, 'claude-opus-5-5');
+  assert.strictEqual(page.el('ai-model').value, 'claude-opus-5-5');
+
+  // Remove asks twice and can be undone.
+  await page.confirm(page.el('ai-key-remove'));
+  assert.strictEqual(page.stored().af_settings.aiKey, '');
+  assert.strictEqual(page.el('ai-key-status').textContent, 'Add a key so LIT can write answers');
+  page.el('undo-btn').click();
+  await page.settle();
+  assert.strictEqual(page.stored().af_settings.aiKey, KEY, 'undo puts the key back');
+
+  // Erase then undo brings the key back too (the snapshot holds it in memory).
+  await page.confirm(page.el('clear-all-btn'));
+  assert.deepStrictEqual(page.stored(), {});
+  page.el('undo-btn').click();
+  await page.settle();
+  assert.strictEqual(page.stored().af_settings.aiKey, KEY, 'undo after erase restores the key');
+  assert.strictEqual(page.stored().af_answers[0].company, 'Stripe', 'and the answer context');
   uninstallMockChrome();
 }
 
@@ -421,6 +493,7 @@ async function run() {
     testProfileEdits,
     testListEditsAndUndo,
     testSettingsResumeAndErase,
+    testAnswerWriting,
     testEmptyPage
   ];
   for (const t of tests) {

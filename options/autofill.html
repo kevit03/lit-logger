@@ -124,6 +124,29 @@
         </label>
       </div>
 
+      <h3 class="panel-subhead" id="answer-writing">Answer writing</h3>
+      <div class="card rows">
+        <label class="row" title="Lets auto-apply write answers to open questions with Claude, using only your profile and saved answers">
+          <span class="row-title">Write answers with Claude</span>
+          <input type="checkbox" class="switch" data-setting="aiEnabled" aria-label="Write answers with Claude">
+        </label>
+        <div class="row row-field">
+          <div class="row-text">
+            <label class="row-title" for="ai-key">Claude API key</label>
+            <span class="row-sub" id="ai-key-status">No key saved</span>
+          </div>
+          <div class="row-actions">
+            <input type="password" class="input input-key" id="ai-key" autocomplete="off" spellcheck="false" placeholder="Paste your API key" aria-describedby="ai-key-status">
+            <button type="button" class="btn btn-danger-ghost btn-sm hidden" id="ai-key-remove">Remove</button>
+          </div>
+        </div>
+        <div class="row row-field">
+          <label class="row-title" for="ai-model">Model</label>
+          <input type="text" class="input input-model" id="ai-model" autocomplete="off" spellcheck="false" placeholder="claude-opus-5-5">
+        </div>
+        <p class="row-note" id="ai-note">Your profile, saved answers, and the job description are sent to Anthropic to write answers. The key never leaves this device except to api.anthropic.com.</p>
+      </div>
+
       <h3 class="panel-subhead" id="data">Data</h3>
       <div class="card rows">
         <div class="row">

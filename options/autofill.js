@@ -575,7 +575,7 @@
 
   function renderAnswers() {
     const search = searchOf(answersSearch);
-    const visible = lists.answers.filter(a => search.matches(a.question + '\n' + a.answer));
+    const visible = lists.answers.filter(a => search.matches([a.question, a.answer, a.role, a.company].filter(Boolean).join('\n')));
     el('answers-list').replaceChildren(...visible.map(answerItem));
     el('count-answers').textContent = lists.answers.length || '';
     // With nothing saved yet, offer starting points: each opens the
@@ -594,6 +594,11 @@
     const aText = make('textarea', { className: 'input textarea', rows: '3', 'aria-label': 'Answer' });
     aText.value = a.answer;
     const meta = make('span', { className: 'item-meta', text: a.updatedAt ? 'Updated ' + formatDate(a.updatedAt) : '' });
+    // The job the answer was written for; answer writing swaps it for the next one.
+    const context = a.role && a.company ? a.role + ' at ' + a.company : (a.role || a.company || '');
+    const contextChip = context
+      ? make('span', { className: 'chip chip-soft answer-context', text: context, title: 'Written for ' + context })
+      : null;
     const del = button('btn btn-danger-ghost btn-sm', 'Delete');
     const err = make('div', { className: 'field-error hidden', role: 'alert' });
 
@@ -622,7 +627,7 @@
     return make('div', { className: 'card answer-item', dataset: { id: a.id } }, [
       qInput,
       aText,
-      make('div', { className: 'row-actions between' }, [meta, del]),
+      make('div', { className: 'row-actions between' }, [make('div', { className: 'answer-meta' }, [contextChip, meta]), del]),
       err
     ]);
   }
@@ -708,6 +713,7 @@
     const learnChanged = !!settings.autoLearn !== !!next.autoLearn;
     settings = next;
     switches.forEach(input => { input.checked = !!settings[input.dataset.setting]; });
+    renderAnswerWriting();
     if (learnChanged) renderRules();
   }
 
@@ -720,6 +726,49 @@
     input.addEventListener('change', () => {
       saveSetting(input.dataset.setting, input.checked).catch(() => { input.checked = !input.checked; });
     });
+  });
+
+  // ----- Answer writing ------------------------------------------------------
+  // The key is never written back into the page: its field stays empty and
+  // the line under the label says whether one is saved.
+  const keyInput = el('ai-key');
+  const keyStatus = el('ai-key-status');
+  const keyRemove = el('ai-key-remove');
+  const modelInput = el('ai-model');
+
+  function renderAnswerWriting() {
+    const hasKey = !!settings.aiKey;
+    const missing = !hasKey && !!settings.aiEnabled;
+    keyStatus.textContent = hasKey
+      ? 'Saved, ending in ' + settings.aiKey.slice(-4)
+      : (missing ? 'Add a key so LIT can write answers' : 'No key saved');
+    keyStatus.classList.toggle('is-warn', missing);
+    keyInput.setAttribute('placeholder', hasKey ? 'Paste a new key to replace it' : 'Paste your API key');
+    show(keyRemove, hasKey);
+    if (document.activeElement !== modelInput) modelInput.value = settings.aiModel || '';
+  }
+
+  keyInput.addEventListener('blur', () => {
+    const value = keyInput.value.trim();
+    keyInput.value = '';
+    if (!value || value === settings.aiKey) return;
+    saveSetting('aiKey', value).catch(() => {});
+  });
+  keyInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') keyInput.blur();
+  });
+
+  armedDelete(keyRemove, 'Yes, remove key', async () => {
+    const previous = settings.aiKey;
+    await saveSetting('aiKey', '');
+    offerUndo('API key removed.', () => store.saveSettings({ aiKey: previous }));
+  });
+
+  // An empty model field goes back to the default model.
+  modelInput.addEventListener('blur', () => {
+    const value = modelInput.value.trim();
+    if (value === (settings.aiModel || '')) return;
+    saveSetting('aiModel', value).catch(() => {});
   });
 
   // ---------------------------------------------------------------------------
@@ -774,7 +823,7 @@
     closeImportPanel();
     if (!job) return;
     try {
-      const snapshot = await store.exportAll();
+      const snapshot = await store.exportAll({ includeKey: true });
       const counts = await write(store.importAll(job.text));
       await loadAll();
       setStatus('Imported ' + counts.answers + ' answers, ' + counts.rules + ' rules', 'saved');
@@ -785,7 +834,7 @@
   });
 
   armedDelete(el('clear-all-btn'), 'Yes, erase everything', async () => {
-    const snapshot = await store.exportAll();
+    const snapshot = await store.exportAll({ includeKey: true });
     await write(store.clearAll());
     await loadAll();
     offerUndo('All autofill data erased.', () => store.importAll(snapshot));

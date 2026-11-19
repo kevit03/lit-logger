@@ -50,6 +50,9 @@
 
 importScripts('../shared/auth.js', '../shared/db.js', '../shared/storage.js');
 importScripts('batch-runner.js');
+// Answer writing for auto-apply: the store and composer have no DOM or window
+// dependency, so they load here too and the API key stays in the worker.
+importScripts('../shared/autofill-store.js', '../shared/answer-composer.js', 'ai-answer.js');
 
 TrackerStorage.serveRemote();
 
@@ -99,7 +102,8 @@ const SHARED_FILES = [
 // button script are safe to load twice.
 const AUTOFILL_SHARED = [
   ['AutofillStore', 'shared/autofill-store.js'],
-  ['AutofillCore', 'shared/autofill-core.js']
+  ['AutofillCore', 'shared/autofill-core.js'],
+  ['LitDiscretion', 'shared/discretion.js']
 ];
 const AUTOFILL_FILES = [
   'content/autofill/sites/greenhouse.js',
@@ -615,6 +619,7 @@ if (chrome.contextMenus && chrome.contextMenus.onClicked) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || (sender && sender.id && sender.id !== chrome.runtime.id)) return false;
   if (typeof LitBatch !== 'undefined' && LitBatch.handleMessage(msg, sender, sendResponse)) return true;
+  if (typeof LitAnswers !== 'undefined' && LitAnswers.handleMessage(msg, sender, sendResponse)) return true;
   if (msg.type === 'PT_INJECT_UNIVERSAL') {
     injectUniversal(sender).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false }));
     return true;

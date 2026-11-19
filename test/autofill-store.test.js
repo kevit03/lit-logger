@@ -283,12 +283,77 @@ async function testResume() {
 
 async function testSettings() {
   const { mock, store } = loadStore();
-  assert.deepStrictEqual(await store.getSettings(), { showButton: true, fillEeo: false, autoLearn: true });
+  const AI = { aiEnabled: false, aiKey: '', aiModel: 'claude-opus-5-5' };
+  assert.deepStrictEqual(await store.getSettings(), Object.assign({ showButton: true, fillEeo: false, autoLearn: true }, AI));
   const next = await store.saveSettings({ fillEeo: true, junk: 1, showButton: 'no' });
-  assert.deepStrictEqual(next, { showButton: true, fillEeo: true, autoLearn: true }, 'non-boolean and unknown keys ignored');
+  assert.deepStrictEqual(next, Object.assign({ showButton: true, fillEeo: true, autoLearn: true }, AI), 'non-boolean and unknown keys ignored');
   await store.saveSettings({ autoLearn: false });
-  assert.deepStrictEqual(await store.getSettings(), { showButton: true, fillEeo: true, autoLearn: false }, 'partial saves merge');
+  assert.deepStrictEqual(await store.getSettings(), Object.assign({ showButton: true, fillEeo: true, autoLearn: false }, AI), 'partial saves merge');
   assert.ok(mock.storage.local.store.af_settings, 'settings stored under af_settings');
+
+  // Answer writing: typed values only, the key trimmed, an empty model means the default.
+  let s = await store.saveSettings({ aiEnabled: true, aiKey: '  sk-ant-test-123  ', aiModel: '  claude-sonnet-5-5 ' });
+  assert.strictEqual(s.aiEnabled, true);
+  assert.strictEqual(s.aiKey, 'sk-ant-test-123');
+  assert.strictEqual(s.aiModel, 'claude-sonnet-5-5');
+  s = await store.saveSettings({ aiEnabled: 'yes', aiKey: 42, aiModel: '' });
+  assert.strictEqual(s.aiEnabled, true, 'non-boolean aiEnabled ignored');
+  assert.strictEqual(s.aiKey, 'sk-ant-test-123', 'non-string key ignored');
+  assert.strictEqual(s.aiModel, 'claude-opus-5-5', 'empty model falls back to the default');
+  s = await store.saveSettings({ aiKey: '' });
+  assert.strictEqual(s.aiKey, '', 'the key can be removed');
+  cleanup();
+}
+
+async function testAnswerContext() {
+  const { mock, store } = loadStore();
+  const a = await store.saveAnswer({ question: 'Why do you want to work here?', answer: 'Payments matter.', company: '  Stripe ', role: 'Software Engineering Intern' });
+  assert.strictEqual(a.company, 'Stripe', 'company stored, trimmed');
+  assert.strictEqual(a.role, 'Software Engineering Intern');
+  assert.strictEqual(mock.storage.local.store.af_answers[0].company, 'Stripe');
+  // No context given: no keys at all (not empty strings).
+  const b = await store.saveAnswer({ question: 'Describe a project', answer: 'LIT.' });
+  assert.ok(!('company' in b) && !('role' in b), 'no context, no keys');
+  // Editing in place keeps the context; saving fresh by labelKey replaces it.
+  const edited = await store.saveAnswer({ id: a.id, question: 'Why do you want to work here?', answer: 'Payments matter a lot.' });
+  assert.strictEqual(edited.company, 'Stripe', 'edit by id keeps company');
+  assert.strictEqual(edited.role, 'Software Engineering Intern', 'edit by id keeps role');
+  const resaved = await store.saveAnswer({ question: 'Why do you want to work here?', answer: 'Docs matter.', company: 'Notion' });
+  assert.strictEqual(resaved.id, a.id);
+  assert.strictEqual(resaved.company, 'Notion');
+  assert.ok(!('role' in resaved), 'a fresh save carries only its own context');
+  // Context survives export and import.
+  const exported = await store.exportAll({ includeResume: false });
+  cleanup();
+  const fresh = loadStore().store;
+  await fresh.importAll(exported);
+  const list = await fresh.getAnswers();
+  assert.strictEqual(list.find(x => x.id === a.id).company, 'Notion');
+  cleanup();
+}
+
+async function testExportLeavesKeyOut() {
+  const { store } = loadStore();
+  await store.saveSettings({ aiEnabled: true, aiKey: 'sk-ant-secret-xyz', fillEeo: true });
+  const exported = await store.exportAll();
+  assert.ok(!JSON.stringify(exported).includes('sk-ant-secret-xyz'), 'the key is never in an export');
+  assert.ok(!('aiKey' in exported.settings), 'no aiKey field in exported settings');
+  assert.strictEqual(exported.settings.aiEnabled, true, 'the rest of the settings are exported');
+  const snapshot = await store.exportAll({ includeKey: true });
+  assert.strictEqual(snapshot.settings.aiKey, 'sk-ant-secret-xyz', 'undo snapshots can include it');
+
+  // Importing a normal export keeps the stored key.
+  exported.settings.fillEeo = false;
+  await store.importAll(exported);
+  let s = await store.getSettings();
+  assert.strictEqual(s.aiKey, 'sk-ant-secret-xyz', 'import without a key keeps the stored key');
+  assert.strictEqual(s.fillEeo, false, 'the other settings are imported');
+  // After an erase, a snapshot with the key restores it.
+  await store.clearAll();
+  assert.strictEqual((await store.getSettings()).aiKey, '');
+  await store.importAll(snapshot);
+  s = await store.getSettings();
+  assert.strictEqual(s.aiKey, 'sk-ant-secret-xyz', 'undo snapshot restores the key');
   cleanup();
 }
 
@@ -423,6 +488,8 @@ async function run() {
     testFindAnswer,
     testResume,
     testSettings,
+    testAnswerContext,
+    testExportLeavesKeyOut,
     testKeysArePrefixed,
     testOnChange,
     testExportImport,

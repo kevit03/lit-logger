@@ -25,6 +25,9 @@ const SUITES = [
   { name: 'Auto-apply Orchestrator Suite', file: './batch-runner.test.js' },
   { name: 'Auto-apply Driver Suite', file: './auto-apply.test.js' },
   { name: 'Jobright Panel Suite', file: './jobright-panel.test.js' },
+  { name: 'Answer Composer Suite', file: './answer-composer.test.js' },
+  { name: 'Claude Answer Writer Suite', file: './ai-answer.test.js' },
+  { name: 'Discretion Rules Suite', file: './discretion.test.js' },
   { name: 'Zero-Emoji Compliance Suite', file: './emoji.test.js' },
   { name: 'Manifest V3 Validation Suite', file: './manifest.test.js' }
 ];

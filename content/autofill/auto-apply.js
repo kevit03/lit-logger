@@ -1,7 +1,9 @@
 // Auto-apply driver: runs inside each batch tab opened by the background
 // batch runner (background/batch-runner.js) and walks one application:
-// reach the form, autofill it, verify every required field, click Submit
-// once, and confirm success.
+// reach the form (pressing up to 3 apply buttons), autofill it, settle the
+// housekeeping questions with shared/discretion.js, have the background write
+// open answers (LIT_COMPOSE_ANSWER), verify every required field, click
+// Submit once, and confirm success.
 //
 // Loads right after content/autofill/autofill-ui.js in every frame where
 // autofill loads. On load it asks the background whether this tab belongs to
@@ -12,8 +14,9 @@
 // open: a required field still empty, a CAPTCHA challenge, a validation
 // error, an ambiguous Submit button, Workday's sign-in. It never solves or
 // touches a CAPTCHA, never navigates away except the Ashby/Lever form URL
-// fixes and one apply button, and never clicks Submit twice for a job, also
-// across reloads (status `submitting` from HELLO means check for success only).
+// fixes and at most 3 apply-button hops, never presses a LinkedIn / SSO /
+// sign-in button, and never clicks Submit twice for a job, also across
+// reloads (status `submitting` from HELLO means check for success only).
 //
 // Background tabs throttle timers to about one per second and never run
 // requestAnimationFrame, so every wait is a MutationObserver plus setTimeout
@@ -38,15 +41,35 @@
     successWait: 30000,  // after the click
     errorGrace: 1500,    // errors right after the click may be stale; wait this long
     poll: 500,           // polling backstop (throttled to ~1 s in background tabs)
-    throttle: 200        // min gap between mutation-driven checks
+    throttle: 200,       // min gap between mutation-driven checks
+    composeBudget: 40000 // per LIT_COMPOSE_ANSWER request
   };
 
   const MIN_FORM = 3;
   const MAX_MISSING = 10;
   const MAX_LABEL = 80;
+  const MAX_HOPS = 3;          // apply-button presses per job, across reloads
+  const COMPOSE_PARALLEL = 3;  // LIT_COMPOSE_ANSWER requests in flight
+  const MAX_DESCRIPTION = 6000;
+  const DEFAULT_MAX_LENGTH = 1500;
 
-  const APPLY_RE = /^(apply|apply now|apply for this job|apply to this job|start application)$/i;
+  // Matched against the button text with surrounding arrows and icons
+  // stripped (applyText).
+  const APPLY_RE = /^(apply|apply now|apply for this (job|position|role)|apply to this (job|position|role)|start (your )?application|i'?m interested|i am interested|apply on (the )?company('s)? (site|website)|continue to (the )?application)$/i;
+  // The no-account path when a page offers LinkedIn / resume autofill too.
+  const MANUAL_RE = /^(apply manually|manually apply|manual application|apply without (linkedin|indeed|a resume|resume|an account|signing in)|continue without (linkedin|indeed|signing in|an account)|apply as (a )?guest|continue as (a )?guest|fill (out|in) (the )?(form|application) manually|enter (my )?(details|information) manually)$/i;
+  const NEVER_APPLY_RE = /linkedin|indeed|google|facebook|github|apple|microsoft|glassdoor|\bsso\b|sign ?in|log ?in|sign ?up|create (an )?account|register|autofill|auto-fill|with (my |your )?resume|upload (your |my |a )?resume|easy apply|quick apply|one-click/i;
   const SIGNIN_HREF_RE = /log-?in|sign-?in|sign_in|signup|sign-?up|register|oauth|\bsso\b|\/auth\b|account|linkedin|indeed/i;
+  const SENSITIVE_RE = /password|social security|\bssn\b|card number|credit card|debit card|\bcvv\b|\bcvc\b|bank account|routing number/i;
+  // Optional textareas worth an answer without AI: a real question, not the
+  // catch-all boxes.
+  const GENERIC_Q_RE = /anything else|additional (information|info|comments|details)|other information|cover letter|^comments?\b|is there anything/i;
+  const SUBSTANTIVE_RE = /\?|^(why|what|how|describe|tell|explain|share|please (describe|explain|share|tell|provide|give))\b/i;
+  const IDENTITY_TEXT_RE = /\bname\b|e-?mail|phone|mobile|linkedin|github|twitter|website|portfolio|\burl\b|address|\bcity\b|\bstate\b|\bzip\b|postal|country/i;
+  const YES_NO_Q_RE = /^(are|am|do|does|did|have|has|had|were|was|will|would|can|could|is|should)\b/i;
+  const NEUTRAL_RE = /decline|prefer not|rather not|do(n't|n\u2019t| not) wish|not wish|choose not|not to (say|answer|disclose|identify|self)/i;
+  const NA_RE = /^(n\/?a|not applicable)\b/i;
+  const OTHER_RE = /^other\b/i;
   const SUBMIT_TEXT_RE = /submit|send application|apply/i;
   const SUBMIT_EXCLUDE_RE = /linkedin|indeed|save|draft|back|cancel/i;
   const SUCCESS_URL_RE = /confirmation|thanks|thank-you|thank_you|submitted|success/i;
@@ -73,7 +96,7 @@
   };
 
   const state = {
-    phase: 'idle',       // idle | hello | inactive | navigating | waiting-form | no-form | filling | verifying | submitting | checking | done | stopped | dead
+    phase: 'idle',       // idle | hello | inactive | navigating | waiting-form | no-form | filling | deciding | composing | verifying | submitting | checking | done | stopped | dead
     job: null,
     mode: null,
     status: null,        // last status the background accepted
@@ -81,6 +104,9 @@
     filled: 0,
     missing: [],
     applyClicked: false,
+    hops: 0,             // apply-button hops made by this page load
+    decided: 0,          // fields set by the discretion pass and neutral fallback
+    composed: 0,         // fields answered through LIT_COMPOSE_ANSWER
     submitClicks: 0,
     sent: []             // statuses sent, accepted or not
   };
@@ -650,37 +676,97 @@
     else if (l) l.href = url;
   }
 
-  function findApplyButton(doc) {
-    const root = doc || document;
-    for (const el of qsa(root, 'a, button, [role="button"], input[type="button"], input[type="submit"]')) {
-      const t = buttonText(el).replace(/[.!]+$/, '');
-      if (!APPLY_RE.test(t)) continue;
-      const aria = String(attr(el, 'aria-label') || '');
-      if (aria && /linkedin|indeed|autofill|sign in|log in/i.test(aria)) continue;
-      if (tagOf(el) === 'a') {
-        if (String(attr(el, 'target') || '').toLowerCase() === '_blank') continue;
-        if (SIGNIN_HREF_RE.test(String(attr(el, 'href') || ''))) continue;
-      }
-      if (isDisabled(el) || !isVisible(el)) continue;
-      return el;
-    }
-    return null;
+  // Button text without the arrows, chevrons and icon glyphs sites put
+  // around it ("Apply now ->"), with typographic apostrophes straightened.
+  function applyText(el) {
+    return buttonText(el).replace(/[‘’]/g, "'").replace(/^[^\w']+|[^\w')]+$/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  async function waitForForm(job) {
-    const start = Date.now();
-    return waitUntil(() => {
-      if (formPresent(document)) return true;
-      if (!state.applyClicked && !flag('apply', job.jobId) && Date.now() - start >= timing.applyGrace) {
-        const btn = findApplyButton(document);
-        if (btn) {
-          state.applyClicked = true;
-          flag('apply', job.jobId, 1);
-          try { btn.click(); } catch (e) { /* page handler threw */ }
+  function absUrl(href) {
+    try {
+      const base = currentUrl();
+      const u = base ? new URL(href, base.href) : new URL(href);
+      return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // The next apply step on a page with no form yet: { el, navigate } where
+  // navigate is a URL to load in this tab (a new-tab or cross-origin link,
+  // so the batch keeps tracking the tab) or null to click el. A manual /
+  // guest path wins over everything, then in-page buttons, then links that
+  // leave the page. LinkedIn / Indeed / SSO / sign-in / resume-autofill
+  // buttons are never candidates.
+  function findApplyTarget(doc, skip) {
+    const root = doc || document;
+    const here = currentUrl();
+    const manual = [];
+    const click = [];
+    const nav = [];
+    for (const el of qsa(root, 'a, button, [role="button"], [role="link"], input[type="button"], input[type="submit"]')) {
+      if (skip && skip.has(el)) continue;
+      const t = applyText(el);
+      if (!t || t.length > 60) continue;
+      const isManual = MANUAL_RE.test(t);
+      if (!isManual && !APPLY_RE.test(t)) continue;
+      const aria = String(attr(el, 'aria-label') || '');
+      if (!isManual && (NEVER_APPLY_RE.test(aria) || NEVER_APPLY_RE.test(t))) continue;
+      if (isDisabled(el) || !isVisible(el)) continue;
+      let navigateTo = null;
+      if (tagOf(el) === 'a') {
+        const href = String(attr(el, 'href') || '').trim();
+        if (href && !/^(javascript:|#)/i.test(href)) {
+          const u = absUrl(href);
+          if (!u) continue;
+          if (SIGNIN_HREF_RE.test(u.pathname + u.search) || /(^|\.)(linkedin|indeed)\.com$/i.test(u.hostname)) continue;
+          const blank = String(attr(el, 'target') || '').toLowerCase() === '_blank';
+          if (blank || !here || u.origin !== here.origin) navigateTo = u.href;
         }
       }
-      return null;
-    }, timing.formWait);
+      const entry = { el, navigate: navigateTo, text: t };
+      if (isManual) manual.push(entry);
+      else if (navigateTo) nav.push(entry);
+      else click.push(entry);
+    }
+    return manual[0] || click[0] || nav[0] || null;
+  }
+
+  function findApplyButton(doc) {
+    const t = findApplyTarget(doc);
+    return t ? t.el : null;
+  }
+
+  function hopCount(jobId) {
+    const n = parseInt(flag('hops', jobId), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  // Resolves 'form', 'navigated' (this page is going away; the next page's
+  // driver carries on from HELLO), or null when no form showed up. Each hop
+  // restarts the wait, and hops are capped per job across reloads.
+  async function waitForForm(job) {
+    const clicked = new Set();
+    for (;;) {
+      const start = Date.now();
+      const res = await waitUntil(() => {
+        if (formPresent(document)) return 'form';
+        if (Date.now() - start < timing.applyGrace || hopCount(job.jobId) >= MAX_HOPS) return null;
+        const target = findApplyTarget(document, clicked);
+        if (!target) return null;
+        clicked.add(target.el);
+        flag('hops', job.jobId, hopCount(job.jobId) + 1);
+        state.hops++;
+        state.applyClicked = true;
+        if (target.navigate) {
+          navigate(target.navigate);
+          return 'navigated';
+        }
+        try { target.el.click(); } catch (e) { /* page handler threw */ }
+        return 'clicked';
+      }, timing.formWait);
+      if (res !== 'clicked') return res;
+    }
   }
 
   // --- filling -------------------------------------------------------------------
@@ -716,6 +802,289 @@
     return report && Array.isArray(report.filled) ? report.filled.length : 0;
   }
 
+  // --- after the autofill: discretion, composed answers, neutral picks ----------
+  function discretion() {
+    return typeof LitDiscretion !== 'undefined' && LitDiscretion && typeof LitDiscretion.decide === 'function' ? LitDiscretion : null;
+  }
+
+  function siteAdapter() {
+    const c = core();
+    try { return c && typeof c.getSiteAdapter === 'function' ? c.getSiteAdapter(currentUrl()) : null; } catch (e) { return null; }
+  }
+
+  // Where the form lives: the adapter's narrowed root, as AutofillCore.run
+  // scans it, else the whole document.
+  function formRoot() {
+    const a = siteAdapter();
+    if (a && typeof a.scanRoot === 'function') {
+      try { const r = a.scanRoot(document); if (r) return r; } catch (e) { /* fall back */ }
+    }
+    return document;
+  }
+
+  // Same dispatch as AutofillCore.run: the site adapter's fill for its custom
+  // widgets (react-select, Ashby yes/no, Workday listboxes), the core's
+  // setValue when the adapter passes (undefined).
+  async function applyValue(desc, value) {
+    const c = core();
+    if (!c) return false;
+    const adapter = siteAdapter();
+    let ok;
+    try {
+      if (adapter && typeof adapter.fill === 'function') ok = await adapter.fill(desc, value);
+    } catch (e) {
+      ok = false;
+    }
+    if (ok === undefined) {
+      try { ok = await c.setValue(desc, value); } catch (e) { ok = false; }
+    }
+    return !!ok;
+  }
+
+  function sensitive(desc) {
+    const el = desc.el;
+    if (String(attr(el, 'type') || '').toLowerCase() === 'password') return true;
+    return SENSITIVE_RE.test([desc.label, desc.name, desc.id, desc.autocomplete, attr(el, 'aria-label')].join(' '));
+  }
+
+  // Still-empty fields the passes may touch, minus `skip`.
+  function emptyFields(skip) {
+    const c = core();
+    if (!c || typeof c.scanFields !== 'function') return [];
+    let descs = [];
+    try { descs = c.scanFields(formRoot()); } catch (e) { descs = []; }
+    return descs.filter(d => d && d.el && !(skip && skip.has(d.el)) && d.kind !== 'file' &&
+      attr(d.el, 'aria-hidden') !== 'true' && !sensitive(d) && !isFilledLoose(d, c));
+  }
+
+  // The question as a reader sees it: the wrapper's title plus the control's
+  // own label when they differ ("SMS consent" + "I agree to receive texts").
+  function questionText(desc) {
+    const a = labelOf(desc);
+    const b = clip(desc.label, 300);
+    if (!b || a === b || a.indexOf(b) !== -1) return a;
+    if (b.indexOf(a) !== -1) return b;
+    return a + ' ' + b;
+  }
+
+  // Ashby-style yes/no: a hidden checkbox behind pressable buttons.
+  function pressOptions(el) {
+    const box = el && el.parentElement;
+    if (!box) return [];
+    return qsa(box, '[aria-pressed], [aria-checked]').filter(b => b !== el).map(b => collapse(textOf(b))).filter(Boolean);
+  }
+
+  // Options a choice field offers, or [] when they are unknown. An
+  // option-less dropdown asking a yes/no question gets Yes / No; the fill
+  // just fails if the menu has neither.
+  function choiceOptions(desc, label, guessYesNo) {
+    const opts = Array.isArray(desc.options) ? desc.options.map(collapse).filter(Boolean) : [];
+    if (desc.kind === 'checkbox' && opts.length < 2) {
+      const pressed = pressOptions(desc.el);
+      return pressed.length >= 2 ? pressed : [];
+    }
+    if (!['radio', 'select', 'combobox', 'checkbox'].includes(desc.kind)) return [];
+    if (opts.length) return opts;
+    if (guessYesNo && desc.kind === 'combobox' && YES_NO_Q_RE.test(label)) return ['Yes', 'No'];
+    return [];
+  }
+
+  async function loadProfile() {
+    try {
+      if (typeof AutofillStore !== 'undefined' && AutofillStore && typeof AutofillStore.getProfile === 'function') {
+        const p = await AutofillStore.getProfile();
+        if (p && typeof p === 'object') return p;
+      }
+    } catch (e) { /* storage unavailable */ }
+    return {};
+  }
+
+  function jobInfo(job) {
+    return { title: String((job && job.title) || ''), company: String((job && job.company) || '') };
+  }
+
+  // Step 2: housekeeping questions, decided by the rule table. One re-scan
+  // after, for questions that appear once another is answered.
+  async function discretionPass(job, handled) {
+    const D = discretion();
+    if (!D) return 0;
+    const profile = await loadProfile();
+    const tried = new Set();
+    let decided = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      const list = emptyFields(tried);
+      let changed = false;
+      for (const desc of list) {
+        tried.add(desc.el);
+        let out = null;
+        try {
+          out = D.decide(Object.assign({}, desc, { label: questionText(desc), required: isRequired(desc) }), { profile, job: jobInfo(job) });
+        } catch (e) { out = null; }
+        if (!out || out.value === null || out.value === undefined) continue;
+        if (await applyValue(desc, out.value)) {
+          handled.add(desc.el);
+          decided++;
+          changed = true;
+        }
+      }
+      if (!changed || !alive()) break;
+      await sleep(timing.settle);
+    }
+    return decided;
+  }
+
+  // Visible page text outside the form: the job description, as far as the
+  // page shows one.
+  function pageDescription(exclude) {
+    const out = [];
+    let len = 0;
+    const SKIP = /^(script|style|noscript|template|svg|iframe|form|select|textarea|input|button|option)$/;
+    const walk = (node, depth) => {
+      let kids = [];
+      try { kids = Array.from(node.children || []); } catch (e) { kids = []; }
+      for (const child of kids) {
+        if (len >= MAX_DESCRIPTION) return;
+        if (child === exclude || SKIP.test(tagOf(child)) || !isRenderedLoose(child)) continue;
+        let holds = false;
+        try { holds = !!(exclude && child.contains && child.contains(exclude)); } catch (e) { holds = false; }
+        if ((holds || containsField(child)) && depth < 40) { walk(child, depth + 1); continue; }
+        if (holds) continue;
+        const t = textOf(child);
+        if (t) { out.push(t); len += t.length + 1; }
+      }
+    };
+    walk(document.body || document.documentElement, 0);
+    return out.join('\n').slice(0, MAX_DESCRIPTION);
+  }
+
+  function formElement() {
+    const root = formRoot();
+    if (root && root !== document && root !== document.body) return root;
+    const c = core();
+    let first = null;
+    try { first = c ? c.scanFields(document, { includeFilled: true })[0] : null; } catch (e) { first = null; }
+    try { return first && first.el.closest ? first.el.closest('form') : null; } catch (e) { return null; }
+  }
+
+  function trimAt(text, max) {
+    const t = String(text || '').trim();
+    if (t.length <= max) return t;
+    const cut = t.slice(0, max);
+    const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('.\n'));
+    return (end >= max * 0.5 ? cut.slice(0, end + 1) : cut).trim();
+  }
+
+  function matchChoice(choice, options) {
+    const c = collapse(choice).toLowerCase();
+    if (!c || c === 'none') return null;
+    const exact = options.find(o => o.toLowerCase() === c);
+    if (exact) return exact;
+    const near = options.filter(o => o.toLowerCase().indexOf(c) !== -1 || c.indexOf(o.toLowerCase()) !== -1);
+    return near.length === 1 ? near[0] : null;
+  }
+
+  function withTimeout(promise, ms) {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(null), Math.max(0, ms));
+      promise.then(v => { clearTimeout(timer); resolve(v); }, () => { clearTimeout(timer); resolve(null); });
+    });
+  }
+
+  // What to ask LIT_COMPOSE_ANSWER for one field, or null.
+  function composeAsk(desc) {
+    const label = questionText(desc);
+    const required = isRequired(desc);
+    const isText = desc.kind === 'textarea' ||
+      (desc.kind === 'text' && SUBSTANTIVE_RE.test(label) && !IDENTITY_TEXT_RE.test(label));
+    if (isText) {
+      let needsAi = false;
+      if (!required) {
+        if (desc.kind !== 'textarea') return null;
+        if (GENERIC_Q_RE.test(label)) needsAi = true;
+        else if (!SUBSTANTIVE_RE.test(label)) return null;
+      }
+      const ml = parseInt(attr(desc.el, 'maxlength'), 10);
+      return { desc, needsAi, msg: { kind: 'text', question: label, maxLength: ml > 0 ? ml : DEFAULT_MAX_LENGTH, required } };
+    }
+    if (!required) return null;
+    const options = choiceOptions(desc, label, true);
+    if (options.length < 2) return null;
+    return { desc, needsAi: false, msg: { kind: 'choice', question: label, options, required } };
+  }
+
+  // Step 3: open questions and unanswered required choices go to the
+  // background, which writes from the profile and answer bank (or Claude when
+  // the user turned it on). Up to COMPOSE_PARALLEL requests at once; values
+  // are applied one at a time so two dropdowns never open together.
+  async function composePass(job, handled) {
+    let asks = emptyFields(handled).map(composeAsk).filter(Boolean);
+    if (!asks.length) return 0;
+    if (asks.some(a => a.needsAi)) {
+      const caps = await send({ type: 'LIT_BATCH_CAPS' });
+      const ai = !!(caps && caps.ai);
+      asks = asks.filter(a => !a.needsAi || ai);
+    }
+    if (!asks.length) return 0;
+    const info = jobInfo(job);
+    const description = pageDescription(formElement());
+    let next = 0;
+    let composed = 0;
+    let chain = Promise.resolve();
+    const worker = async () => {
+      while (next < asks.length && alive()) {
+        const ask = asks[next++];
+        const msg = Object.assign({ type: 'LIT_COMPOSE_ANSWER' }, ask.msg, { job: { title: info.title, company: info.company, description } });
+        const res = await withTimeout(send(msg), timing.composeBudget);
+        if (!res || res.ok !== true) continue;
+        const value = ask.msg.kind === 'text'
+          ? trimAt(res.text, ask.msg.maxLength)
+          : matchChoice(res.choice, ask.msg.options);
+        if (!value) continue;
+        const p = chain.then(() => {
+          const c = core();
+          // The user (or a conditional re-render) got there first.
+          if (c && isFilledLoose(ask.desc, c)) return false;
+          return applyValue(ask.desc, value);
+        });
+        chain = p.catch(() => false);
+        if (await p.catch(() => false)) {
+          handled.add(ask.desc.el);
+          composed++;
+        }
+      }
+    };
+    const workers = [];
+    for (let i = 0; i < Math.min(COMPOSE_PARALLEL, asks.length); i++) workers.push(worker());
+    await Promise.all(workers);
+    return composed;
+  }
+
+  // Step 4: a required choice still empty takes its neutral option. "Other"
+  // only where the question is not a fact about the applicant.
+  async function neutralPass(handled) {
+    const D = discretion();
+    let picked = 0;
+    for (const desc of emptyFields(handled)) {
+      if (!isRequired(desc)) continue;
+      const label = questionText(desc);
+      const options = choiceOptions(desc, label, false);
+      if (options.length < 2) continue;
+      const factual = D && typeof D.isFactual === 'function' ? D.isFactual(label) : true;
+      const pick = options.find(o => NEUTRAL_RE.test(o)) || options.find(o => NA_RE.test(o)) ||
+        (factual ? null : options.find(o => OTHER_RE.test(o)));
+      if (!pick) continue;
+      if (await applyValue(desc, pick)) {
+        handled.add(desc.el);
+        picked++;
+      }
+    }
+    return picked;
+  }
+
+  function counts(extra) {
+    return Object.assign({ filled: state.filled, composed: state.composed, decided: state.decided }, extra || {});
+  }
+
   // --- the run -------------------------------------------------------------------
   async function checkOnly() {
     state.phase = 'checking';
@@ -741,8 +1110,8 @@
       }
       return null;
     }, timing.successWait);
-    if (!res) return end('needs-you', 'Submitted but no confirmation seen', { filled: state.filled });
-    return end(res.status, res.reason, Object.assign({ filled: state.filled }, res.missing ? { missing: res.missing } : {}));
+    if (!res) return end('needs-you', 'Submitted but no confirmation seen', counts());
+    return end(res.status, res.reason, counts(res.missing ? { missing: res.missing } : {}));
   }
 
   async function drive(job, mode) {
@@ -771,6 +1140,7 @@
 
     state.phase = 'waiting-form';
     const found = await waitForForm(job);
+    if (found === 'navigated') { state.phase = 'navigating'; return state; }
     if (!alive()) { state.phase = 'dead'; return state; }
     if (!found) {
       // A login wall in this frame is worth saying; otherwise another frame
@@ -790,25 +1160,37 @@
     filled += filledCount(await fillOnce());
     state.filled = filled;
     await sleep(timing.settle);
+    if (!alive()) { state.phase = 'dead'; return state; }
+
+    // Fields the passes below set, so a later pass leaves them alone.
+    const handled = new Set();
+    state.phase = 'deciding';
+    state.decided = await discretionPass(job, handled);
+    state.phase = 'composing';
+    state.composed = await composePass(job, handled);
+    if (!alive()) { state.phase = 'dead'; return state; }
+    state.decided += await neutralPass(handled);
+    state.filled = filled + state.decided + state.composed;
+    if (state.decided || state.composed) await sleep(timing.settle);
 
     state.phase = 'verifying';
     const missing = missingRequired(document);
     state.missing = missing;
-    if (detectCaptcha(document)) return end('needs-you', 'CAPTCHA', { filled, missing });
+    if (detectCaptcha(document)) return end('needs-you', 'CAPTCHA', counts({ missing }));
     if (missing.length) {
       const reason = missing.length === 1 ? '1 required field needs you' : missing.length + ' required fields need you';
-      return end('needs-you', reason, { filled, missing });
+      return end('needs-you', reason, counts({ missing }));
     }
-    if (state.mode === 'fill-only') return end('ready', 'Filled. Review and submit.', { filled, missing: [] });
+    if (state.mode === 'fill-only') return end('ready', 'Filled. Review and submit.', counts({ missing: [] }));
 
     const btn = findSubmit(document, currentUrl());
-    if (!btn) return end('needs-you', 'Could not find Submit', { filled, missing: [] });
-    if (isDisabled(btn)) return end('needs-you', 'Submit is disabled', { filled, missing: [] });
+    if (!btn) return end('needs-you', 'Could not find Submit', counts({ missing: [] }));
+    if (isDisabled(btn)) return end('needs-you', 'Submit is disabled', counts({ missing: [] }));
 
     const startUrl = currentUrl();
     const baseline = { texts: successTexts(document), errors: errorSignals(document), url: startUrl ? startUrl.href : '' };
     state.phase = 'submitting';
-    if (!await update('submitting', { filled })) { state.phase = 'stopped'; return state; }
+    if (!await update('submitting', counts())) { state.phase = 'stopped'; return state; }
     flag('clicked', job.jobId, 1);
     state.submitClicks++;
     try { btn.click(); } catch (e) { /* page handler threw; the wait decides */ }
@@ -854,7 +1236,9 @@
     detectCaptcha,
     isSuccess,
     findApplyButton,
-    formUrlFix
+    findApplyTarget,
+    formUrlFix,
+    pageDescription
   };
 
   window.__litAutoApply = api;

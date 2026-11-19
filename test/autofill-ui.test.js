@@ -543,6 +543,26 @@ async function run() {
     cleanup(ctx);
   }
 
+  // 7d2. The saved answer records the job it was written for, read from the
+  // page title when JobMeta is not loaded.
+  {
+    const ctx = await learningPage();
+    ctx.doc.title = 'Job Application for Data Analyst Intern at Acme Robotics';
+    await ctx.api.fill();
+    const essay = ctx.fields.essay;
+    const answer = 'I want to help a robotics team make sense of its sensor data.';
+    essay.value = answer;
+    mock.fire(ctx.doc, ctx.win, essay, 'change');
+    mock.fire(ctx.doc, ctx.win, essay, 'focusout');
+    await settle();
+    clickPrompt(ctx.doc, 'Save answer');
+    await settle();
+    assert.deepStrictEqual(ctx.store.calls.saveAnswer, [{
+      question: 'Why do you want to work here?', answer, company: 'Acme Robotics', role: 'Data Analyst Intern'
+    }]);
+    cleanup(ctx);
+  }
+
   // 7e. Radio group (bare yes/no) asks rather than guessing a profile key.
   {
     let group;

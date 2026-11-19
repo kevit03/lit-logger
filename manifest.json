@@ -95,6 +95,7 @@
         "content/auto-tracker.js",
         "shared/autofill-store.js",
         "shared/autofill-core.js",
+        "shared/discretion.js",
         "content/autofill/sites/greenhouse.js",
         "content/autofill/sites/lever.js",
         "content/autofill/sites/ashby.js",
@@ -146,6 +147,7 @@
         "content/auto-tracker.js",
         "shared/autofill-store.js",
         "shared/autofill-core.js",
+        "shared/discretion.js",
         "content/autofill/sites/greenhouse.js",
         "content/autofill/sites/lever.js",
         "content/autofill/sites/ashby.js",
@@ -172,7 +174,8 @@
   ],
   "host_permissions": [
     "https://calendar.google.com/*",
-    "https://www.googleapis.com/*"
+    "https://www.googleapis.com/*",
+    "https://api.anthropic.com/*"
   ],
   "optional_host_permissions": [
     "*://*/*"

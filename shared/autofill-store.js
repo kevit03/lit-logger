@@ -7,7 +7,10 @@
 //   af_rules      learned rules: label -> profile key, or label -> literal value
 //   af_answers    answer bank for long-answer questions
 //   af_resume     { name, type, dataUrl, size, savedAt }, at most 5 MB decoded
-//   af_settings   { showButton, fillEeo, autoLearn }
+//   af_settings   { showButton, fillEeo, autoLearn, aiEnabled, aiKey, aiModel }
+//
+// The Claude API key (settings.aiKey) is left out of exports by default, and
+// an import without one keeps the key already stored.
 //
 // Every method is async. Read-modify-write calls go through one queue so two
 // quick saves from the same page cannot overwrite each other.
@@ -44,7 +47,13 @@ const AutofillStore = (() => {
   const YES_NO_FIELDS = ['workAuthorized', 'needsSponsorship', 'willingToRelocate'];
   const EEO_FIELDS = ['gender', 'race', 'hispanicLatino', 'veteran', 'disability'];
 
-  const DEFAULT_SETTINGS = { showButton: true, fillEeo: false, autoLearn: true };
+  const DEFAULT_MODEL = 'claude-opus-5-5';
+  const DEFAULT_SETTINGS = {
+    showButton: true, fillEeo: false, autoLearn: true,
+    aiEnabled: false, aiKey: '', aiModel: DEFAULT_MODEL
+  };
+  const SETTING_MAX_CHARS = { aiKey: 500, aiModel: 100 };
+  const CONTEXT_MAX_CHARS = 120;
 
   // ----- Helpers -------------------------------------------------------------
 
@@ -205,9 +214,13 @@ const AutofillStore = (() => {
     [base, patch].forEach(src => {
       if (!isPlainObject(src)) return;
       Object.keys(DEFAULT_SETTINGS).forEach(k => {
-        if (typeof src[k] === 'boolean') out[k] = src[k];
+        const kind = typeof DEFAULT_SETTINGS[k];
+        if (kind === 'boolean' && typeof src[k] === 'boolean') out[k] = src[k];
+        if (kind === 'string' && typeof src[k] === 'string') out[k] = src[k].trim().slice(0, SETTING_MAX_CHARS[k] || 500);
       });
     });
+    // An empty model field means the default model.
+    if (!out.aiModel) out.aiModel = DEFAULT_MODEL;
     return out;
   }
 
@@ -240,13 +253,24 @@ const AutofillStore = (() => {
     const labelKey = normalizeLabel(question || raw.labelKey);
     const answer = str(raw.answer);
     if (!labelKey || !answer.trim()) return null;
-    return {
+    const entry = {
       id: str(raw.id) || randomId('afa'),
       question: question || labelKey,
       labelKey,
       answer,
       updatedAt: str(raw.updatedAt) || nowIso()
     };
+    // The company and role the answer was written for, when known, so the
+    // answer composer can swap them for the next job's.
+    const company = cleanContext(raw.company);
+    const role = cleanContext(raw.role);
+    if (company) entry.company = company;
+    if (role) entry.role = role;
+    return entry;
+  }
+
+  function cleanContext(value) {
+    return str(value).replace(/\s+/g, ' ').trim().slice(0, CONTEXT_MAX_CHARS);
   }
 
   // Decoded byte length of a base64 data URL (or the raw length otherwise).
@@ -350,6 +374,10 @@ const AutofillStore = (() => {
     if (idx < 0) idx = list.findIndex(a => a.labelKey === entry.labelKey);
     if (idx >= 0) {
       const merged = Object.assign({}, entry, { id: list[idx].id });
+      // Editing in place (by id) keeps the context it was saved with.
+      if (id && list[idx].id === id) {
+        ['company', 'role'].forEach(k => { if (!merged[k] && list[idx][k]) merged[k] = list[idx][k]; });
+      }
       const rest = list.filter((a, i) => i !== idx && a.labelKey !== entry.labelKey);
       rest.unshift(merged);
       return { list: rest, saved: merged };
@@ -363,6 +391,7 @@ const AutofillStore = (() => {
   const api = {
     KEYS,
     RESUME_MAX_BYTES,
+    DEFAULT_MODEL,
     PROFILE_FIELDS: PROFILE_FIELDS.slice(),
     EEO_FIELDS: EEO_FIELDS.slice(),
 
@@ -429,9 +458,11 @@ const AutofillStore = (() => {
     },
 
     // Upserts by labelKey. Passing an existing `id` edits that entry in place,
-    // even when the question text (and so the labelKey) changes.
-    async saveAnswer({ question, answer, id } = {}) {
-      const entry = cleanAnswer({ question, answer, updatedAt: nowIso() });
+    // even when the question text (and so the labelKey) changes, and keeps
+    // its company / role unless new ones are given. `company` and `role` are
+    // the job the answer was written for, stored when given.
+    async saveAnswer({ question, answer, id, company, role } = {}) {
+      const entry = cleanAnswer({ question, answer, company, role, updatedAt: nowIso() });
       if (!entry) {
         if (!normalizeLabel(question)) throw new Error('Saved answer needs a question.');
         throw new Error('Saved answer needs an answer.');
@@ -524,10 +555,14 @@ const AutofillStore = (() => {
 
     // ----- Import / export (used by the profile editor) ----------------------
 
-    async exportAll({ includeResume = true } = {}) {
-      const [profile, rules, answers, settings, resume] = await Promise.all([
+    // The API key stays out of export files: a backup is easy to share by
+    // accident. includeKey is for in-page undo snapshots only.
+    async exportAll({ includeResume = true, includeKey = false } = {}) {
+      const [profile, rules, answers, stored, resume] = await Promise.all([
         readProfile(), readRules(), readAnswers(), readSettings(), includeResume ? readResume() : null
       ]);
+      const settings = Object.assign({}, stored);
+      if (!includeKey) delete settings.aiKey;
       return {
         format: EXPORT_FORMAT,
         version: EXPORT_VERSION,
@@ -562,6 +597,8 @@ const AutofillStore = (() => {
       const removals = [];
       const counts = { rules: 0, answers: 0, resume: false };
       if (isPlainObject(parsed.profile)) items[KEYS.PROFILE] = mergeProfile(null, parsed.profile);
+      // A file without an API key (every normal export) keeps the stored key.
+      const keepKey = isPlainObject(parsed.settings) && typeof parsed.settings.aiKey !== 'string';
       if (isPlainObject(parsed.settings)) items[KEYS.SETTINGS] = cleanSettings(null, parsed.settings);
       if (Array.isArray(parsed.rules)) {
         items[KEYS.RULES] = cleanUnique(parsed.rules, cleanRule, r => r.host + '\n' + r.labelKey).slice(0, MAX_RULES);
@@ -579,6 +616,7 @@ const AutofillStore = (() => {
         }
       }
       return enqueue(async () => {
+        if (keepKey) items[KEYS.SETTINGS].aiKey = (await readSettings()).aiKey;
         if (Object.keys(items).length) await areaSet(items);
         if (removals.length) await areaRemove(removals);
         return counts;

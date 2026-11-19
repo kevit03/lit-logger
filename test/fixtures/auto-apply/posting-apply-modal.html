@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  Hand-written company career page (auto-apply v2 tests). The posting has an
+  "Apply for this job" button; pressing it opens a chooser offering resume
+  autofill, LinkedIn, Indeed, a sign-in, and "Apply manually". Only the
+  manual path may be taken. The chooser starts hidden.
+-->
+<html>
+<head><title>Software Engineer - Example Co Careers</title></head>
+<body>
+<header class="site-header"><a href="/account/sign-in" id="signin">Sign in</a><a href="/account/create" id="create">Create account</a></header>
+<main>
+  <h1>Software Engineer</h1>
+  <p>Example Co builds reliable payment rails for small businesses.</p>
+  <button type="button" id="apply-job" class="btn-primary">Apply for this job <span class="icon" aria-hidden="true">&#8594;</span></button>
+  <div id="chooser" role="dialog" hidden>
+    <button type="button" id="autofill-resume">Autofill with resume</button>
+    <button type="button" id="apply-linkedin">Apply with LinkedIn</button>
+    <a href="https://www.indeed.com/apply?jk=1" id="apply-indeed">Apply</a>
+    <button type="button" id="apply-manual">Apply manually</button>
+  </div>
+</main>
+</body>
+</html>

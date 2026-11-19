@@ -1,0 +1,51 @@
+<!doctype html>
+<!--
+  Hand-written Greenhouse-style embed page for the v2 driver tests: a job
+  description above the form, then the questions a profile cannot answer.
+  Open questions (textareas), a factual choice for the answer writer, EEO,
+  "how did you hear", a screening radio, SMS / marketing / certification
+  checkboxes, and a sponsorship select with a neutral option. Options carry
+  no value attribute (the test DOM reads option values from text); radios
+  carry one (the core reads their labels from it here).
+-->
+<html>
+<head><title>Job Application for Software Engineer at Example Co</title></head>
+<body>
+<div class="job__header">
+  <h1 class="section-header">Software Engineer</h1>
+  <div class="job__description"><p>Example Co builds reliable payment rails for small businesses.</p><p>You will design APIs in Go and TypeScript.</p></div>
+</div>
+<div class="application--container">
+<form method="post" action="/embed/job_app" id="application-form" class="application--form">
+<div class="application--questions">
+  <div class="field-wrapper"><label id="first_name-label" for="first_name" class="label">First Name<span aria-hidden="true">*</span></label>
+    <input id="first_name" class="input" aria-required="true" type="text" value=""/></div>
+  <div class="field-wrapper"><label id="last_name-label" for="last_name" class="label">Last Name<span aria-hidden="true">*</span></label>
+    <input id="last_name" class="input" aria-required="true" type="text" value=""/></div>
+  <div class="field-wrapper"><label id="email-label" for="email" class="label">Email<span aria-hidden="true">*</span></label>
+    <input id="email" class="input" aria-required="true" type="text" value=""/></div>
+  <div class="field-wrapper"><label for="why" class="label">Why do you want to work at Example Co?<span aria-hidden="true">*</span></label>
+    <textarea id="why" class="input" aria-required="true" maxlength="500"></textarea></div>
+  <div class="field-wrapper"><label for="project" class="label">Tell us about a project you are proud of.</label>
+    <textarea id="project" class="input"></textarea></div>
+  <div class="field-wrapper"><label for="extra" class="label">Anything else you would like us to know?</label>
+    <textarea id="extra" class="input"></textarea></div>
+  <div class="field-wrapper"><label for="auth" class="label">Are you legally authorized to work in the United States?<span aria-hidden="true">*</span></label>
+    <select id="auth" aria-required="true"><option>Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field-wrapper"><label for="sponsor" class="label">Will you now or in the future require visa sponsorship?<span aria-hidden="true">*</span></label>
+    <select id="sponsor" aria-required="true"><option>Select...</option><option>Yes</option><option>No</option><option>Prefer not to say</option></select></div>
+  <div class="field-wrapper"><label for="hear" class="label">How did you hear about this job?<span aria-hidden="true">*</span></label>
+    <select id="hear" aria-required="true"><option>Select...</option><option>LinkedIn</option><option>Job board</option><option>Other</option></select></div>
+  <div class="field-wrapper"><label for="gender" class="label">Gender<span aria-hidden="true">*</span></label>
+    <select id="gender" aria-required="true"><option>Select...</option><option>Male</option><option>Female</option><option>Decline to self-identify</option></select></div>
+  <div class="field-wrapper"><fieldset><legend>Have you ever been employed by Example Co?<span aria-hidden="true">*</span></legend>
+    <label><input type="radio" name="prior" id="prior_yes" value="Yes" required> Yes</label><label><input type="radio" name="prior" id="prior_no" value="No"> No</label></fieldset></div>
+  <div class="field-wrapper"><label><input type="checkbox" id="sms"> I would like to receive text messages about my application</label></div>
+  <div class="field-wrapper"><label><input type="checkbox" id="marketing"> Sign me up for marketing emails and job alerts</label></div>
+  <div class="field-wrapper"><label><input type="checkbox" id="certify" required> I certify that the information provided is true *</label></div>
+</div>
+<div class="application--submit"><button type="submit" class="btn btn--rounded">Submit application</button></div>
+</form>
+</div>
+</body>
+</html>

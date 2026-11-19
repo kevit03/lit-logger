@@ -514,6 +514,24 @@ input[type="search"].input::-webkit-search-cancel-button { -webkit-appearance: n
 label.row { cursor: pointer; }
 .row-title { font-weight: 500; }
 
+/* Answer writing: a row with a text control instead of a switch */
+.row-field { flex-wrap: wrap; }
+.row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.row-sub { font-size: var(--fs-sm); color: var(--text-3); }
+.row-sub.is-warn { color: var(--warn); }
+.input-key { width: 280px; font-family: var(--mono); font-size: var(--fs-sm); }
+.input-model { width: 280px; font-family: var(--mono); font-size: var(--fs-sm); }
+.row-note {
+  padding: 12px 0 16px;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  max-width: var(--measure);
+  line-height: 1.5;
+}
+.answer-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.answer-context { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
 .switch {
   appearance: none;
   -webkit-appearance: none;
@@ -616,6 +634,8 @@ body.pt-dark .switch:checked::after { background: var(--on-accent); }
   .grid { grid-template-columns: minmax(0, 1fr); }
   .head-actions { width: 100%; }
   .input-search { flex: 1; width: auto; min-width: 0; }
+  .row-field .row-actions, .input-key, .input-model { width: 100%; }
+  .row-field .row-actions .input-key { flex: 1; width: auto; min-width: 0; }
   .meter { width: 96px; }
   .dropzone:not(.is-empty) { flex-wrap: wrap; }
   .dropzone:not(.is-empty) .resume-actions { width: 100%; justify-content: flex-end; }

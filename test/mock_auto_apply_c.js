@@ -6,7 +6,10 @@
 // tab-scoped sessionStorage, a stubbed window.__litAutofillUI whose fill()
 // runs a caller-supplied plan, the real AutofillCore for scanning, and a fake
 // background that answers LIT_BATCH_HELLO / LIT_BATCH_UPDATE with the
-// contract's transition rules.
+// contract's transition rules, and (v2) LIT_COMPOSE_ANSWER / LIT_BATCH_CAPS
+// through caller-supplied handlers. The real shared/discretion.js is loaded
+// as the LitDiscretion global; site adapters registered by other suites are
+// set aside for each page and restored at cleanup.
 const fs = require('fs');
 const path = require('path');
 const dom = require('./mock_dom');
@@ -16,6 +19,8 @@ const ROOT = path.resolve(__dirname, '..');
 const DRIVER = path.join(ROOT, 'content', 'autofill', 'auto-apply.js');
 const AA_FIXTURES = path.join(__dirname, 'fixtures', 'auto-apply');
 const CORE = require('../shared/autofill-core.js');
+const DISCRETION = require('../shared/discretion.js');
+const SAVED_ADAPTERS = CORE.listSiteAdapters();
 
 function readFixture(name) {
   const dir = fs.existsSync(path.join(AA_FIXTURES, name)) ? AA_FIXTURES : af.FIXTURES;
@@ -76,6 +81,9 @@ function fakeBackground(opts = {}) {
     refuseClaim: !!opts.refuseClaim,
     messages: [],
     updates: [],
+    composeRequests: [],
+    inFlight: 0,
+    maxInFlight: 0,
     handle(msg) {
       bg.messages.push(msg);
       if (msg.type === 'LIT_BATCH_HELLO') {
@@ -90,6 +98,14 @@ function fakeBackground(opts = {}) {
         bg.job.status = msg.status;
         return { ok: true };
       }
+      if (msg.type === 'LIT_COMPOSE_ANSWER') {
+        bg.composeRequests.push(msg);
+        if (typeof opts.compose !== 'function') return undefined;
+        bg.inFlight++;
+        bg.maxInFlight = Math.max(bg.maxInFlight, bg.inFlight);
+        return Promise.resolve(opts.compose(msg)).then(res => { bg.inFlight--; return res; }, () => { bg.inFlight--; return undefined; });
+      }
+      if (msg.type === 'LIT_BATCH_CAPS') return opts.caps;
       return undefined;
     },
     statuses: () => bg.updates.map(u => u.status)
@@ -105,9 +121,10 @@ function installChrome(bg, opts = {}) {
       sendMessage(msg, cb) {
         if (opts.invalidated) throw new Error('Extension context invalidated.');
         setTimeout(() => {
-          const res = bg.handle(msg);
-          chrome.runtime.lastError = null;
-          if (typeof cb === 'function') cb(res);
+          Promise.resolve(bg.handle(msg)).then(res => {
+            chrome.runtime.lastError = null;
+            if (typeof cb === 'function') cb(res);
+          });
         }, 0);
       }
     }
@@ -191,6 +208,12 @@ function page(opts = {}) {
   global.document = doc;
   global.location = location;
   global.AutofillCore = CORE;
+  if (opts.noDiscretion) delete global.LitDiscretion;
+  else global.LitDiscretion = DISCRETION;
+  if (opts.profile) global.AutofillStore = { getProfile: async () => opts.profile };
+  else delete global.AutofillStore;
+  CORE._resetSiteAdapters();
+  (opts.adapters || []).forEach(a => CORE.registerSiteAdapter(a));
   if (opts.noChrome) delete global.chrome;
   else installChrome(bg, { invalidated: opts.invalidated });
 
@@ -200,7 +223,7 @@ function page(opts = {}) {
   return { doc, api, bg, ui, win, location, assigned, session, winListeners };
 }
 
-const FAST = { formWait: 400, applyGrace: 40, refillDelay: 10, settle: 5, successWait: 400, errorGrace: 30, poll: 10, throttle: 5 };
+const FAST = { formWait: 400, applyGrace: 40, refillDelay: 10, settle: 5, successWait: 400, errorGrace: 30, poll: 10, throttle: 5, composeBudget: 300 };
 
 function cleanup() {
   delete global.window;
@@ -208,6 +231,10 @@ function cleanup() {
   delete global.location;
   delete global.chrome;
   delete global.AutofillCore;
+  delete global.LitDiscretion;
+  delete global.AutofillStore;
+  CORE._resetSiteAdapters();
+  SAVED_ADAPTERS.forEach(a => CORE.registerSiteAdapter(a));
   delete require.cache[require.resolve(DRIVER)];
 }
 

@@ -132,7 +132,8 @@ function extendChrome(mock) {
 function loadWorker() {
   const mock = extendChrome(installMockChrome());
   installMockIDB();
-  const GLOBAL_NAME = { 'auth.js': 'TrackerAuth', 'db.js': 'LitDB', 'storage.js': 'TrackerStorage', 'batch-runner.js': 'LitBatch' };
+  const GLOBAL_NAME = { 'auth.js': 'TrackerAuth', 'db.js': 'LitDB', 'storage.js': 'TrackerStorage', 'batch-runner.js': 'LitBatch',
+    'autofill-store.js': 'AutofillStore', 'answer-composer.js': 'AnswerComposer', 'ai-answer.js': 'LitAnswers' };
   global.importScripts = (...files) => {
     files.forEach(f => {
       const full = path.resolve(ROOT, 'background', f);
@@ -152,6 +153,9 @@ function unload() {
   delete global.TrackerStorage;
   delete global.LitDB;
   delete global.LitBatch;
+  delete global.AutofillStore;
+  delete global.AnswerComposer;
+  delete global.LitAnswers;
   uninstallMockIDB();
   uninstallMockChrome();
 }
