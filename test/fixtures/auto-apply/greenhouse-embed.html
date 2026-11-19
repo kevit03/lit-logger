@@ -1,0 +1,60 @@
+<!doctype html>
+<!--
+  Hand-trimmed job-boards.greenhouse.io/embed/job_app page (auto-apply tests).
+  The job header carries a type=button "Apply" that only scrolls to the form;
+  the real submit is the form's type=submit "Submit application". The
+  invisible reCAPTCHA challenge frame sits parked off screen, as it does live.
+  data-test-offscreen marks elements the test lays out above the viewport.
+-->
+<html>
+<head><title>Job Application for Software Engineer at Example Co</title></head>
+<body>
+<div class="job__header">
+  <h1 class="section-header">Software Engineer</h1>
+  <div class="job__header-apply"><button type="button" class="btn btn--rounded" aria-label="Apply">Apply</button></div>
+</div>
+<div class="application--container">
+<form method="post" action="/embed/job_app" id="application-form" class="application--form">
+<div class="application--questions">
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label id="first_name-label" for="first_name" class="label">First Name<span aria-hidden="true">*</span></label>
+    <input id="first_name" class="input" aria-invalid="false" aria-required="true" type="text" autoComplete="given-name" value=""/>
+  </div></div>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label id="last_name-label" for="last_name" class="label">Last Name<span aria-hidden="true">*</span></label>
+    <input id="last_name" class="input" aria-invalid="false" aria-required="true" type="text" autoComplete="family-name" value=""/>
+  </div></div>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label id="email-label" for="email" class="label">Email<span aria-hidden="true">*</span></label>
+    <input id="email" class="input" aria-invalid="false" aria-required="true" type="text" autoComplete="email" value=""/>
+    <div id="email-error" class="helper-text helper-text--error" hidden></div>
+  </div></div>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label id="phone-label" for="phone" class="label">Phone</label>
+    <input id="phone" class="input" aria-invalid="false" aria-required="false" type="tel" value=""/>
+  </div></div>
+  <div class="field-wrapper"><div role="group" aria-labelledby="upload-label-resume" aria-required="true" class="file-upload">
+    <div id="upload-label-resume" class="label upload-label">Resume/CV<span class="required">*</span></div>
+    <div class="file-upload__wrapper"><button type="button" class="btn btn--pill">Attach</button><label class="visually-hidden" for="resume">Attach</label><input id="resume" class="visually-hidden" type="file" accept=".pdf,.doc,.docx"/>
+    <p class="file-upload__filetypes">Accepted file types: pdf, doc, docx</p></div>
+  </div></div>
+  <div class="field-wrapper"><div class="input-wrapper">
+    <label id="question_201-label" for="question_201" class="label">Why do you want to join us?<span aria-hidden="true">*</span></label>
+    <textarea id="question_201" class="input" aria-invalid="false" aria-required="true" rows="4"></textarea>
+  </div></div>
+  <div class="field-wrapper"><div class="select"><div class="select__container">
+    <label id="question_202-label" for="question_202" class="label select__label">Will you now or in the future require visa sponsorship?<span aria-hidden="true">*</span></label>
+    <div class="select-shell"><div class="select__control"><div class="select__value-container" id="question_202-values">
+      <div class="select__placeholder">Select...</div>
+      <div class="select__input-container"><input class="select__input" id="question_202" type="text" aria-labelledby="question_202-label" aria-required="true" aria-invalid="false" role="combobox" aria-expanded="false" value=""/></div>
+    </div></div></div>
+    <input required="" tabindex="-1" aria-hidden="true" class="requiredInput" value=""/>
+  </div></div></div>
+</div>
+<div class="application--submit"><button type="submit" class="btn btn--rounded">Submit application</button></div>
+</form>
+</div>
+<div data-test-offscreen="1" style="visibility: hidden; position: absolute; top: -10000px;"><iframe title="recaptcha challenge expires in two minutes" src="https://www.google.com/recaptcha/enterprise/bframe?hl=en&amp;v=x&amp;k=y"></iframe></div>
+<iframe title="reCAPTCHA" data-test-offscreen="1" src="https://www.google.com/recaptcha/enterprise/anchor?ar=1&amp;k=y&amp;size=invisible"></iframe>
+</body>
+</html>

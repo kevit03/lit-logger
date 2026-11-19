@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LIT: Job & LeetCode Tracker",
-  "version": "1.5.0",
-  "description": "Track job applications, LeetCodes, and streaks on Google Calendar. Auto-logs LeetCode, NeetCode, and applications, and autofills application forms on Greenhouse, Lever, Ashby, Workday, and other career sites.",
+  "version": "1.6.0",
+  "description": "Track job applications, LeetCodes, and streaks on Google Calendar. Auto-logs LeetCode, NeetCode, and applications, and autofills application forms on Greenhouse, Lever, Ashby, Workday, and other career sites, and batch-applies to Jobright jobs.",
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "LIT",
@@ -63,6 +63,15 @@
     },
     {
       "matches": [
+        "https://jobright.ai/*"
+      ],
+      "js": [
+        "content/jobright/jobright-panel.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://boards.greenhouse.io/*",
         "https://job-boards.greenhouse.io/*",
         "https://boards.eu.greenhouse.io/*",
@@ -90,7 +99,8 @@
         "content/autofill/sites/lever.js",
         "content/autofill/sites/ashby.js",
         "content/autofill/sites/workday.js",
-        "content/autofill/autofill-ui.js"
+        "content/autofill/autofill-ui.js",
+        "content/autofill/auto-apply.js"
       ],
       "css": [
         "content/autofill/autofill-ui.css"
@@ -140,7 +150,8 @@
         "content/autofill/sites/lever.js",
         "content/autofill/sites/ashby.js",
         "content/autofill/sites/workday.js",
-        "content/autofill/autofill-ui.js"
+        "content/autofill/autofill-ui.js",
+        "content/autofill/auto-apply.js"
       ],
       "css": [
         "content/autofill/autofill-ui.css"

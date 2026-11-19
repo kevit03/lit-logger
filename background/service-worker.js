@@ -22,6 +22,9 @@
 //   Reminder        One alarm a day, at the time in prefs (2:30 PM by
 //                   default), opens reminder/reminder.html: a short video
 //                   check-in. Turned off or moved from the popup's settings.
+//   Auto-apply      background/batch-runner.js (LitBatch) runs Jobright
+//                   batches; this file only hands it messages and an
+//                   injector for tabs the manifest does not cover.
 //
 // The solve timers are persisted as a DEADLINE, never as a decrementing
 // counter. A counter driven by setInterval dies with its page and is throttled
@@ -46,6 +49,7 @@
 // countdown, to close it out at zero.
 
 importScripts('../shared/auth.js', '../shared/db.js', '../shared/storage.js');
+importScripts('batch-runner.js');
 
 TrackerStorage.serveRemote();
 
@@ -102,7 +106,8 @@ const AUTOFILL_FILES = [
   'content/autofill/sites/lever.js',
   'content/autofill/sites/ashby.js',
   'content/autofill/sites/workday.js',
-  'content/autofill/autofill-ui.js'
+  'content/autofill/autofill-ui.js',
+  'content/autofill/auto-apply.js'
 ];
 const AUTOFILL_CSS = ['content/autofill/autofill-ui.css'];
 // Matches MIN_FIELDS in content/autofill/autofill-ui.js.
@@ -539,6 +544,43 @@ async function autofillTab(tab) {
   }
 }
 
+// Auto-apply fallback for a batch tab whose driver never said hello (a
+// company site outside the manifest's matches). Works only where the
+// extension has host access; the batch's own timeout covers a refusal.
+// Frames already running the driver are skipped so nothing runs twice.
+async function injectAutofill(tabId) {
+  if (typeof tabId !== 'number') return false;
+  const probes = await frameResults(tabId, () => ({
+    AutofillStore: typeof AutofillStore !== 'undefined',
+    AutofillCore: typeof AutofillCore !== 'undefined',
+    ui: !!window.__litAutofillUI,
+    autoApply: !!window.__litAutoApply
+  }));
+  let injected = false;
+  for (const { frameId, result } of probes) {
+    const have = result || {};
+    if (have.autoApply) continue;
+    const target = { tabId, frameIds: [frameId] };
+    const files = have.ui
+      ? ['content/autofill/auto-apply.js']
+      : AUTOFILL_SHARED.filter(([name]) => !have[name]).map(([, file]) => file).concat(AUTOFILL_FILES);
+    try {
+      await chrome.scripting.executeScript({ target, files });
+      if (!have.ui && typeof chrome.scripting.insertCSS === 'function') {
+        await chrome.scripting.insertCSS({ target, files: AUTOFILL_CSS }).catch(() => {});
+      }
+      injected = true;
+    } catch (err) {
+      // A sandboxed or cross-origin frame.
+    }
+  }
+  return injected;
+}
+
+if (typeof LitBatch !== 'undefined') {
+  LitBatch.install({ injectAutofill });
+}
+
 function createMenus() {
   if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
@@ -572,6 +614,7 @@ if (chrome.contextMenus && chrome.contextMenus.onClicked) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || (sender && sender.id && sender.id !== chrome.runtime.id)) return false;
+  if (typeof LitBatch !== 'undefined' && LitBatch.handleMessage(msg, sender, sendResponse)) return true;
   if (msg.type === 'PT_INJECT_UNIVERSAL') {
     injectUniversal(sender).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false }));
     return true;
@@ -708,6 +751,7 @@ if (typeof module !== 'undefined' && module.exports) {
     logFromPage,
     injectUniversal,
     autofillTab,
+    injectAutofill,
     syncUniversalRegistration,
     runMaintenance,
     nextReminderAt,

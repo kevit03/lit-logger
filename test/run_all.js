@@ -22,6 +22,9 @@ const SUITES = [
   { name: 'Autofill Profile Page Suite', file: './autofill-options.test.js' },
   { name: 'Autofill Button & Learning Suite', file: './autofill-ui.test.js' },
   { name: 'Autofill Site Adapter Suite', file: './autofill-sites.test.js' },
+  { name: 'Auto-apply Orchestrator Suite', file: './batch-runner.test.js' },
+  { name: 'Auto-apply Driver Suite', file: './auto-apply.test.js' },
+  { name: 'Jobright Panel Suite', file: './jobright-panel.test.js' },
   { name: 'Zero-Emoji Compliance Suite', file: './emoji.test.js' },
   { name: 'Manifest V3 Validation Suite', file: './manifest.test.js' }
 ];

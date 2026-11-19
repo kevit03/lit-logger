@@ -137,7 +137,7 @@ async function run() {
   // 4d. Autofill. Every ATS and universal entry loads the store, then the
   //     core, then the site adapters, then the button script, with its CSS.
   //     The universal injection path loads the same files.
-  assert.strictEqual(manifest.version, '1.5.0', 'version is 1.5.0');
+  assert.strictEqual(manifest.version, '1.6.0', 'version is 1.6.0');
   const AUTOFILL_JS = [
     'shared/autofill-store.js',
     'shared/autofill-core.js',
@@ -145,7 +145,8 @@ async function run() {
     'content/autofill/sites/lever.js',
     'content/autofill/sites/ashby.js',
     'content/autofill/sites/workday.js',
-    'content/autofill/autofill-ui.js'
+    'content/autofill/autofill-ui.js',
+    'content/autofill/auto-apply.js'
   ];
   const atsEntries = manifest.content_scripts.filter(e => (e.js || []).some(f => f.startsWith('content/adapters/ats/')));
   assert.strictEqual(atsEntries.length, 2, 'the ATS and universal entries both exist');
@@ -161,6 +162,12 @@ async function run() {
   const swText = fs.readFileSync(swPath, 'utf8');
   AUTOFILL_JS.forEach(f => assert.ok(swText.includes(`'${f}'`), `the universal injection path loads ${f}`));
   assert.ok(manifest.options_ui && fs.existsSync(path.join(rootDir, manifest.options_ui.page)), 'the autofill profile page exists');
+  // 4e. Auto-apply: the Jobright panel runs on jobright.ai only, and the
+  //     worker loads the batch orchestrator.
+  const jobrightEntry = manifest.content_scripts.find(e => (e.js || []).includes('content/jobright/jobright-panel.js'));
+  assert.ok(jobrightEntry, 'the Jobright panel is a content script');
+  assert.deepStrictEqual(jobrightEntry.matches, ['https://jobright.ai/*'], 'the Jobright panel runs on jobright.ai only');
+  assert.ok(/importScripts\([^)]*batch-runner\.js/.test(swText), 'the worker loads the batch orchestrator');
   const swSource = fs.readFileSync(swPath, 'utf8');
   assert.ok(/importScripts\('\.\.\/shared\/auth\.js', '\.\.\/shared\/db\.js', '\.\.\/shared\/storage\.js'\)/.test(swSource), 'the worker loads auth, db, then storage');
   assert.ok(/TrackerStorage\.serveRemote\(\)/.test(swSource), 'the worker answers content-script storage calls');

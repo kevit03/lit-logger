@@ -88,7 +88,14 @@ The button and its cards stay out of the way. Drag the grip (or the button) anyw
 
 - **No AI and no servers.** Fields are matched by rules: site-specific selectors first, then rules you taught it, then the page's `autocomplete` hints, then a dictionary of common phrasings ("legal first name", "will you now or in the future require sponsorship").
 - **It learns from everything you answer.** Text boxes, dropdowns (including custom ones like Workday's and Greenhouse's), multiple choice, checkboxes, and yes/no buttons. Fill or change one and LIT either learns it outright (when it matches your profile) or offers to remember it for that site or all sites. Fields that appear on later steps count too. Long answers can go into an answer bank and get suggested the next time a similar question shows up.
+- **You stay in control.** The Autofill button never clicks Submit (only Auto-apply does, below). EEO questions are left blank unless you turn them on. LIT never learns from password, card, or SSN fields.
 - **Your data stays on this device**, in `chrome.storage.local`. Export and import it as JSON from the profile page.
+
+### Auto-apply: apply to Jobright jobs in parallel
+
+On Jobright (`jobright.ai/jobs/...`), an **Auto-apply** button sits at the bottom left. It lists your recommended jobs, with Greenhouse, Ashby, and Lever postings checked by default. Pick how many run at once (5 to 10) and press **Apply**. LIT opens each application in a background window, fills it with your Autofill profile, checks every required field, clicks Submit, waits for the confirmation, closes the tab, and starts the next job. The panel shows each job's progress live.
+
+LIT never guesses. A job becomes **Needs you** and its tab stays open, with the missing fields outlined, when a required question has no saved answer, a CAPTCHA appears, the form shows an error, the site wants a sign-in (Workday, iCIMS, Taleo), or nothing confirms the submission. Answer it there and LIT learns the answer for next time, so each batch needs you less. Turn off **Submit automatically** to fill only and submit yourself. Submit is clicked at most once per job, even if the page reloads. Jobs already submitted show **Applied** and start unchecked.
 
 ### Privacy and accounts
 
@@ -133,6 +140,10 @@ The core handles deduping, toasts, and teardown, so a double-fired submit never 
 `shared/autofill-core.js` scans the form, reads each field's label (`label[for]`, wrapping label, `aria-labelledby`, `aria-label`, nearby question text, placeholder, name), and matches it against the profile. Matching tries site adapter fields, then learned rules (this site before global), then `autocomplete`, then the synonym dictionary, then the answer bank. Values are set through the native value setter so React-controlled inputs notice.
 
 Site adapters in `content/autofill/sites/` cover what the generic engine can't: react-select menus on Greenhouse, yes/no button pairs on Ashby, and Workday's listbox and multiselect widgets, which re-render after every edit. `shared/autofill-store.js` keeps the profile, resume, rules, and answers under `af_` keys, and `content/autofill/autofill-ui.js` draws the button inside a closed shadow root.
+
+### Auto-apply
+
+Three parts talk through `chrome.runtime` messages and one `lit_batch` record in `chrome.storage.local`. `content/jobright/jobright-panel.js` reads Jobright's own job list API and starts a batch. `background/batch-runner.js` keeps the queue: it runs N tabs at a time, enforces timeouts (45 s to find a form, 4 minutes overall), and survives the service worker being stopped, because every event re-reads the stored state. `content/autofill/auto-apply.js` runs in each batch tab: it fills the form with the Autofill engine, checks the required fields, submits once, and reports the result.
 
 ### Calendar overlay
 
