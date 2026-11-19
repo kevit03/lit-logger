@@ -1,7 +1,9 @@
 // Service worker: the storage host for content scripts, keyboard shortcuts,
 // the "Log application from this page" menu, on-demand universal-tracker
 // injection, opt-in registration of the universal bootstrap, the solve-timer
-// alarm with laps and alert preferences, and weekly snapshot maintenance.
+// alarm with laps and alert preferences, weekly snapshot maintenance, the
+// opt-in daily check-in notification, the padlock toolbar icon, and the
+// install (onboarding) and update (migration) steps.
 const assert = require('assert');
 const path = require('path');
 const { installMockChrome, uninstallMockChrome } = require('./mock_chrome');
@@ -53,6 +55,7 @@ function extendChrome(mock) {
   const GLOBAL_OF = {
     'shared/auth.js': 'TrackerAuth',
     'shared/storage.js': 'TrackerStorage',
+    'shared/coach-copy.js': 'LitCopy',
     'shared/auto-tracker-core.js': 'AutoTrackerCore',
     'shared/job-meta.js': 'JobMeta',
     'content/quick-log.js': 'quickLog',
@@ -83,7 +86,7 @@ function extendChrome(mock) {
       if (/formSize\(\)/.test(src)) return [{ frameId: 0, result: frame.ui ? (frame.formSize || 0) : -1 }];
       if (/__litAutofillUI\.fill\(\)/.test(src)) { frame.fillCalls = (frame.fillCalls || 0) + 1; return [{ frameId: 0, result: undefined }]; }
       if (/__litAutofillUI\.note\(/.test(src)) { frame.notes = (frame.notes || 0) + 1; return [{ frameId: 0, result: undefined }]; }
-      return [{ result: Object.assign({ TrackerAuth: false, TrackerStorage: false, AutoTrackerCore: false, JobMeta: false, quickLog: false, mounted: false }, frame) }];
+      return [{ result: Object.assign({ TrackerAuth: false, TrackerStorage: false, LitCopy: false, AutoTrackerCore: false, JobMeta: false, quickLog: false, mounted: false }, frame) }];
     },
     async registerContentScripts(list) { list.forEach(s => registered.push(s)); },
     async getRegisteredContentScripts({ ids }) { return registered.filter(s => !ids || ids.includes(s.id)); },
@@ -105,23 +108,38 @@ function extendChrome(mock) {
     openPopupFails: false,
     setBadgeText({ text }) { this.badgeText = text; },
     setBadgeBackgroundColor({ color }) { this.badgeColor = color; },
+    icons: [],
+    async setIcon(details) { this.icons.push(details); },
     async openPopup() {
       if (this.openPopupFails) throw new Error('No active browser window');
       this.popupOpens++;
     }
   };
   mock.windows = { created: [], async create(opts) { this.created.push(opts); return { id: 9 }; } };
-  mock.notifications = { created: [], create(id, opts) { this.created.push({ id, opts }); } };
+  mock.notifications = {
+    created: [],
+    cleared: [],
+    create(id, opts, cb) { this.created.push({ id, opts }); if (cb) cb(id); },
+    clear(id, cb) { this.cleared.push(id); if (cb) cb(true); },
+    onClicked: bus(),
+    onButtonClicked: bus()
+  };
   mock.tabs = {
     active: null,
     created: [],
     updated: [],
     query(q, cb) {
       if (q && q.url) { cb(this.created.filter(t => t.url === q.url)); return; }
+      if (q && !Object.keys(q).length) { cb(this.created.slice()); return; }
       cb(this.active ? [this.active] : []);
     },
     async create(opts) { const tab = Object.assign({ id: 100 + this.created.length, windowId: 1 }, opts); this.created.push(tab); return tab; },
-    async update(id, opts) { this.updated.push({ id, opts }); return { id }; }
+    async update(id, opts) {
+      this.updated.push({ id, opts });
+      const tab = this.created.find(t => t.id === id);
+      if (tab && opts.url) tab.url = opts.url;
+      return { id };
+    }
   };
   mock.runtime.onStartup = bus();
   mock.runtime.onInstalled = bus();
@@ -132,7 +150,7 @@ function extendChrome(mock) {
 function loadWorker() {
   const mock = extendChrome(installMockChrome());
   installMockIDB();
-  const GLOBAL_NAME = { 'auth.js': 'TrackerAuth', 'db.js': 'LitDB', 'storage.js': 'TrackerStorage', 'batch-runner.js': 'LitBatch',
+  const GLOBAL_NAME = { 'auth.js': 'TrackerAuth', 'db.js': 'LitDB', 'storage.js': 'TrackerStorage', 'coach-copy.js': 'LitCopy', 'batch-runner.js': 'LitBatch',
     'autofill-store.js': 'AutofillStore', 'answer-composer.js': 'AnswerComposer', 'ai-answer.js': 'LitAnswers' };
   global.importScripts = (...files) => {
     files.forEach(f => {
@@ -152,6 +170,7 @@ function unload() {
   delete global.TrackerAuth;
   delete global.TrackerStorage;
   delete global.LitDB;
+  delete global.LitCopy;
   delete global.LitBatch;
   delete global.AutofillStore;
   delete global.AnswerComposer;
@@ -223,14 +242,14 @@ async function run() {
     mock.contextMenus.onClicked.emit({ menuItemId: 'lit-log-page' }, { id: 5, url: 'https://careers.acme.com/jobs/1' });
     await settle();
     const injected = mock.scripting.executions.filter(e => e.files).map(e => e.files);
-    assert.deepStrictEqual(injected[0], ['shared/auth.js', 'shared/storage.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/quick-log.js'], 'a bare page gets every dependency in order');
+    assert.deepStrictEqual(injected[0], ['shared/auth.js', 'shared/storage.js', 'shared/coach-copy.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/quick-log.js'], 'a bare page gets every dependency in order');
 
     await sw.logFromPage({ id: 5, url: 'https://careers.acme.com/jobs/1' });
     assert.strictEqual(mock.scripting.frames['5:0'].quickLogCalls, 1, 'a second click reuses the injected card');
     assert.strictEqual(mock.scripting.executions.filter(e => e.files).length, 1, 'nothing is injected twice');
 
     // A statically matched ATS page already has storage and the core.
-    Object.assign(mock.scripting.frames['7:0'] = {}, { TrackerAuth: true, TrackerStorage: true, AutoTrackerCore: true });
+    Object.assign(mock.scripting.frames['7:0'] = {}, { TrackerAuth: true, TrackerStorage: true, LitCopy: true, AutoTrackerCore: true });
     await sw.logFromPage({ id: 7, url: 'https://boards.greenhouse.io/acme/jobs/1' });
     const last = mock.scripting.executions.filter(e => e.files).pop();
     assert.deepStrictEqual(last.files, ['shared/job-meta.js', 'content/quick-log.js'], 'never redeclares a script the page already has');
@@ -364,7 +383,7 @@ async function run() {
     assert.deepStrictEqual(ok, { ok: true });
     const files = mock.scripting.executions.filter(e => e.files).pop();
     assert.strictEqual(files.key, '1:0');
-    assert.deepStrictEqual(files.files, ['shared/auth.js', 'shared/storage.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/adapters/ats/universal.js', 'content/auto-tracker.js',
+    assert.deepStrictEqual(files.files, ['shared/auth.js', 'shared/storage.js', 'shared/coach-copy.js', 'shared/auto-tracker-core.js', 'shared/job-meta.js', 'content/adapters/ats/universal.js', 'content/auto-tracker.js',
       'shared/autofill-store.js', 'shared/autofill-core.js',
       'content/autofill/sites/greenhouse.js', 'content/autofill/sites/lever.js', 'content/autofill/sites/ashby.js', 'content/autofill/sites/workday.js',
       'content/autofill/autofill-ui.js', 'content/autofill/auto-apply.js']);
@@ -480,8 +499,9 @@ async function run() {
     console.log('[PASS] Maintenance: alarm and menus on install; one automatic snapshot a week');
   }
 
-  // 8. Daily reminder: one alarm at the preferred local time; firing opens
-  // the check-in page once and books tomorrow; prefs move or clear it.
+  // 8. Daily check-in: one alarm at the preferred local time while opted in;
+  // firing shows a notification (never a tab), clicking opens the page once,
+  // and prefs move or clear it.
   {
     const { mock, sw, storage } = loadWorker();
     const noon = new Date(2026, 0, 5, 12, 0, 0).getTime();
@@ -490,22 +510,40 @@ async function run() {
     assert.strictEqual(sw.nextReminderAt('09:00', noon), new Date(2026, 0, 6, 9, 0, 0).getTime(), 'tomorrow once it has passed');
     assert.strictEqual(sw.nextReminderAt('garbage', noon), todayAt1430, 'an unreadable time falls back to 2:30 PM');
 
-    mock.runtime.onInstalled.emit({ reason: 'install' });
+    await storage.setPrefs({ reminderEnabled: true });
     await settle(80);
     const booked = mock.alarms.store.get('pt-reminder');
-    assert.ok(booked && booked.when > Date.now(), 'install books the reminder');
+    assert.ok(booked && booked.when > Date.now(), 'opting in books the check-in');
     assert.strictEqual(booked.periodInMinutes, undefined, 'a fixed time, not a period');
 
+    await storage.addLog({ metricId: 'jobs' });
+    await storage.addLog({ metricId: 'jobs' });
     mock.alarms.onAlarm.emit({ name: 'pt-reminder' });
     await settle(80);
-    assert.strictEqual(mock.tabs.created.length, 1, 'firing opens the reminder page');
-    assert.ok(mock.tabs.created[0].url.endsWith('reminder/reminder.html'));
+    assert.strictEqual(mock.tabs.created.length, 0, 'firing never opens a tab by itself');
+    const note = mock.notifications.created.find(n => n.id === 'lit-checkin');
+    assert.ok(note, 'firing shows the check-in notification');
+    assert.deepStrictEqual(note.opts.buttons.map(b => b.title), ['Log what I did', 'Open my check-in']);
+    assert.ok(note.opts.title && note.opts.message, 'the notification has copy');
+    if (typeof global.LitCopy === 'undefined') assert.ok(/2 of 5/.test(note.opts.message), 'the fallback copy carries today\'s tally');
     assert.ok(mock.alarms.store.get('pt-reminder'), 'and books the next one');
 
-    mock.alarms.onAlarm.emit({ name: 'pt-reminder' });
+    mock.notifications.onButtonClicked.emit('lit-checkin', 0);
     await settle(80);
-    assert.strictEqual(mock.tabs.created.length, 1, 'an open reminder tab is reused');
+    assert.strictEqual(mock.tabs.created.length, 1, 'a click opens the check-in page');
+    assert.ok(mock.tabs.created[0].url.endsWith('reminder/reminder.html#log'), '"Log what I did" lands on the log button');
+    assert.ok(mock.notifications.cleared.includes('lit-checkin'), 'and clears the notification');
+
+    mock.notifications.onClicked.emit('lit-checkin');
+    await settle(80);
+    assert.strictEqual(mock.tabs.created.length, 1, 'an open check-in tab is reused');
     assert.strictEqual(mock.tabs.updated.length, 1);
+    mock.notifications.onClicked.emit('some-other-notification');
+    await settle(20);
+    assert.strictEqual(mock.tabs.updated.length, 1, 'other notifications are not ours');
+
+    // Fallback copy, independent of LitCopy.
+    assert.ok(/Locked in/.test(sw.reminderCopy.call(null, 5, 5, 'coach').title) || typeof global.LitCopy !== 'undefined');
 
     await storage.setPrefs({ reminderTime: '09:15' });
     await settle(80);
@@ -515,7 +553,116 @@ async function run() {
     await settle(80);
     assert.strictEqual(mock.alarms.store.get('pt-reminder'), undefined, 'turning it off clears the alarm');
     unload();
-    console.log('[PASS] Daily reminder: booked on install, opens the page once, follows the prefs');
+    console.log('[PASS] Daily check-in: opt-in alarm, a notification instead of a tab, click opens the page once');
+  }
+
+  // 9. Install opens onboarding once; an update keeps an existing user's
+  // check-in on, skips onboarding, and runs only once per device.
+  {
+    const { mock, storage } = loadWorker();
+    mock.runtime.onInstalled.emit({ reason: 'install' });
+    await settle(120);
+    assert.strictEqual(mock.tabs.created.length, 1, 'a fresh install opens one tab');
+    assert.ok(mock.tabs.created[0].url.endsWith('onboarding/onboarding.html'), 'and it is onboarding');
+    assert.strictEqual(mock.storage.local.store.pt_shell_migrations.warmCoach, true, 'a fresh install is marked migrated');
+
+    // A later update on that fresh install must not switch the check-in on.
+    await storage.setPrefs({ reminderEnabled: false });
+    mock.runtime.onInstalled.emit({ reason: 'update' });
+    await settle(120);
+    assert.strictEqual((await storage.getPrefs()).reminderEnabled, false, 'a fresh install\'s choice survives updates');
+    assert.strictEqual(mock.tabs.created.length, 1, 'an update never opens onboarding');
+    unload();
+  }
+  {
+    const { mock, storage } = loadWorker();
+    // An older install that never touched settings: no stored prefs at all.
+    mock.runtime.onInstalled.emit({ reason: 'update' });
+    await settle(120);
+    const raw = mock.storage.sync.store.pt_prefs || {};
+    assert.strictEqual(raw.reminderEnabled, true, 'an existing user keeps the check-in they had');
+    if ('onboardingDone' in storage.PREF_DEFAULTS) assert.strictEqual(raw.onboardingDone, true, 'existing installs skip onboarding');
+    assert.ok(mock.alarms.store.get('pt-reminder'), 'and it stays booked');
+    assert.strictEqual(mock.tabs.created.length, 0);
+    unload();
+  }
+  {
+    const { mock, storage, sw } = loadWorker();
+    // An older install that had turned the check-in off keeps it off.
+    mock.storage.sync.store.pt_prefs = { reminderEnabled: false, reminderTime: '10:00' };
+    assert.strictEqual(await sw.migrateExistingInstall(), true);
+    assert.strictEqual((await storage.getPrefs()).reminderEnabled, false, 'an explicit off is respected');
+    assert.strictEqual(await sw.migrateExistingInstall(), false, 'the migration runs once');
+    unload();
+    console.log('[PASS] Install opens onboarding; update keeps existing check-ins on, once per device');
+  }
+
+  // 10. Toolbar icon: open until today's applications goal is met, then
+  // locked; falls back to the static icons when drawing is unavailable.
+  {
+    const { mock, sw, storage } = loadWorker();
+    assert.strictEqual(sw.iconStateFor({ met: false }), 'open');
+    assert.strictEqual(sw.iconStateFor({ met: true }), 'locked');
+    const mid = sw.nextMidnightAt(new Date(2026, 0, 5, 22, 0, 0).getTime());
+    assert.strictEqual(new Date(mid).getDate(), 6);
+    assert.strictEqual(new Date(mid).getHours(), 0);
+
+    // No OffscreenCanvas in Node: the static icons are restored.
+    mock.action.icons.length = 0;
+    assert.strictEqual(await sw.updateToolbarIcon(), 'open');
+    assert.ok(mock.action.icons.some(i => i.path && i.path['16'] === 'icons/icon16.png'), 'falls back to the static icon');
+
+    // A minimal OffscreenCanvas records what is drawn.
+    const drawn = [];
+    global.OffscreenCanvas = class {
+      constructor(w, h) { this.w = w; this.h = h; }
+      getContext() {
+        const noop = () => {};
+        const w = this.w;
+        return new Proxy({}, {
+          get(t, k) {
+            if (k === 'getImageData') return () => ({ width: w, height: w, data: new Uint8ClampedArray(w * w * 4) });
+            if (k in t) return t[k];
+            return noop;
+          },
+          set(t, k, v) { t[k] = v; if (k === 'fillStyle') drawn.push(v); return true; }
+        });
+      }
+    };
+    try {
+      const metrics = await storage.getMetrics();
+      const jobs = metrics.find(m => m.id === 'jobs');
+      await storage.setMetricGoal('jobs', 2);
+      mock.action.icons.length = 0;
+      assert.strictEqual(await sw.updateToolbarIcon(), 'open', 'nothing logged: open');
+      const first = mock.action.icons.pop();
+      assert.ok(first.imageData && first.imageData['16'].width === 16 && first.imageData['32'].width === 32, 'draws 16 and 32 px');
+      assert.ok(drawn.includes('#8A8178'), 'open uses the neutral tone');
+
+      await storage.addLog({ metricId: 'jobs' });
+      await storage.addLog({ metricId: 'jobs' });
+      assert.strictEqual(await sw.updateToolbarIcon(), 'locked', 'goal met: locked');
+      assert.ok(drawn.includes('#E0674B'), 'locked uses the coral accent by default');
+      const count = mock.action.icons.length;
+      await sw.updateToolbarIcon();
+      assert.strictEqual(mock.action.icons.length, count, 'an unchanged state is not redrawn');
+
+      // A log write reaches the icon through the storage change event.
+      const before = mock.action.icons.length;
+      const logs = await storage.getLogs({ metricId: 'jobs' });
+      await storage.deleteLog(logs[0].id);
+      await settle(40);
+      await new Promise(r => setTimeout(r, 300));
+      await settle(40);
+      const last = mock.action.icons[mock.action.icons.length - 1];
+      assert.ok(mock.action.icons.length > before && last.imageData, 'the change event redraws');
+      assert.strictEqual(await sw.updateToolbarIcon(), 'open', 'back under the goal: open');
+      void jobs;
+    } finally {
+      delete global.OffscreenCanvas;
+    }
+    unload();
+    console.log('[PASS] Toolbar icon: open until the goal is met, then locked; static fallback without a canvas');
   }
 
   console.log('--- test/service-worker.test.js COMPLETED SUCCESSFULLY ---\n');

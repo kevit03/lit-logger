@@ -80,6 +80,21 @@ function toastTexts(doc, core) {
   return host ? host._shadow.querySelectorAll('.toast').map(t => t.querySelector('.body').textContent) : [];
 }
 
+// The quieter line under a toast's title ('' when there is none).
+function toastDetails(doc, core) {
+  const host = doc.getElementById(core.TOAST_HOST_ID);
+  return host ? host._shadow.querySelectorAll('.toast').map(t => { const d = t.querySelector('.detail'); return d ? d.textContent : ''; }) : [];
+}
+
+// Segments of each toast's progress bar: [total, filled] or null.
+function toastSegments(doc, core) {
+  const host = doc.getElementById(core.TOAST_HOST_ID);
+  return host ? host._shadow.querySelectorAll('.toast').map(t => {
+    const bar = t.querySelector('.segs');
+    return bar ? [bar.querySelectorAll('.seg').length, bar.querySelectorAll('.seg.on').length] : null;
+  }) : [];
+}
+
 // A job page the way the tests describe one: URL, title, meta tags, JSON-LD,
 // and body children.
 function jobPage(spec) {
@@ -309,13 +324,24 @@ async function run() {
     assert.ok(shadow.querySelector('style'), 'styles are scoped inside the shadow root');
     const toasts = shadow.querySelectorAll('.toast');
     assert.strictEqual(toasts.length, 2, 'one toast per logged activity (jobs toast was suppressed)');
-    assert.strictEqual(toasts[0].textContent, 'LIT:Logged Two Sum (+1)');
+    // Today's progress leads; what was solved is the quieter line; the first
+    // log of the day adds the streak line. The screen-reader prefix names LIT.
+    assert.strictEqual(toasts[0].querySelector('.prefix').textContent, 'LIT: ');
+    assert.deepStrictEqual(toastTexts(doc, core), ['Problem logged · 1 of 2 today', 'Locked in for today'], 'the log that meets the goal locks the day in');
+    assert.deepStrictEqual(toastDetails(doc, core), ['Two Sum', '3Sum']);
+    assert.deepStrictEqual(toastSegments(doc, core), [[2, 1], [2, 2]], 'one segment per unit of the goal');
+    assert.deepStrictEqual(toasts[0].querySelectorAll('.coach').map(c => c.textContent), ['One more locks in today.', 'Fresh start today'], 'first log of the day adds the streak line');
+    assert.strictEqual(toasts[1].querySelectorAll('.coach').length, 1, 'later logs skip the streak line');
+    assert.strictEqual(toasts[0].querySelector('.segs').getAttribute('aria-label'), '1 of 2 today');
     assert.strictEqual(toasts[0].getAttribute('role'), 'status');
     const EMOJI = /(\p{Extended_Pictographic}|\p{Emoji_Presentation})/u;
-    assert.ok(!EMOJI.test(toasts[0].textContent), 'toast text is emoji-free');
+    assert.ok(!EMOJI.test(toasts.map(t => t.textContent).join('')), 'toast text is emoji-free');
+    assert.ok(!/\b0-day\b|failed/i.test(toasts.map(t => t.textContent).join('')), 'coach tone: no shaming copy');
 
     const quick = core.showToast('Logged Quick (+1)', { document: doc, durationMs: 5 });
     assert.strictEqual(shadow.querySelectorAll('.toast').length, 3);
+    assert.strictEqual(quick.element.textContent, 'LIT: Logged Quick (+1)', 'a plain toast is just its message');
+    assert.strictEqual(quick.element.querySelector('.segs'), null);
     await new Promise(r => setTimeout(r, 20));
     assert.strictEqual(shadow.querySelectorAll('.toast').length, 2, 'toast removed itself after its duration');
     quick.dismiss();
@@ -1524,7 +1550,9 @@ async function run() {
     assert.strictEqual(first.log.source, 'auto');
     assert.strictEqual(first.log.sourceId, 'universal:hooli-com-5521');
     assert.strictEqual(first.log.url, 'https://hooli.com/careers/jobs/5521');
-    assert.deepStrictEqual(toastTexts(doc, core), ['Logged application at Hooli — Data Scientist']);
+    assert.deepStrictEqual(toastTexts(doc, core), ['Application logged · 1 of 5 today']);
+    assert.deepStrictEqual(toastDetails(doc, core), ['Hooli — Data Scientist']);
+    assert.deepStrictEqual(toastSegments(doc, core), [[5, 1]]);
     assert.deepStrictEqual(toastButtons(doc, core).map(b => b.textContent), ['Edit details', 'Undo']);
 
     clickToastButton(doc, core, 'Edit details');
@@ -1534,11 +1562,13 @@ async function run() {
     assert.strictEqual(edited.company, 'Hooli XYZ', 'the inline edit reached storage');
     assert.strictEqual(edited.role, 'Senior Data Scientist');
     assert.deepStrictEqual(toastTexts(doc, core), ['Updated application at Hooli XYZ — Senior Data Scientist']);
+    assert.deepStrictEqual(toastSegments(doc, core), [[5, 1]], 'an edit keeps the progress bar');
 
     clickToastButton(doc, core, 'Undo');
     await settle();
     assert.strictEqual((await storage.getLogs({ metricId: 'jobs' })).length, 0, 'Undo removed the entry');
     assert.deepStrictEqual(toastTexts(doc, core), ['Removed application at Hooli XYZ — Senior Data Scientist']);
+    assert.deepStrictEqual(toastSegments(doc, core), [null], 'Undo drops the progress bar');
     assert.strictEqual(await core.getDedupeCache().has(first.key), false, 'Undo releases the dedupe claim');
 
     // Applied to the same company 24 days ago: logged without asking.
@@ -1550,7 +1580,8 @@ async function run() {
     assert.strictEqual(again.logged, true, 'a company applied to before is logged again');
     assert.strictEqual(again.log.notes, 'Auto-logged from Career site', 'notes do not repeat the role and company');
     const text = toastTexts(doc2, core)[0];
-    assert.strictEqual(text, 'Logged application at Globex — Platform Engineer');
+    assert.strictEqual(text, 'Application logged · 1 of 5 today');
+    assert.strictEqual(toastDetails(doc2, core)[0], 'Globex — Platform Engineer');
 
     // Another role at the same company, minutes later: its own entry.
     const second = await core.dispatch(adapter, { id: 'globex:78', title: 'x', company: 'Globex', role: 'Data Engineer' }, { document: doc2, storage });

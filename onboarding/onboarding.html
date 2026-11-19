@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en" data-accent="coral">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to LIT</title>
+  <link rel="stylesheet" href="onboarding.css">
+</head>
+<body>
+  <main class="ob" aria-labelledby="step-title-1">
+    <header class="ob-head">
+      <div class="brand">
+        <svg class="lock" id="brand-lock" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path class="lock-shackle" d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          <path class="lock-body" fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/>
+        </svg>
+        <span class="brand-name">LIT</span>
+      </div>
+      <button type="button" class="link-btn" id="skip-all">Skip setup</button>
+    </header>
+
+    <div class="progress" id="progress" aria-hidden="false">
+      <span class="progress-label" id="progress-label">Step 1 of 4</span>
+      <div class="progress-bar" role="progressbar" aria-valuemin="1" aria-valuemax="4" aria-valuenow="1" id="progress-bar">
+        <span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+
+    <!-- Step 1: focus areas -->
+    <section class="step" data-step="1" aria-labelledby="step-title-1">
+      <p class="kicker">Welcome to LIT</p>
+      <h1 id="step-title-1">What are you working on?</h1>
+      <p class="lede">Pick what you want to keep count of. Applications are already in. You can change this any time.</p>
+      <div class="chips" id="focus-chips" role="group" aria-label="Focus areas"></div>
+      <footer class="step-foot">
+        <button type="button" class="btn btn-quiet" data-skip>Skip</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </footer>
+    </section>
+
+    <!-- Step 2: daily goal -->
+    <section class="step" data-step="2" aria-labelledby="step-title-2" hidden>
+      <p class="kicker">Your daily goal</p>
+      <h1 id="step-title-2">How many applications a day feels doable?</h1>
+      <p class="lede">Most people start with 3 to 5. Small and steady beats a big week you can't repeat.</p>
+      <div class="stepper" role="group" aria-label="Daily applications goal">
+        <button type="button" class="stepper-btn" id="goal-minus" aria-label="One fewer">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 12h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+        </button>
+        <label class="stepper-value">
+          <input type="number" id="goal-input" min="1" max="50" value="5" inputmode="numeric" aria-label="Applications a day">
+          <span class="stepper-unit">applications a day</span>
+        </label>
+        <button type="button" class="stepper-btn" id="goal-plus" aria-label="One more">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 6v12M6 12h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+        </button>
+      </div>
+
+      <label class="field">
+        <span class="field-label">I'm going for... <em>optional</em></span>
+        <input type="text" id="going-for" maxlength="80" placeholder="Product designer at a fintech" autocomplete="off">
+      </label>
+
+      <div class="field">
+        <span class="field-label" id="rest-label">Rest days <em>optional</em></span>
+        <div class="chips chips-days" id="rest-chips" role="group" aria-labelledby="rest-label"></div>
+        <p class="hint">A rest day never breaks your streak. Take one when you need it.</p>
+      </div>
+      <footer class="step-foot">
+        <button type="button" class="btn btn-quiet" data-back>Back</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-quiet" data-skip>Skip</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </footer>
+    </section>
+
+    <!-- Step 3: autofill and career sites -->
+    <section class="step" data-step="3" aria-labelledby="step-title-3" hidden>
+      <p class="kicker">Apply faster</p>
+      <h1 id="step-title-3">Let LIT fill in the boring parts</h1>
+      <p class="lede">Save your details once, and LIT fills them into job applications for you.</p>
+      <ul class="explain">
+        <li>
+          <span class="explain-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <span><b>Your profile, saved once.</b> Name, contact info, links, work history, and answers to common questions.</span>
+        </li>
+        <li>
+          <span class="explain-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h10M4 17h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <span><b>One click on the form.</b> On an application, press the Autofill button at the bottom right, or Alt+Shift+F.</span>
+        </li>
+        <li>
+          <span class="explain-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span><b>Nothing is submitted without you.</b> You check every field and press Submit yourself. Your profile stays on this computer.</span>
+        </li>
+      </ul>
+      <button type="button" class="btn btn-secondary btn-block" id="open-profile">Fill my autofill profile</button>
+
+      <div class="card optin" id="universal-card">
+        <div class="optin-head">
+          <h2>Count applications on any career site</h2>
+          <span class="pill" id="universal-state" hidden>On</span>
+        </div>
+        <p>LIT already counts applications on Greenhouse, Lever, Ashby, Workday, and more than 20 other job sites. Turn this on to also count them on a company's own careers page.</p>
+        <p class="small">Chrome will then ask to let LIT "read and change data on all websites." That is Chrome's standard wording. Here is what it means for LIT:</p>
+        <div class="two-col">
+          <div>
+            <h3>What LIT looks at</h3>
+            <ul class="ticks">
+              <li>Whether a page is a job application</li>
+              <li>The job title and company when you submit</li>
+            </ul>
+          </div>
+          <div>
+            <h3>What LIT never does</h3>
+            <ul class="ticks ticks-no">
+              <li>Read your email, passwords, or other browsing</li>
+              <li>Send anything to a server</li>
+              <li>Submit a form for you</li>
+            </ul>
+          </div>
+        </div>
+        <button type="button" class="btn btn-secondary" id="universal-btn">Allow on all career sites</button>
+        <p class="status" id="universal-status" role="status" aria-live="polite"></p>
+      </div>
+      <footer class="step-foot">
+        <button type="button" class="btn btn-quiet" data-back>Back</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-quiet" data-skip>Skip</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </footer>
+    </section>
+
+    <!-- Step 4: daily check-in -->
+    <section class="step" data-step="4" aria-labelledby="step-title-4" hidden>
+      <p class="kicker">Daily check-in</p>
+      <h1 id="step-title-4">Want a little nudge each day?</h1>
+      <p class="lede">One short notification a day with how you're doing. It's off unless you turn it on, and it skips your rest days.</p>
+
+      <label class="switch-row">
+        <span>
+          <span class="switch-title">Send me a daily check-in</span>
+          <span class="hint">You can change or turn it off from the check-in itself.</span>
+        </span>
+        <input type="checkbox" id="checkin-on" class="switch" role="switch">
+      </label>
+
+      <div class="checkin-options" id="checkin-options">
+        <label class="field field-inline">
+          <span class="field-label">Every day at</span>
+          <input type="time" id="checkin-time" value="14:30">
+        </label>
+
+        <div class="field">
+          <span class="field-label" id="voice-label">Coach voice</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="voice-label" id="voice-group">
+            <button type="button" role="radio" data-voice="gentle" aria-checked="false">Gentle</button>
+            <button type="button" role="radio" data-voice="coach" aria-checked="true">Coach</button>
+            <button type="button" role="radio" data-voice="drill" aria-checked="false">Drill</button>
+          </div>
+          <p class="hint" id="voice-hint">Warm and direct. Cheers you on, keeps you moving.</p>
+        </div>
+
+        <div class="preview" aria-live="polite">
+          <span class="preview-label">Preview</span>
+          <div class="notif">
+            <svg class="lock notif-lock" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path class="lock-shackle" d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+              <path class="lock-body" fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/>
+            </svg>
+            <div class="notif-text">
+              <span class="notif-app">LIT</span>
+              <b id="preview-title">Daily check-in</b>
+              <span id="preview-body">2 of 5 applications sent so far.</span>
+              <span class="notif-actions"><span>Log what I did</span><span>Open my check-in</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <footer class="step-foot">
+        <button type="button" class="btn btn-quiet" data-back>Back</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-quiet" data-skip>Skip</button>
+        <button type="button" class="btn btn-primary" data-next>Finish</button>
+      </footer>
+    </section>
+
+    <!-- Finish -->
+    <section class="step step-finish" data-step="5" aria-labelledby="step-title-5" hidden>
+      <svg class="lock lock-hero" id="finish-lock" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path class="lock-shackle" d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <path class="lock-body" fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/>
+      </svg>
+      <h1 id="step-title-5">You're locked in.</h1>
+      <p class="lede" id="finish-lede">Go apply. LIT will count as you go.</p>
+      <ul class="explain">
+        <li>
+          <span class="explain-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 4h4v3a2 2 0 1 0 0 4v3h-3a2 2 0 1 0-4 0H4v-4a2 2 0 1 0 0-4V4h6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+          <span><b>Pin LIT to your toolbar.</b> Click the puzzle piece next to the address bar, then the pin beside LIT. The padlock locks when you hit today's goal.</span>
+        </li>
+        <li>
+          <span class="explain-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 10h16M9 3v4M15 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <span><b>Your scoreboard is Google Calendar.</b> Each day shows how many applications you sent, filled in when you hit your goal.</span>
+        </li>
+      </ul>
+      <footer class="step-foot step-foot-center">
+        <button type="button" class="btn btn-secondary" id="open-calendar">Open Google Calendar</button>
+        <button type="button" class="btn btn-primary" id="finish-done">Start tracking</button>
+      </footer>
+    </section>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="../shared/auth.js"></script>
+  <script src="../shared/db.js"></script>
+  <script src="../shared/storage.js"></script>
+  <script src="../shared/coach-copy.js"></script>
+  <script src="onboarding.js"></script>
+</body>
+</html>

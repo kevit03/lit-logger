@@ -352,81 +352,160 @@ const AutoTrackerCore = (() => {
   }
 
   // ---------------------------------------------------------------------------
-  // Shadow DOM toast
+  // Shadow DOM toast ("Warm Coach")
+  //
+  // A light card in the user's accent color that follows the OS light/dark
+  // scheme. An auto-logged activity shows today's progress ("Application
+  // logged · 3 of 5 today") over a small segmented bar; the log that meets
+  // the day's goal reads "Locked in for today" and its padlock's shackle
+  // swings shut once. Everything is read once per log (one getStats call,
+  // one prefs read); nothing polls.
+  //
+  // Placement: top right by default, clear of the bottom-of-form Submit and
+  // Next buttons most application pages use. When the Autofill widget has a
+  // remembered spot on this site (the user dragged it somewhere out of the
+  // way), toasts use that corner and stack just past the widget.
   // ---------------------------------------------------------------------------
+  const ACCENTS = {
+    coral: ['#E0674B', '#F07A5E'],
+    sage: ['#5E9270', '#7FB291'],
+    ocean: ['#3B7EA1', '#5FA3C7'],
+    plum: ['#8A5A9E', '#B285C6'],
+    amber: ['#C9821F', '#E3A54A'],
+    slate: ['#3D4A5C', '#A9B6C8']
+  };
+  const MAX_SEGMENTS = 10;
+  const TOAST_STATS_TIMEOUT_MS = 900;
+  const AUTOFILL_POS_KEY = 'lit_af_ui_pos';
+  const DEFAULT_TOAST_PLACEMENT = { h: 'right', v: 'top', x: 16, y: 16 };
+  // The Autofill dock is ~40px tall; toasts start past it.
+  const WIDGET_CLEARANCE_PX = 52;
+
   const TOAST_CSS = `
     :host { all: initial; }
     .stack {
+      --bg: #FBF8F3;
+      --surface: #FFFFFF;
+      --surface-2: #F4EFE7;
+      --ink: #2A2622;
+      --muted: #6F665E;
+      --line: #ECE5DA;
+      --success: #6B9E7A;
+      --warn: #B7791F;
+      --accent: var(--accent-l, #E0674B);
+      --on-accent: #FFFFFF;
+      --shadow: 0 12px 32px rgba(42, 38, 34, 0.14), 0 2px 6px rgba(42, 38, 34, 0.08);
       position: fixed;
+      top: 16px;
       right: 16px;
-      bottom: 16px;
       z-index: 2147483647;
       display: flex;
       flex-direction: column;
       gap: 8px;
       align-items: flex-end;
       pointer-events: none;
-      font-family: "Google Sans", Inter, Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
+    }
+    .stack.at-left { align-items: flex-start; }
+    @media (prefers-color-scheme: dark) {
+      .stack {
+        --bg: #1C1916;
+        --surface: #26221E;
+        --surface-2: #2F2A25;
+        --ink: #F3EDE4;
+        --muted: #A89E92;
+        --line: #3A342D;
+        --success: #82B592;
+        --warn: #E3A54A;
+        --accent: var(--accent-d, #F07A5E);
+        --on-accent: #1C1916;
+        --shadow: 0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+      }
     }
     .toast {
       pointer-events: auto;
       box-sizing: border-box;
       width: max-content;
-      max-width: 380px;
-      min-width: 220px;
-      padding: 11px 14px 11px 16px;
-      border-radius: 12px;
-      background: rgba(24, 25, 28, 0.94);
-      color: #ecedee;
+      min-width: 260px;
+      max-width: min(360px, calc(100vw - 32px));
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: var(--surface);
+      color: var(--ink);
       font-size: 13px;
       line-height: 1.45;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
       position: relative;
       overflow: hidden;
       opacity: 0;
-      transform: translateY(8px) scale(0.98);
+      transform: translateY(-6px) scale(0.98);
       transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
-      -webkit-backdrop-filter: blur(12px);
-      backdrop-filter: blur(12px);
     }
-    .toast::before {
-      content: "";
+    .stack.at-bottom .toast { transform: translateY(6px) scale(0.98); }
+    .toast.show, .stack.at-bottom .toast.show { opacity: 1; transform: none; }
+    .head { display: flex; align-items: flex-start; gap: 9px; }
+    .mark {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      color: var(--accent);
+    }
+    .mark svg { display: block; overflow: visible; }
+    .toast.info .mark { color: var(--muted); }
+    .toast.warn .mark { color: var(--warn); }
+    .text { flex: 1; min-width: 0; }
+    .prefix {
       position: absolute;
-      left: 0; top: 0; bottom: 0;
-      width: 3px;
-      background: #34a853;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
     }
-    .toast.show { opacity: 1; transform: translateY(0) scale(1); }
-    .toast.info::before { background: #8ab4f8; }
-    .toast.warn::before { background: #fbbc04; }
-    .prefix { font-weight: 600; margin-right: 4px; color: #ffffff; }
-    .body { word-break: break-word; }
-    .detail { display: block; margin-top: 2px; font-size: 12px; color: #a9adb3; }
-    .actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+    .body { font-weight: 700; word-break: break-word; font-variant-numeric: tabular-nums; }
+    .detail { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); word-break: break-word; }
+    .coach { display: block; margin-top: 6px; font-size: 12px; color: var(--ink); }
+    .coach + .coach { margin-top: 2px; color: var(--muted); }
+    .segs { display: flex; gap: 3px; margin: 8px 0 2px; max-width: 220px; }
+    .seg {
+      flex: 1 1 0;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--surface-2);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+    .seg.on { background: var(--accent); box-shadow: none; }
+    .seg.new { animation: lit-seg 420ms cubic-bezier(0.34, 1.56, 0.64, 1) 120ms both; }
+    @keyframes lit-seg { from { transform: scaleY(0.3); opacity: 0.3; } to { transform: none; opacity: 1; } }
+    .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .toast.has-mark .actions, .toast.has-mark form { margin-left: 27px; }
     button {
       all: unset;
       box-sizing: border-box;
       cursor: pointer;
-      font: 600 12px/1 inherit;
       font-family: inherit;
-      padding: 7px 10px;
-      border-radius: 8px;
-      color: #ecedee;
-      background: rgba(255, 255, 255, 0.07);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-weight: 600;
+      font-size: 12px;
+      line-height: 1;
+      padding: 7px 11px;
+      border-radius: 10px;
+      color: var(--ink);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
       transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-    button:hover { background: rgba(255, 255, 255, 0.14); }
+    button:hover { background: var(--line); }
     button:active { transform: scale(0.97); }
-    button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 2px; }
-    button.primary { background: #8ab4f8; color: #111316; border-color: transparent; }
-    button.primary:hover { background: #aecbfa; }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+    button.primary:hover { filter: brightness(1.06); background: var(--accent); }
     button.close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 8px;
+      right: 8px;
       width: 22px;
       height: 22px;
       padding: 0;
@@ -435,32 +514,172 @@ const AutoTrackerCore = (() => {
       justify-content: center;
       background: transparent;
       border-color: transparent;
-      color: #a9adb3;
+      color: var(--muted);
       font-size: 15px;
+      border-radius: 50%;
     }
-    button.close:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-    .toast.has-close { padding-right: 32px; }
-    form { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
-    label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: #a9adb3; font-weight: 600; letter-spacing: 0.2px; }
+    button.close:hover { background: var(--surface-2); color: var(--ink); }
+    .toast.has-close { padding-right: 34px; }
+    form { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+    label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); font-weight: 600; }
     input {
       all: unset;
       box-sizing: border-box;
-      font: 13px/1.3 inherit;
       font-family: inherit;
-      color: #ecedee;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.3;
+      color: var(--ink);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 10px;
       padding: 7px 9px;
       width: 100%;
       transition: border-color 160ms ease;
     }
-    input:focus { border-color: #8ab4f8; }
-    .note { margin-top: 8px; font-size: 12px; color: #fdd663; }
+    input:focus { border-color: var(--accent); }
+    .note { margin-top: 8px; font-size: 12px; color: var(--warn); }
+
+    /* Padlock mark. Open: shackle raised and swung off the left post.
+       Locked: shackle down, body filled. "shut" plays open -> locked once. */
+    .lock .shackle { transform-origin: 12px 8.5px; }
+    .lock .lbody { fill: currentColor; fill-opacity: 1; }
+    .lock.open .shackle { transform: translateY(-1.6px) rotate(24deg); }
+    .lock.open .lbody { fill-opacity: 0; }
+    .lock.shut .shackle { animation: lit-shut 350ms cubic-bezier(0.34, 1.56, 0.64, 1) 260ms both; }
+    .lock.shut .lbody { animation: lit-fill 200ms ease-out 480ms both; }
+    .lock.glow { filter: drop-shadow(0 0 3px var(--accent)); }
+    @keyframes lit-shut {
+      from { transform: translateY(-1.6px) rotate(24deg); }
+      to { transform: none; }
+    }
+    @keyframes lit-fill { from { fill-opacity: 0; } to { fill-opacity: 1; } }
+
     @media (prefers-reduced-motion: reduce) {
       .toast, button { transition: none; }
+      .seg.new, .lock.shut .shackle, .lock.shut .lbody { animation: none; }
     }
   `;
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICONS = {
+    lock: {
+      attrs: { width: '18', height: '18', viewBox: '0 0 18 18', fill: 'none' },
+      children: [
+        ['path', { class: 'shackle', d: 'M6 8.5V6a3 3 0 0 1 6 0v2.5', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round' }],
+        ['rect', { class: 'lbody', x: '3.5', y: '8.5', width: '11', height: '7.5', rx: '2.2', stroke: 'currentColor', 'stroke-width': '1.7' }]
+      ]
+    },
+    check: {
+      attrs: { width: '18', height: '18', viewBox: '0 0 18 18', fill: 'none' },
+      children: [
+        ['circle', { cx: '9', cy: '9', r: '7.2', stroke: 'currentColor', 'stroke-width': '1.6' }],
+        ['path', { d: 'M5.8 9.2l2.2 2.2 4.3-4.6', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]
+      ]
+    },
+    info: {
+      attrs: { width: '18', height: '18', viewBox: '0 0 18 18', fill: 'none' },
+      children: [
+        ['circle', { cx: '9', cy: '9', r: '7.2', stroke: 'currentColor', 'stroke-width': '1.6' }],
+        ['path', { d: 'M9 8.2v4.2M9 5.6v.1', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }]
+      ]
+    },
+    warn: {
+      attrs: { width: '18', height: '18', viewBox: '0 0 18 18', fill: 'none' },
+      children: [
+        ['path', { d: 'M9 2.4l7 12.4H2z', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linejoin': 'round' }],
+        ['path', { d: 'M9 7.4v3.2M9 12.8v.1', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }]
+      ]
+    }
+  };
+
+  // null where the document cannot make SVG (the headless test DOM).
+  function buildIcon(d, name, extraClass) {
+    const spec = ICONS[name];
+    if (!spec || !d || typeof d.createElementNS !== 'function') return null;
+    try {
+      const make = (tag, attrs) => {
+        const node = d.createElementNS(SVG_NS, tag);
+        Object.keys(attrs).forEach(k => node.setAttribute(k, attrs[k]));
+        return node;
+      };
+      const svg = make('svg', Object.assign({ 'aria-hidden': 'true', focusable: 'false' }, spec.attrs));
+      if (extraClass) svg.setAttribute('class', extraClass);
+      spec.children.forEach(([tag, attrs]) => svg.appendChild(make(tag, attrs)));
+      return svg;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function accentPair(id) {
+    return ACCENTS[id] || ACCENTS.coral;
+  }
+
+  function setVar(node, name, value) {
+    if (node && node.style && typeof node.style.setProperty === 'function') node.style.setProperty(name, value);
+  }
+
+  function applyAccent(root, accentId) {
+    if (!root || !root.stack) return;
+    const [light, dark] = accentPair(accentId);
+    setVar(root.stack, '--accent-l', light);
+    setVar(root.stack, '--accent-d', dark);
+  }
+
+  // Where toasts go, from the Autofill widget's remembered position on this
+  // site (or null): the same corner, just past the widget.
+  function toastPlacement(saved) {
+    const ok = saved && (saved.h === 'left' || saved.h === 'right') && (saved.v === 'top' || saved.v === 'bottom') &&
+      Number.isFinite(saved.x) && Number.isFinite(saved.y);
+    if (!ok) return Object.assign({}, DEFAULT_TOAST_PLACEMENT);
+    return {
+      h: saved.h,
+      v: saved.v,
+      x: Math.max(8, Math.round(saved.x)),
+      y: Math.max(8, Math.round(saved.y)) + WIDGET_CLEARANCE_PX
+    };
+  }
+
+  function applyPlacement(root, placement) {
+    if (!root || !root.stack) return;
+    const p = placement || DEFAULT_TOAST_PLACEMENT;
+    const s = root.stack.style;
+    s.left = p.h === 'left' ? p.x + 'px' : 'auto';
+    s.right = p.h === 'right' ? p.x + 'px' : 'auto';
+    s.top = p.v === 'top' ? p.y + 'px' : 'auto';
+    s.bottom = p.v === 'bottom' ? p.y + 'px' : 'auto';
+    root.stack.classList.toggle('at-left', p.h === 'left');
+    root.stack.classList.toggle('at-bottom', p.v === 'bottom');
+  }
+
+  function extensionAlive() {
+    try { return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id; } catch (e) { return false; }
+  }
+
+  function pageHost() {
+    try { return String((typeof location !== 'undefined' && location.hostname) || '').toLowerCase(); } catch (e) { return ''; }
+  }
+
+  // One read when the toast host is created: the widget's spot and the
+  // accent. Both are best effort; the defaults are fine.
+  function loadRootLook(root) {
+    if (!extensionAlive()) return;
+    try {
+      if (chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(AUTOFILL_POS_KEY, items => {
+          try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
+          const all = items && items[AUTOFILL_POS_KEY];
+          const saved = all && typeof all === 'object' ? all[pageHost()] : null;
+          if (saved) applyPlacement(root, toastPlacement(saved));
+        });
+      }
+    } catch (e) { /* storage gone */ }
+    try {
+      if (typeof TrackerStorage !== 'undefined' && TrackerStorage && typeof TrackerStorage.getPrefs === 'function') {
+        Promise.resolve(TrackerStorage.getPrefs()).then(p => { if (p && p.accent) applyAccent(root, p.accent); }).catch(() => {});
+      }
+    } catch (e) { /* prefs are optional */ }
+  }
 
   let toastRoot = null;
 
@@ -488,6 +707,7 @@ const AutoTrackerCore = (() => {
         shadow = host.attachShadow({ mode: 'closed' });
       }
     }
+    let fresh = false;
     if (!shadow.querySelector('.stack')) {
       const style = d.createElement('style');
       style.textContent = TOAST_CSS;
@@ -495,41 +715,220 @@ const AutoTrackerCore = (() => {
       stack.className = 'stack';
       shadow.appendChild(style);
       shadow.appendChild(stack);
+      fresh = true;
     }
     toastRoot = { host, shadow, stack: shadow.querySelector('.stack'), doc: d };
+    if (fresh) {
+      applyPlacement(toastRoot, DEFAULT_TOAST_PLACEMENT);
+      loadRootLook(toastRoot);
+    }
     return toastRoot;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Progress for a toast: pure, so the copy and the bar can be tested.
+  // ---------------------------------------------------------------------------
+  function capitalize(s) {
+    const t = String(s || '');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+
+  // "Application", "Problem", "Chat": what one log of this tracker is.
+  function unitNoun(metric, metricId) {
+    const id = (metric && metric.id) || metricId;
+    if (id === 'jobs') return 'Application';
+    const unit = String((metric && metric.unit) || '').trim();
+    if (unit) return capitalize(/[^s]s$/i.test(unit) ? unit.slice(0, -1) : unit);
+    const name = String((metric && metric.name) || id || 'Activity').trim();
+    return capitalize(/[^s]s$/i.test(name) ? name.slice(0, -1) : name);
+  }
+
+  // Segments mirror the goal one to one up to MAX_SEGMENTS; a bigger goal
+  // gets MAX_SEGMENTS proportional segments instead of a hairline per unit.
+  function segmentsFor(count, goal) {
+    const g = Math.max(1, parseInt(goal, 10) || 1);
+    const c = Math.max(0, parseInt(count, 10) || 0);
+    if (g <= MAX_SEGMENTS) return { segments: g, filled: Math.min(c, g) };
+    return { segments: MAX_SEGMENTS, filled: Math.min(MAX_SEGMENTS, Math.floor((Math.min(c, g) / g) * MAX_SEGMENTS)) };
+  }
+
+  function shiftDateStr(dateStr, days) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ''));
+    const d = m ? new Date(+m[1], +m[2] - 1, +m[3], 12) : new Date();
+    d.setDate(d.getDate() + days);
+    return localDateStr(d);
+  }
+
+  function coachLib() {
+    return typeof LitCopy !== 'undefined' && LitCopy ? LitCopy : null;
+  }
+
+  function fallbackSub(count, goal, justMet) {
+    if (justMet) return "That's today's goal. Anything more is a bonus.";
+    if (count >= goal) return 'Bonus round. Every extra one counts.';
+    const left = goal - count;
+    return left === 1 ? 'One more locks in today.' : left + ' more to lock in today.';
+  }
+
+  function fallbackStreak(days, met, restToday) {
+    if (restToday) return 'Rest day, and you still showed up.';
+    if (days >= 2) return met ? 'Day ' + days + '. Keep it rolling.' : days + ' days in a row so far. Keep it rolling.';
+    if (days === 1 && met) return 'Day 1. Nice start.';
+    return 'Fresh start today';
+  }
+
+  // stats: TrackerStorage.getStats() after the write. logCount: how many the
+  // log just added. Returns null when there is nothing sensible to show.
+  function buildToastProgress({ stats, prefs, metricId, logCount }) {
+    if (!stats || !metricId) return null;
+    const metric = (Array.isArray(stats.metrics) ? stats.metrics : []).find(m => m && m.id === metricId) || { id: metricId };
+    const fromTodayCount = stats.todayCount && Number.isFinite(stats.todayCount[metricId]) ? stats.todayCount[metricId] : null;
+    const count = fromTodayCount !== null ? fromTodayCount : ((stats.today && stats.today[metricId]) || 0);
+    if (!(count > 0)) return null;
+    const goal = Math.max(1, parseInt(metric.dailyGoal, 10) || 1);
+    const added = Math.max(1, parseInt(logCount, 10) || 1);
+    const before = Math.max(0, count - added);
+    const met = count >= goal;
+    const justMet = met && before < goal;
+    const firstOfDay = before === 0;
+    const streak = Math.max(0, parseInt(stats.streaks && stats.streaks[metricId], 10) || 0);
+    const freeze = stats.freezes && stats.freezes[metricId];
+    const yesterday = shiftDateStr(stats.todayStr, -1);
+    const freezeUsed = !!(freeze && Array.isArray(freeze.usedOn) && freeze.usedOn.indexOf(yesterday) >= 0);
+    const restToday = !!stats.restToday;
+    const voice = (prefs && prefs.coachVoice) || 'coach';
+    const noun = unitNoun(metric, metricId);
+    const { segments, filled } = segmentsFor(count, goal);
+    const prevFilled = segmentsFor(before, goal).filled;
+
+    const title = justMet
+      ? 'Locked in for today'
+      : (count > goal ? noun + ' logged · ' + count + ' today' : noun + ' logged · ' + count + ' of ' + goal + ' today');
+
+    const lib = coachLib();
+    let sub = '';
+    if (lib && typeof lib.toast === 'function') {
+      try {
+        const t = lib.toast({ count, goal, unit: metric.unit || '', label: metric.name || '', voice, firstOfDay, streak });
+        sub = t && typeof t.sub === 'string' ? t.sub : '';
+      } catch (e) { sub = ''; }
+    }
+    if (!sub) sub = fallbackSub(count, goal, justMet);
+
+    let streakLine = '';
+    if (firstOfDay) {
+      if (lib && typeof lib.streak === 'function') {
+        try { streakLine = String(lib.streak({ days: streak, restToday, freezeUsed }) || ''); } catch (e) { streakLine = ''; }
+      }
+      if (!streakLine) streakLine = fallbackStreak(streak, met, restToday);
+    }
+
+    return {
+      metricId,
+      count,
+      goal,
+      before,
+      met,
+      justMet,
+      firstOfDay,
+      streak,
+      segments,
+      filled,
+      prevFilled,
+      title,
+      coach: [sub, streakLine].filter(Boolean),
+      lock: met ? (justMet ? 'shut' : 'locked') : 'open',
+      glow: met && streak >= 7,
+      accent: (prefs && prefs.accent) || 'coral'
+    };
   }
 
   // showToast(message, {
   //   variant: 'success' | 'info' | 'warn',
   //   detail: string,                          second, quieter line
+  //   progress: buildToastProgress(...),       segmented bar + padlock
+  //   coach: [string],                         short encouraging lines
   //   actions: [{ label, primary, onClick(toast) }],
   //   sticky: true,                            stays until dismissed (adds a close button)
   //   durationMs, document
   // })
-  // Returns { element, dismiss, update(message, detail), setActions(list),
-  // showForm(spec), isDismissed() }.
+  // Returns { element, dismiss, update(message, detail, opts), setDetail,
+  // setProgress, setCoach, setActions(list), showForm(spec), isDismissed() }.
   function showToast(message, options = {}) {
     const root = getToastRoot(options.document);
     if (!root) return null;
     const d = root.doc;
-    const variant = options.variant === 'info' || options.variant === 'warn' ? options.variant : 'success';
+    let variant = options.variant === 'info' || options.variant === 'warn' ? options.variant : 'success';
     const el = d.createElement('div');
-    el.className = 'toast ' + variant;
     el.setAttribute('role', options.actions || options.sticky ? 'alertdialog' : 'status');
     el.setAttribute('aria-live', 'polite');
+
+    const head = d.createElement('div');
+    head.className = 'head';
+    const mark = d.createElement('span');
+    mark.className = 'mark';
+    const text = d.createElement('div');
+    text.className = 'text';
     const prefix = d.createElement('span');
     prefix.className = 'prefix';
-    prefix.textContent = TOAST_PREFIX + ':';
+    prefix.textContent = TOAST_PREFIX + ': ';
     const body = d.createElement('span');
     body.className = 'body';
     body.textContent = String(message || '');
-    el.appendChild(prefix);
-    el.appendChild(body);
+    head.appendChild(mark);
+    head.appendChild(text);
+    el.appendChild(head);
+
     let detailEl = null;
+    let segsEl = null;
+    let coachEls = [];
     let actionsEl = null;
     let formEl = null;
-    root.stack.appendChild(el);
+    let progress = null;
+    let hasMark = false;
+
+    // The text column, always in this order.
+    function layoutText() {
+      text.textContent = '';
+      text.appendChild(prefix);
+      text.appendChild(body);
+      if (segsEl) text.appendChild(segsEl);
+      if (detailEl) text.appendChild(detailEl);
+      coachEls.forEach(c => text.appendChild(c));
+    }
+
+    function paintMark() {
+      mark.textContent = '';
+      let icon = null;
+      if (progress && variant === 'success') {
+        icon = buildIcon(d, 'lock', 'lock ' + progress.lock + (progress.glow ? ' glow' : ''));
+      } else {
+        icon = buildIcon(d, variant === 'success' ? 'check' : variant);
+      }
+      hasMark = !!icon;
+      if (icon) mark.appendChild(icon);
+      el.className = 'toast ' + variant + (hasMark ? ' has-mark' : '') +
+        (el.__shown ? ' show' : '') + (el.__closable ? ' has-close' : '');
+      if (!hasMark && mark.parentNode) mark.parentNode.removeChild(mark);
+      else if (hasMark && !mark.parentNode) head.insertBefore ? head.insertBefore(mark, text) : head.appendChild(mark);
+    }
+
+    function buildSegments(p) {
+      const wrap = d.createElement('div');
+      wrap.className = 'segs';
+      wrap.setAttribute('role', 'progressbar');
+      wrap.setAttribute('aria-valuemin', '0');
+      wrap.setAttribute('aria-valuemax', String(p.goal));
+      wrap.setAttribute('aria-valuenow', String(Math.min(p.count, p.goal)));
+      wrap.setAttribute('aria-label', p.count + ' of ' + p.goal + ' today');
+      for (let i = 0; i < p.segments; i++) {
+        const seg = d.createElement('span');
+        const on = i < p.filled;
+        seg.className = 'seg' + (on ? ' on' : '') + (on && i >= p.prevFilled ? ' new' : '');
+        wrap.appendChild(seg);
+      }
+      return wrap;
+    }
 
     let dismissed = false;
     let timer = null;
@@ -557,28 +956,51 @@ const AutoTrackerCore = (() => {
       element: el,
       dismiss,
       isDismissed: () => dismissed,
+      // Coach lines belong to the message they came with, so a new message
+      // drops them. The bar stays unless opts.progress is null.
       update(nextMessage, nextDetail, opts = {}) {
         if (dismissed) return api;
         body.textContent = String(nextMessage || '');
+        api.setCoach(null);
+        if (opts.progress !== undefined) api.setProgress(opts.progress);
         api.setDetail(nextDetail);
-        if (opts.variant) el.className = 'toast ' + opts.variant + (el.classList.contains('show') ? ' show' : '') + (el.classList.contains('has-close') ? ' has-close' : '');
+        if (opts.variant) {
+          variant = opts.variant === 'info' || opts.variant === 'warn' ? opts.variant : 'success';
+          paintMark();
+        }
         if (opts.sticky !== undefined) sticky = !!opts.sticky;
         if (opts.durationMs) duration = opts.durationMs;
         arm();
         return api;
       },
-      setDetail(text) {
-        if (!text) {
-          if (detailEl && detailEl.parentNode) detailEl.parentNode.removeChild(detailEl);
+      setDetail(value) {
+        if (!value) {
           detailEl = null;
-          return api;
+        } else {
+          if (!detailEl) {
+            detailEl = d.createElement('span');
+            detailEl.className = 'detail';
+          }
+          detailEl.textContent = String(value);
         }
-        if (!detailEl) {
-          detailEl = d.createElement('span');
-          detailEl.className = 'detail';
-          el.insertBefore ? el.insertBefore(detailEl, actionsEl || formEl || null) : el.appendChild(detailEl);
-        }
-        detailEl.textContent = String(text);
+        layoutText();
+        return api;
+      },
+      setProgress(p) {
+        progress = p && p.segments ? p : null;
+        segsEl = progress ? buildSegments(progress) : null;
+        layoutText();
+        paintMark();
+        return api;
+      },
+      setCoach(lines) {
+        coachEls = (Array.isArray(lines) ? lines : []).filter(Boolean).slice(0, 2).map(line => {
+          const c = d.createElement('span');
+          c.className = 'coach';
+          c.textContent = String(line);
+          return c;
+        });
+        layoutText();
         return api;
       },
       setActions(list) {
@@ -598,7 +1020,8 @@ const AutoTrackerCore = (() => {
           });
           actionsEl.appendChild(btn);
         });
-        el.appendChild(actionsEl);
+        if (formEl && formEl.parentNode === el && el.insertBefore) el.insertBefore(actionsEl, formEl);
+        else el.appendChild(actionsEl);
         return api;
       },
       // spec: { fields: [{ name, label, value, placeholder }], submitLabel,
@@ -678,7 +1101,17 @@ const AutoTrackerCore = (() => {
       }
     };
 
-    if (options.detail) api.setDetail(options.detail);
+    progress = options.progress && options.progress.segments ? options.progress : null;
+    if (progress) segsEl = buildSegments(progress);
+    if (options.detail) {
+      detailEl = d.createElement('span');
+      detailEl.className = 'detail';
+      detailEl.textContent = String(options.detail);
+    }
+    if (options.coach) api.setCoach(options.coach);
+    layoutText();
+    paintMark();
+    root.stack.appendChild(el);
     if (options.actions) api.setActions(options.actions);
     if (sticky) {
       const close = d.createElement('button');
@@ -691,16 +1124,18 @@ const AutoTrackerCore = (() => {
         if (typeof options.onClose === 'function') options.onClose();
       });
       el.appendChild(close);
+      el.__closable = true;
       el.classList.add('has-close');
     }
     el.addEventListener('mouseenter', () => { hovering = true; arm(); });
     el.addEventListener('mouseleave', () => { hovering = false; arm(); });
 
     // rAF gives the transition a frame to start from.
+    const reveal = () => { el.__shown = true; el.classList.add('show'); };
     if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => el.classList.add('show'));
+      requestAnimationFrame(reveal);
     } else {
-      el.classList.add('show');
+      reveal();
     }
     arm();
     return api;
@@ -723,6 +1158,14 @@ const AutoTrackerCore = (() => {
     return lead;
   }
 
+  // "Acme — Engineer", "Acme", "Engineer", or ''.
+  function formatJobSubject(company, role) {
+    const c = String(company || '').trim();
+    const r = String(role || '').trim();
+    if (c && r) return c + ' — ' + r;
+    return c || r;
+  }
+
   // "earlier today", "yesterday", "24 days ago"
   function formatDaysAgo(days) {
     const n = Math.max(0, parseInt(days, 10) || 0);
@@ -738,16 +1181,15 @@ const AutoTrackerCore = (() => {
     return MONTHS[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + m[1];
   }
 
-  // "Note: You applied to Acme 24 days ago on Sep 6, 2026. Log again anyway?"
+  // "Heads up: you applied to Acme 24 days ago on Sep 6, 2026. Log it again anyway?"
   function formatDuplicateMessage(prior, company) {
     const name = (prior && prior.log && prior.log.company) || company || 'this company';
     const when = formatDaysAgo(prior && prior.daysAgo) + ' on ' + formatShortDate(prior && prior.log && prior.log.date);
     const lead = prior && prior.sameListing
-      ? 'Note: You already logged this ' + name + ' listing ' + when + '.'
-      : 'Note: You applied to ' + name + ' ' + when + '.';
-    return lead + ' Log again anyway?';
+      ? 'Heads up: you already logged this ' + name + ' listing ' + when + '.'
+      : 'Heads up: you applied to ' + name + ' ' + when + '.';
+    return lead + ' Log it again anyway?';
   }
-
   // ---------------------------------------------------------------------------
   // Dispatcher
   // ---------------------------------------------------------------------------
@@ -783,25 +1225,66 @@ const AutoTrackerCore = (() => {
     return log;
   }
 
+  // One stats read and one prefs read per log, capped so a slow service
+  // worker never holds the toast back: past the cap the plain toast shows.
+  async function loadToastProgress(storage, metricId, logCount) {
+    if (!storage || typeof storage.getStats !== 'function') return null;
+    const read = Promise.all([
+      Promise.resolve().then(() => storage.getStats()),
+      typeof storage.getPrefs === 'function' ? Promise.resolve().then(() => storage.getPrefs()).catch(() => null) : null
+    ]).catch(() => null);
+    let timer = null;
+    const cap = new Promise(resolve => { timer = setTimeout(() => resolve(null), TOAST_STATS_TIMEOUT_MS); });
+    let result = null;
+    try {
+      result = await Promise.race([read, cap]);
+    } catch (e) {
+      result = null;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!result) return null;
+    try {
+      return buildToastProgress({ stats: result[0], prefs: result[1], metricId, logCount });
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Serializes dispatches so two adapters (or two rapid mutations) cannot race
   // past the dedupe check together.
   let dispatchChain = Promise.resolve();
 
-  // The toast for a logged application: Edit details (company and role, in
-  // place) and Undo.
+  // The toast for a logged application: today's progress when it is known,
+  // what was logged, Edit details (company and role, in place) and Undo.
   function showJobToast(log, payload, key, ctx) {
-    const { storage, cache, document: doc } = ctx;
+    const { storage, cache, document: doc, progress } = ctx;
     let current = { company: log.company, role: log.role };
-    const toast = showToast(formatJobMessage(current.company, current.role), {
-      document: doc,
-      durationMs: JOB_TOAST_DURATION_MS,
-      detail: payload.url ? 'Tracked from ' + safeHost(payload.url) : '',
-      actions: [
-        { label: 'Edit details', onClick: t => openEdit(t) },
-        { label: 'Undo', onClick: t => undo(t) }
-      ]
-    });
+    const host = payload.url ? safeHost(payload.url) : '';
+    const subjectLine = () => formatJobSubject(current.company, current.role) || (host ? 'Tracked from ' + host : '');
+    const toast = progress
+      ? showToast(progress.title, {
+        document: doc,
+        durationMs: JOB_TOAST_DURATION_MS,
+        progress,
+        detail: subjectLine(),
+        coach: progress.coach,
+        actions: [
+          { label: 'Edit details', onClick: t => openEdit(t) },
+          { label: 'Undo', onClick: t => undo(t) }
+        ]
+      })
+      : showToast(formatJobMessage(current.company, current.role), {
+        document: doc,
+        durationMs: JOB_TOAST_DURATION_MS,
+        detail: host ? 'Tracked from ' + host : '',
+        actions: [
+          { label: 'Edit details', onClick: t => openEdit(t) },
+          { label: 'Undo', onClick: t => undo(t) }
+        ]
+      });
     if (!toast) return null;
+    if (progress) applyAccent(getToastRoot(doc), progress.accent);
 
     function openEdit(t) {
       t.showForm({
@@ -819,7 +1302,7 @@ const AutoTrackerCore = (() => {
           }
           t.closeForm();
           if (!updated) {
-            t.update('Could not save those details. Edit the entry from the LIT popup.', '', { variant: 'warn', sticky: false, durationMs: 5000 });
+            t.update("Couldn't save those details. You can fix them from the LIT popup.", '', { variant: 'warn', sticky: false, durationMs: 5000 });
             return;
           }
           current = { company: updated.company, role: updated.role };
@@ -827,7 +1310,12 @@ const AutoTrackerCore = (() => {
           t.setActions([{ label: 'Undo', onClick: x => undo(x) }]);
         },
         onCancel: x => {
-          x.update(formatJobMessage(current.company, current.role), '', { sticky: false });
+          if (progress) {
+            x.update(progress.title, subjectLine(), { sticky: false });
+            x.setCoach(progress.coach);
+          } else {
+            x.update(formatJobMessage(current.company, current.role), '', { sticky: false });
+          }
           x.setActions([
             { label: 'Edit details', onClick: y => openEdit(y) },
             { label: 'Undo', onClick: y => undo(y) }
@@ -848,13 +1336,27 @@ const AutoTrackerCore = (() => {
       if (removed) {
         // Released so the same application can be logged again later.
         try { await cache.unmark(key); } catch (e) { /* the log is gone either way */ }
-        t.update(formatJobMessage(current.company, current.role, 'Removed'), '', { variant: 'info', sticky: false, durationMs: 3000 });
+        t.update(formatJobMessage(current.company, current.role, 'Removed'), '', { variant: 'info', sticky: false, durationMs: 3000, progress: null });
       } else {
-        t.update('That entry was already removed.', '', { variant: 'info', sticky: false, durationMs: 3000 });
+        t.update('That one was already removed.', '', { variant: 'info', sticky: false, durationMs: 3000, progress: null });
       }
     }
 
     return toast;
+  }
+
+  // A solved problem or other non-job activity.
+  function showActivityToast(payload, progress, doc) {
+    if (!progress) return showToast(formatLoggedMessage(payload), { document: doc });
+    const title = payload && payload.title ? String(payload.title).trim() : '';
+    const t = showToast(progress.title, {
+      document: doc,
+      progress,
+      detail: title,
+      coach: progress.coach
+    });
+    if (t) applyAccent(getToastRoot(doc), progress.accent);
+    return t;
   }
 
   function safeHost(url) {
@@ -892,9 +1394,12 @@ const AutoTrackerCore = (() => {
       }
       let toast = null;
       if (options.toast !== false) {
+        // A log dated another day says nothing about today's progress.
+        const today = !payload.date || payload.date === localDateStr();
+        const progress = today ? await loadToastProgress(storage, entry.metricId, entry.count) : null;
         toast = isJob
-          ? showJobToast(log, payload, key, { storage, cache, document: options.document })
-          : showToast(formatLoggedMessage(payload), { document: options.document });
+          ? showJobToast(log, payload, key, { storage, cache, document: options.document, progress })
+          : showActivityToast(payload, progress, options.document);
       }
       return { logged: true, key, log, toast };
     };
@@ -1131,8 +1636,15 @@ const AutoTrackerCore = (() => {
     showToast,
     formatLoggedMessage,
     formatJobMessage,
+    formatJobSubject,
     formatDuplicateMessage,
     formatDaysAgo,
+    buildToastProgress,
+    segmentsFor,
+    unitNoun,
+    toastPlacement,
+    ACCENTS,
+    MAX_SEGMENTS,
 
     dispatch,
     buildLog,

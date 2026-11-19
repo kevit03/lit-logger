@@ -20,8 +20,15 @@
 // questions cannot be written (no Claude key; links to the options page via
 // LIT_OPEN_OPTIONS).
 //
+// Refresh (header) rebuilds the list from what the page loaded, asks the
+// Applied list and the tracker again, and checks every job card Jobright has
+// in the page is accounted for. Each row's X removes that job; removals are
+// kept in `lit_batch_dismissed` and can be restored. A queued job in a running
+// batch has an X too (LIT_BATCH_REMOVE).
+//
 // This script only reads Jobright's own list and applied-jobs APIs (same
-// origin, the user's cookies) and only writes `lit_batch_prefs`. It never clicks anything on the
+// origin, the user's cookies) and only writes `lit_batch_prefs` and
+// `lit_batch_dismissed`. It never clicks anything on the
 // Jobright page. Everything lives in a closed shadow root so neither side's
 // CSS leaks into the other.
 //
@@ -49,6 +56,13 @@
   const BATCH_KEY = 'lit_batch';
   const DONE_KEY = 'lit_batch_done';
   const PREFS_KEY = 'lit_batch_prefs';
+  const DISMISSED_KEY = 'lit_batch_dismissed';
+  const DISMISSED_CAP = 500;
+  // Jobright marks every job card it renders with this attribute. The list is
+  // virtualized (only the cards near the viewport are in the page), so the
+  // cards are a check on the list, never the list itself.
+  const CARD_ATTR = 'data-newuser-touring-job-id';
+  const JOB_ID_RE = /^[0-9a-f]{24}$/i;
   const COUNT_MIN = 5;
   const COUNT_MAX = 10;
   const DEFAULT_PREFS = { concurrency: 5, mode: 'submit' };
@@ -205,12 +219,25 @@
     .titles { flex: 1; min-width: 0; }
     .title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
     .sub { margin: 2px 0 0; font-size: 12px; color: var(--text-2); }
+    .head-btns { flex: none; display: flex; gap: 2px; margin: -4px -6px 0 0; }
     .x {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; margin: -4px -6px 0 0; color: var(--text-2);
+      width: 28px; height: 28px; color: var(--text-2);
     }
     .x:hover { background: var(--surface-2); color: var(--text); }
     .x svg { width: 14px; height: 14px; }
+    .refresh.spinning svg { animation: lit-spin 900ms linear infinite; }
+    @keyframes lit-spin { to { transform: rotate(360deg); } }
+    .row-x {
+      flex: none; display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; margin: -1px -6px 0 -4px; color: var(--text-3);
+    }
+    .row-x:hover { background: var(--surface-3); color: var(--text); }
+    .row-x svg { width: 12px; height: 12px; }
+    .checked { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--text-2); border-bottom: 1px solid var(--border-soft); }
+    .checked.warn { color: var(--warn); background: var(--warn-soft); }
+    .removed { margin: 0; font-size: 12px; color: var(--text-3); }
+    .removed .link { padding: 0; font-size: 12px; }
 
     .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--border-soft); scrollbar-width: thin; }
     .job {
@@ -290,7 +317,7 @@
       .launcher { left: 8px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      * { transition: none !important; }
+      * { transition: none !important; animation: none !important; }
     }
   `;
 
@@ -312,6 +339,10 @@
     gen: 0,                // bumped on reload; stale responses are dropped
     feed: null,            // { jobs, next, size, exhausted }: what the page loaded
     hidden: new Set(),     // jobIds already applied to (Jobright or the tracker)
+    raw: new Set(),        // every jobId in the lists behind st.jobs, mappable or not
+    dismissed: {},         // jobId -> { title, company, at }: removed by the user (lit_batch_dismissed)
+    refreshing: false,
+    check: null,           // { onPage, missing, removed, total } from the last refresh
     appliedList: null,     // promise of Jobright's applied jobIds, once per open
     error: '',
     prefs: Object.assign({}, DEFAULT_PREFS),
@@ -322,7 +353,7 @@
     starting: false,
     caps: null             // { allSites, ai } from LIT_BATCH_CAPS, null until known
   };
-  let ui = null;           // { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot }
+  let ui = null;           // { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot, refreshBtn }
   let pollTimer = null;
   let storageListener = null;
 
@@ -422,6 +453,18 @@
     return out;
   }
 
+  // Every jobId in a list response, including ones mapJobs leaves out (no
+  // usable link), so a card for such a job does not look missing.
+  function rawIds(apiJson) {
+    const list = apiJson && apiJson.result && Array.isArray(apiJson.result.jobList) ? apiJson.result.jobList : [];
+    const out = [];
+    list.forEach(item => {
+      const id = item && item.jobResult ? clean(item.jobResult.jobId).toLowerCase() : '';
+      if (id) out.push(id);
+    });
+    return out;
+  }
+
   function perfEntries() {
     try {
       const perf = window.performance || (typeof performance !== 'undefined' ? performance : null);
@@ -499,7 +542,7 @@
       const msg = clean(json.errorMsg, ERROR_MAX);
       throw new Error(msg ? 'Jobright could not load jobs: ' + msg : 'Jobright could not load jobs.');
     }
-    return { jobs: SOURCE.map(json), size: SOURCE.size(json) };
+    return { jobs: SOURCE.map(json), size: SOURCE.size(json), raw: rawIds(json) };
   }
 
   function loadMore() {
@@ -510,8 +553,9 @@
     const size = st.pageSize;
     const gen = st.gen;
     const current = () => gen === st.gen;
-    st.loading = fetchPage(position, size, position === 0).then(({ jobs, size: got }) => {
+    st.loading = fetchPage(position, size, position === 0).then(({ jobs, size: got, raw }) => {
       if (!current()) return;
+      raw.forEach(id => st.raw.add(id));
       addJobs(jobs);
       st.position = position + size;
       if (got < size) st.exhausted = true;
@@ -552,6 +596,8 @@
     st.error = '';
     st.loading = null;
     st.appliedList = null;
+    st.check = null;
+    st.raw = new Set(st.feed ? st.feed.raw : []);
     if (!st.feed || !st.feed.jobs.length) return loadMore();
     addJobs(st.feed.jobs);
     st.position = st.feed.next;
@@ -595,8 +641,9 @@
     // A new set (first page, or refresh=true after a filter change) replaces
     // the old one; later pages extend it.
     const restart = position === 0 || u.searchParams.get('refresh') === 'true' || !st.feed;
-    if (restart) st.feed = { jobs: [], next: 0, size, exhausted: false };
+    if (restart) st.feed = { jobs: [], next: 0, size, exhausted: false, raw: new Set() };
     const feed = st.feed;
+    rawIds(json).forEach(id => feed.raw.add(id));
     const known = new Set(feed.jobs.map(j => j.jobId));
     SOURCE.map(json).forEach(j => { if (!known.has(j.jobId)) { known.add(j.jobId); feed.jobs.push(j); } });
     feed.next = Math.max(feed.next, position + size);
@@ -676,12 +723,13 @@
   function readStorage() {
     return new Promise(resolve => {
       try {
-        chrome.storage.local.get([BATCH_KEY, DONE_KEY, PREFS_KEY], items => {
+        chrome.storage.local.get([BATCH_KEY, DONE_KEY, PREFS_KEY, DISMISSED_KEY], items => {
           try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
           const all = items || {};
           st.batch = validBatch(all[BATCH_KEY]);
           st.done = all[DONE_KEY] && typeof all[DONE_KEY] === 'object' ? all[DONE_KEY] : {};
           st.prefs = normPrefs(all[PREFS_KEY]);
+          st.dismissed = validDismissed(all[DISMISSED_KEY]);
           dropDone();
           render();
           resolve();
@@ -703,12 +751,31 @@
     }
   }
 
+  function validDismissed(v) {
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  }
+
+  // Newest DISMISSED_CAP only, so the record cannot grow without end.
+  function saveDismissed() {
+    const ids = Object.keys(st.dismissed)
+      .sort((a, b) => (Number(st.dismissed[b] && st.dismissed[b].at) || 0) - (Number(st.dismissed[a] && st.dismissed[a].at) || 0));
+    if (ids.length > DISMISSED_CAP) ids.slice(DISMISSED_CAP).forEach(id => { delete st.dismissed[id]; });
+    try {
+      chrome.storage.local.set({ [DISMISSED_KEY]: st.dismissed }, () => {
+        try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
+      });
+    } catch (e) {
+      if (!alive()) destroy();
+    }
+  }
+
   function validBatch(b) {
     return b && typeof b === 'object' && Array.isArray(b.jobs) ? b : null;
   }
 
   function dropDone() {
     Object.keys(st.done).forEach(id => st.selected.delete(id));
+    Object.keys(st.dismissed).forEach(id => st.selected.delete(id));
     st.hidden.forEach(id => st.selected.delete(id));
   }
 
@@ -732,14 +799,25 @@
       st.prefs = normPrefs(changes[PREFS_KEY].newValue);
       dirty = true;
     }
+    if (changes[DISMISSED_KEY]) {
+      st.dismissed = validDismissed(changes[DISMISSED_KEY].newValue);
+      dropDone();
+      dirty = true;
+    }
     if (dirty) render();
     if (changes[BATCH_KEY] && changes[BATCH_KEY].oldValue && !st.batch) reloadIfPicking();
   }
 
   // --- actions ---------------------------------------------------------------
-  // What the picker shows: Jobright's current list minus jobs LIT submitted.
+  // What the picker shows: Jobright's current list minus jobs LIT submitted,
+  // jobs already applied to, and jobs the user removed.
   function listedJobs() {
-    return st.jobs.filter(j => !st.done[j.jobId] && !st.hidden.has(j.jobId));
+    return st.jobs.filter(j => !st.done[j.jobId] && !st.hidden.has(j.jobId) && !st.dismissed[j.jobId]);
+  }
+
+  // Removed by the user but still in the loaded list: what Restore brings back.
+  function removedJobs() {
+    return st.jobs.filter(j => st.dismissed[j.jobId] && !st.done[j.jobId] && !st.hidden.has(j.jobId));
   }
 
   function selectedJobs() {
@@ -749,7 +827,7 @@
   // Full autonomy: everything LIT can get into on its own. Sign-in walls stay
   // off until the user picks them.
   function preselectable(job) {
-    return classifyHost(job.host) !== 'signin' && !st.done[job.jobId];
+    return classifyHost(job.host) !== 'signin' && !st.done[job.jobId] && !st.dismissed[job.jobId];
   }
 
   function selectableOpen() {
@@ -762,6 +840,70 @@
     if (all) st.selected.clear();
     else { st.selected.clear(); targets.forEach(j => st.selected.add(j.jobId)); }
     render();
+  }
+
+  // The row's X: off the list, and it stays off across refreshes and visits.
+  function dismiss(jobId, record) {
+    const id = clean(jobId);
+    if (!id) return;
+    const job = st.jobs.find(j => j.jobId === id) || record || {};
+    st.dismissed[id] = { title: clean(job.title, TITLE_MAX), company: clean(job.company, TITLE_MAX), at: Date.now() };
+    st.selected.delete(id);
+    saveDismissed();
+    render();
+  }
+
+  function restoreRemoved() {
+    const jobs = removedJobs();
+    if (!jobs.length) return;
+    jobs.forEach(j => {
+      delete st.dismissed[j.jobId];
+      if (preselectable(j)) st.selected.add(j.jobId);
+    });
+    saveDismissed();
+    render();
+  }
+
+  // The jobIds of the cards Jobright has in the page right now.
+  function pageJobIds() {
+    const ids = new Set();
+    try {
+      const cards = document.querySelectorAll('[' + CARD_ATTR + ']');
+      Array.prototype.forEach.call(cards, el => {
+        const id = clean(el.getAttribute(CARD_ATTR)).toLowerCase();
+        if (JOB_ID_RE.test(id)) ids.add(id);
+      });
+    } catch (e) { /* no cards to read */ }
+    return Array.from(ids);
+  }
+
+  // The Refresh button: re-read what LIT has recorded, rebuild from the jobs
+  // the page loaded, ask Jobright's Applied list and the tracker again, then
+  // check every job card in the page is accounted for.
+  async function refresh() {
+    if (st.refreshing || !st.open || st.batch) return st.check;
+    st.refreshing = true;
+    render();
+    const before = new Set(listedJobs().map(j => j.jobId));
+    await readStorage();
+    if (st.batch) {
+      st.refreshing = false;
+      render();
+      return null;
+    }
+    await reloadJobs();
+    const listed = listedJobs().map(j => j.jobId);
+    const onPage = pageJobIds();
+    const known = new Set(Array.from(st.raw).concat(st.jobs.map(j => j.jobId.toLowerCase())));
+    st.check = st.error ? null : {
+      onPage: onPage.length,
+      missing: onPage.filter(id => !known.has(id)).length,
+      removed: Array.from(before).filter(id => !listed.includes(id) && !st.dismissed[id]).length,
+      total: listed.length
+    };
+    st.refreshing = false;
+    render();
+    return st.check;
   }
 
   function setCount(n) {
@@ -815,6 +957,12 @@
   const openOptions = () => send({ type: 'LIT_OPEN_OPTIONS' });
   const stopBatch = () => action({ type: 'LIT_BATCH_STOP' });
   const focusJob = jobId => action({ type: 'LIT_BATCH_FOCUS', jobId });
+  // Off a running batch before it starts, and off the picker from then on.
+  async function removeFromBatch(job) {
+    const response = await action({ type: 'LIT_BATCH_REMOVE', jobId: job.jobId });
+    if (response.ok) dismiss(job.jobId, job);
+    return response;
+  }
   async function clearBatch() {
     const response = await action({ type: 'LIT_BATCH_CLEAR' });
     if (response.ok) { await readStorage(); await reloadIfPicking(); }
@@ -866,9 +1014,12 @@
     return b;
   }
 
+  const CLOSE_PATH = 'M4 4l8 8M12 4l-8 8';
+  const REFRESH_PATH = 'M13 8a5 5 0 1 1-1.46-3.54M13 2.5V5h-2.5';
+
   // Built node by node: no innerHTML, so a page Trusted Types policy has
   // nothing to object to.
-  function closeIcon() {
+  function icon(d) {
     if (typeof document.createElementNS !== 'function') return null;
     try {
       const svg = document.createElementNS(SVG_NS, 'svg');
@@ -876,16 +1027,27 @@
       svg.setAttribute('aria-hidden', 'true');
       svg.setAttribute('focusable', 'false');
       const path = document.createElementNS(SVG_NS, 'path');
-      path.setAttribute('d', 'M4 4l8 8M12 4l-8 8');
+      path.setAttribute('d', d);
       path.setAttribute('stroke', 'currentColor');
       path.setAttribute('stroke-width', '1.6');
       path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
       path.setAttribute('fill', 'none');
       svg.appendChild(path);
       return svg;
     } catch (e) {
       return null;
     }
+  }
+
+  function iconButton(cls, d, label, tip, onClick) {
+    const b = button(cls, null, onClick);
+    b.setAttribute('aria-label', label);
+    b.setAttribute('title', tip);
+    const svg = icon(d);
+    if (svg) b.appendChild(svg);
+    else b.textContent = label;
+    return b;
   }
 
   function ensureUi() {
@@ -917,14 +1079,14 @@
     titles.appendChild(h('h2', 'title', 'Auto-apply'));
     const sub = h('p', 'sub');
     titles.appendChild(sub);
-    const x = button('x', null, close);
-    x.setAttribute('aria-label', 'Close');
-    x.setAttribute('title', 'Close');
-    const icon = closeIcon();
-    if (icon) x.appendChild(icon);
-    else x.textContent = 'Close';
+    const refreshBtn = iconButton('x refresh', REFRESH_PATH, 'Refresh', 'Refresh and check against the page', () => { refresh(); });
+    refreshBtn.setAttribute('data-key', 'refresh');
+    const x = iconButton('x', CLOSE_PATH, 'Close', 'Close', close);
+    const btns = h('div', 'head-btns');
+    btns.appendChild(refreshBtn);
+    btns.appendChild(x);
     head.appendChild(titles);
-    head.appendChild(x);
+    head.appendChild(btns);
 
     const body = h('div', 'body');
     const foot = h('footer', 'foot');
@@ -945,7 +1107,7 @@
     wrap.appendChild(launcher);
     shadow.appendChild(wrap);
     (document.body || document.documentElement).appendChild(host);
-    ui = { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot };
+    ui = { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot, refreshBtn };
     return ui;
   }
 
@@ -959,6 +1121,9 @@
     ui.badge.classList.toggle('hidden', !running);
     ui.badge.textContent = running && p ? p.finished + '/' + p.total : '';
     ui.panel.classList.toggle('hidden', !(st.open && st.onRoute));
+    ui.refreshBtn.classList.toggle('hidden', !!st.batch);
+    ui.refreshBtn.classList.toggle('spinning', st.refreshing);
+    ui.refreshBtn.disabled = st.refreshing || !!st.loading;
     if (!st.open) return;
     // Everything is rebuilt; keep the scroll position and the focused control.
     const scroll = ui.body.scrollTop || 0;
@@ -990,6 +1155,8 @@
     const n = listed.length;
     const picked = selectedJobs().length;
     ui.sub.textContent = n ? picked + ' of ' + n + ' selected' : 'Jobs from your Jobright list';
+    const checked = checkLine();
+    if (checked) ui.body.appendChild(checked);
 
     if (!n && st.loading) {
       ui.body.appendChild(h('p', 'note', 'Loading jobs...'));
@@ -1044,6 +1211,13 @@
       ui.foot.appendChild(line);
     }
 
+    const removed = removedJobs().length;
+    if (removed) {
+      const line = h('p', 'removed', removed + ' removed from this list. ');
+      line.appendChild(keyed(button('link restore', 'Restore', restoreRemoved), 'restore'));
+      ui.foot.appendChild(line);
+    }
+
     if (st.startError) ui.foot.appendChild(h('p', 'error start-error', st.startError));
 
     const actions = h('div', 'actions');
@@ -1059,6 +1233,18 @@
     keyed(cta, 'start');
     actions.appendChild(cta);
     ui.foot.appendChild(actions);
+  }
+
+  function checkLine() {
+    const c = st.check;
+    if (!c) return null;
+    if (c.missing) {
+      return h('p', 'checked warn', c.missing + (c.missing === 1 ? ' job on the Jobright page is' : ' jobs on the Jobright page are') +
+        ' not in this list. Reload the Jobright page, then refresh.');
+    }
+    const parts = [c.onPage ? 'Checked against the page.' : 'Refreshed.'];
+    parts.push(c.removed ? c.removed + ' already applied to, taken off.' : 'No applied jobs in the list.');
+    return h('p', 'checked', parts.join(' '));
   }
 
   function loadMoreRow() {
@@ -1092,7 +1278,14 @@
     main.appendChild(h('div', 'job-meta', [job.company, shortHost(job.host)].filter(Boolean).join(' · ')));
     row.appendChild(main);
     row.appendChild(h('span', 'tag tag-' + kind, KIND_LABEL[kind]));
+    row.appendChild(removeButton(job, () => dismiss(job.jobId)));
     return row;
+  }
+
+  function removeButton(job, onClick) {
+    const what = [clean(job.title, TITLE_MAX) || 'this job', clean(job.company, TITLE_MAX)].filter(Boolean).join(' at ');
+    const b = iconButton('row-x', CLOSE_PATH, 'Remove ' + what, 'Remove from list', onClick);
+    return keyed(b, 'remove-' + job.jobId);
   }
 
   function problem(message) {
@@ -1152,6 +1345,9 @@
       side.appendChild(openBtn);
     }
     row.appendChild(side);
+    if (job.status === 'queued' && st.batch && st.batch.status === 'running') {
+      row.appendChild(removeButton(job, () => { removeFromBatch(job); }));
+    }
     return row;
   }
 
@@ -1247,7 +1443,10 @@
       batch: st.batch ? { status: st.batch.status, summary: summarize(st.batch.jobs), total: st.batch.jobs.length } : null,
       startError: st.startError,
       actionError: st.actionError,
-      caps: st.caps ? Object.assign({}, st.caps) : null
+      caps: st.caps ? Object.assign({}, st.caps) : null,
+      removed: removedJobs().map(j => j.jobId),
+      refreshing: st.refreshing,
+      check: st.check ? Object.assign({}, st.check) : null
     };
   }
 
@@ -1265,6 +1464,8 @@
     check,
     loadMore,
     takePageList,
+    refresh,
+    dismiss,
     start,
     destroy,
     state

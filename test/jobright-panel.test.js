@@ -515,6 +515,115 @@ async function testAppliedHidden() {
   console.log('[PASS] jobs on Jobright\'s Applied list or in the tracker are left out');
 }
 
+function addCard(doc, jobId) {
+  const card = doc.createElement('div');
+  card.setAttribute('data-newuser-touring-job-id', jobId);
+  doc.body.appendChild(card);
+  return card;
+}
+
+function storedDismissed(chrome) {
+  return new Promise(resolve => chrome.storage.local.get(['lit_batch_dismissed'], items => resolve((items || {}).lit_batch_dismissed || {})));
+}
+
+// Refresh re-asks the Applied list, rebuilds from the page's own list, and
+// checks the job cards in the page against it.
+async function testRefresh() {
+  const pageSet = samplePayload();
+  pageSet.result.jobList = pageSet.result.jobList.slice(0, 3).concat([item(hex(10), 'Ghost Role', 'Nowhere', '', '')]);
+  const pageUrl = 'https://jobright.ai/swan/recommend/list/jobs?refresh=true&sortCondition=0&position=0&count=20&syncRerank=false';
+  const applied = [];
+  const fetchFn = jsonFetch(samplePayload());
+  await withPage({ fetch: fetchFn, applied }, async ({ doc, win, api }) => {
+    win.listeners.message.forEach(fn => fn({ source: win, data: { source: 'lit-jobright-list', url: pageUrl, body: JSON.stringify(pageSet) } }));
+    await api.open();
+    assert.deepStrictEqual(api.state().jobs.map(j => j.jobId), [IDS.gh, IDS.ashby, IDS.lever]);
+    assert.strictEqual(q(doc, '.checked'), null, 'no check line before a refresh');
+    assert.ok(q(doc, '.refresh') && !isHidden(q(doc, '.refresh')), 'Refresh button in the header');
+
+    // Cards on the page, one for a job with no usable link: all accounted for.
+    [IDS.gh, IDS.lever, hex(10)].forEach(id => addCard(doc, id));
+    // Applied on Jobright since the panel opened.
+    applied.push(IDS.lever);
+    const appliedBefore = win.fetch.appliedCalls.length;
+    await click(q(doc, '.refresh'));
+    await settle();
+    assert.ok(win.fetch.appliedCalls.length > appliedBefore, 'the Applied list is asked again');
+    assert.strictEqual(fetchFn.calls.length, 0, 'rebuilt from the page list, no new list request');
+    assert.deepStrictEqual(api.state().jobs.map(j => j.jobId), [IDS.gh, IDS.ashby]);
+    assert.deepStrictEqual(api.state().check, { onPage: 3, missing: 0, removed: 1, total: 2 });
+    assert.ok(!q(doc, '.checked').classList.contains('warn'));
+    assert.ok(q(doc, '.checked').textContent.includes('1 already applied to'));
+
+    // A card the list does not have: the list is out of step with the page.
+    addCard(doc, hex(99));
+    await api.refresh();
+    assert.strictEqual(api.state().check.missing, 1);
+    assert.ok(q(doc, '.checked').classList.contains('warn'));
+    assert.ok(q(doc, '.checked').textContent.includes('Reload the Jobright page'));
+  });
+
+  // No cards to compare (another layout): still refreshes, says so plainly.
+  await withPage({}, async ({ doc, api }) => {
+    await api.open();
+    const check = await api.refresh();
+    assert.strictEqual(check.onPage, 0);
+    assert.ok(q(doc, '.checked').textContent.startsWith('Refreshed.'));
+  });
+  console.log('[PASS] Refresh re-checks applied jobs and compares the list with the page\'s cards');
+}
+
+// The row X removes a job, keeps it removed across refreshes and visits, and
+// Restore brings it back.
+async function testRemove() {
+  await withPage({}, async ({ doc, api, chrome }) => {
+    await api.open();
+    assert.ok(api.state().selected.includes(IDS.ashby));
+    const x = row(doc, IDS.ashby).querySelector('.row-x');
+    assert.ok(x, 'each row has an X');
+    assert.ok(x.getAttribute('aria-label').includes('Contoso Data'), 'the X names the job');
+    await click(x);
+    assert.strictEqual(row(doc, IDS.ashby), null, 'gone from the list');
+    assert.ok(!api.state().selected.includes(IDS.ashby), 'never sent');
+    assert.ok(api.state().jobs.length === 8);
+    const stored = await storedDismissed(chrome);
+    assert.strictEqual(stored[IDS.ashby].company, 'Contoso Data');
+    assert.ok(q(doc, '.removed').textContent.startsWith('1 removed'));
+
+    await api.refresh();
+    assert.strictEqual(row(doc, IDS.ashby), null, 'stays removed after a refresh');
+    assert.strictEqual(api.state().check.removed, 0, 'a removal is not counted as applied');
+
+    await click(q(doc, '.restore'));
+    assert.ok(row(doc, IDS.ashby), 'Restore brings it back');
+    assert.ok(api.state().selected.includes(IDS.ashby), 'and selects it again');
+    assert.strictEqual(q(doc, '.removed'), null);
+    assert.deepStrictEqual(await storedDismissed(chrome), {});
+  });
+
+  // Removed on an earlier visit: still removed.
+  const store = { lit_batch_dismissed: { [IDS.lever]: { title: 'Full Stack Engineer', company: 'Fabrikam', at: 1 } } };
+  await withPage({ store }, async ({ doc, api }) => {
+    await api.open();
+    assert.strictEqual(row(doc, IDS.lever), null);
+    assert.ok(!api.state().selected.includes(IDS.lever));
+    assert.deepStrictEqual(api.state().removed, [IDS.lever]);
+  });
+
+  // A queued job in a running batch: X skips it and removes it from the picker.
+  const respond = () => ({ ok: true });
+  await withPage({ respond }, async ({ doc, api, received, chrome }) => {
+    await api.open();
+    await chromeSet({ lit_batch: batch('running', [batchJob(hex(51), 'filling'), batchJob(hex(52), 'queued')]) });
+    assert.ok(isHidden(q(doc, '.refresh')), 'no Refresh while a batch is shown');
+    assert.strictEqual(row(doc, hex(51)).querySelector('.row-x'), null, 'no X once a job has started');
+    await click(row(doc, hex(52)).querySelector('.row-x'));
+    assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_REMOVE', jobId: hex(52) });
+    assert.ok((await storedDismissed(chrome))[hex(52)], 'remembered as removed');
+  });
+  console.log('[PASS] Row X removes a job, it stays removed, Restore undoes it; queued batch jobs too');
+}
+
 // content/jobright/jobright-list-tap.js, in a fake page world: it hands the
 // page's list responses over and leaves every request and response as is.
 async function testListTap() {
@@ -897,6 +1006,8 @@ async function run() {
   await testFreshOnOpen();
   await testPageFeed();
   await testAppliedHidden();
+  await testRefresh();
+  await testRemove();
   await testListTap();
   await testLoadMore();
   await testPrefs();

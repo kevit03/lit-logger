@@ -1,7 +1,8 @@
 // Popup widget layout for LIT.
 //
-// The popup below the counter is a grid of widgets the user can add, remove,
-// reorder, resize, collapse, and bind to a tracker. This module owns the
+// The popup below the counter is a grid of widgets (called "cards" in the
+// UI) the user can add, remove, reorder, resize, collapse, and bind to a
+// tracker (a "goal" in the UI). This module owns the
 // registry of widget types and the persisted layout; popup/popup.js owns
 // rendering. Nothing here touches the DOM, so the layout rules are testable
 // headlessly.
@@ -33,102 +34,117 @@ const WidgetLayout = (() => {
   const CHART_MODES = ['bar', 'area', 'heatmap'];
   const SIZES = ['compact', 'expanded'];
 
+  // Names and descriptions are user-facing copy: the popup calls these
+  // "cards", in plain words.
   const TYPES = {
     goal: {
-      name: 'Daily Goal',
-      description: 'Progress toward the daily goal with milestones, plus the weekly goal.',
+      name: 'Daily goal bar',
+      description: 'Progress toward today\'s goal with checkpoints, plus your weekly goal.',
       singleton: false,
       defaultSize: 'expanded',
       defaults: { metricId: ACTIVE }
     },
     summary: {
-      name: 'Week / Month / Total',
-      description: 'Counts for this week, this month, and all time.',
+      name: 'Totals',
+      description: 'How many this week, this month, and all time.',
       singleton: false,
       defaultSize: 'expanded',
       defaults: { metricId: ACTIVE }
     },
     activity: {
-      name: 'Activity Chart',
-      description: 'Bars, a sparkline, or a contribution heatmap for any number of days, or your entire history.',
+      name: 'Activity chart',
+      description: 'Bars, a line, or a calendar grid for any number of days, or your whole history.',
       singleton: false,
       defaultSize: 'expanded',
       defaults: { metricId: ACTIVE, days: 30, chart: 'bar', showStats: true }
     },
     streak: {
       name: 'Streak',
-      description: 'Current and longest run of days that hit the daily goal.',
+      description: 'Your current and longest run of days that hit the goal.',
       singleton: false,
       defaultSize: 'compact',
       defaults: { metricId: ACTIVE }
     },
     timer: {
-      name: 'Solve Timer',
-      description: 'Countdown with presets, nudges, and laps. Shows on the LeetCode tracker.',
+      name: 'Solve timer',
+      description: 'A countdown for practice problems. Shows on the LeetCode goal.',
       singleton: true,
       leetcodeOnly: true,
       defaultSize: 'expanded',
       defaults: {}
     },
     timeStats: {
-      name: 'Solve Time Stats',
-      description: 'Today, all time, average, and fastest, with a distribution sparkline.',
+      name: 'Solve times',
+      description: 'Today, all time, average, and fastest, with a trend line.',
       singleton: true,
       leetcodeOnly: true,
       defaultSize: 'expanded',
       defaults: {}
     },
     details: {
-      name: 'Add Details',
-      description: 'Company, role, and notes form for the next entry.',
+      name: 'Add with details',
+      description: 'Save the company, role, and a note with the next one you log.',
       singleton: true,
       defaultSize: 'expanded',
       defaults: {}
     },
     pipeline: {
-      name: 'Application Pipeline',
-      description: 'Applications by stage, from Applied to Offer. Select a stage to filter.',
+      name: 'Where applications stand',
+      description: 'Applications by stage, from Applied to Offer. Tap a stage to filter.',
       singleton: false,
       jobsOnly: true,
       defaultSize: 'expanded',
       defaults: {}
     },
     recentList: {
-      name: 'Recent Applications',
-      description: 'The last 10 applications with their stage. Select a stage to change it.',
+      name: 'Recent applications',
+      description: 'Your last 10 applications and where each one stands.',
       singleton: false,
       jobsOnly: true,
       defaultSize: 'expanded',
       defaults: {}
     },
     responseStats: {
-      name: 'Response Rate',
-      description: 'Share of applications that heard back, and the average days to a reply.',
+      name: 'Replies',
+      description: 'How many applications heard back, and how long replies take.',
       singleton: false,
       jobsOnly: true,
       defaultSize: 'compact',
       defaults: {}
+    },
+    trophies: {
+      name: 'Trophy shelf',
+      description: 'Milestones you have reached, and how close the next one is.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: { metricId: ACTIVE }
+    },
+    recap: {
+      name: 'Weekly recap',
+      description: 'Your week so far in a sentence or two, ready to share.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: { metricId: ACTIVE }
     }
   };
 
   // Widget types added after layout version 1. A layout saved by an older
   // build gets these appended once, so an upgrade surfaces them.
   const ADDED_IN_V2 = ['pipeline', 'recentList', 'responseStats'];
+  // Newer card types are only offered in the picker (tagged New); saved
+  // layouts are never changed to include them.
+  const NEW_TYPES = ['trophies', 'recap'];
 
-  // The recommended layout. Fixed ids: a fresh install renders these before
+  // The recommended layout, kept lean for someone just starting: recent
+  // applications and the weekly recap (the counter and week strip above the
+  // grid are fixed). The solve timer only shows on the LeetCode goal, so it
+  // costs nothing elsewhere. Fixed ids: a fresh install renders these before
   // anything is stored, and an edit made then must still find its widget on
   // the next read.
   const DEFAULT_ITEMS = [
     { id: 'timer-default', type: 'timer' },
-    { id: 'timeStats-default', type: 'timeStats' },
-    { id: 'goal-default', type: 'goal' },
-    { id: 'details-default', type: 'details' },
-    { id: 'pipeline-default', type: 'pipeline' },
     { id: 'recentList-default', type: 'recentList' },
-    { id: 'streak-default', type: 'streak' },
-    { id: 'responseStats-default', type: 'responseStats' },
-    { id: 'summary-default', type: 'summary' },
-    { id: 'activity-default', type: 'activity' }
+    { id: 'recap-default', type: 'recap' }
   ];
 
   function newId(type) {
@@ -252,8 +268,8 @@ const WidgetLayout = (() => {
     const present = new Set(items.map(i => i.type));
     ADDED_IN_V2.forEach(type => {
       if (present.has(type)) return;
-      const def = DEFAULT_ITEMS.find(d => d.type === type);
-      const id = items.some(i => i.id === def.id) ? newId(type) : def.id;
+      const defId = type + '-default';
+      const id = items.some(i => i.id === defId) ? newId(type) : defId;
       items.push({ id, type, options: normalizeOptions(type, {}) });
     });
     return items;
@@ -341,7 +357,7 @@ const WidgetLayout = (() => {
       name: TYPES[type].name,
       description: TYPES[type].description,
       singleton: TYPES[type].singleton,
-      isNew: ADDED_IN_V2.includes(type),
+      isNew: NEW_TYPES.includes(type),
       added: TYPES[type].singleton && present.has(type)
     }));
   }

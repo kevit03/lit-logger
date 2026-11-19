@@ -316,6 +316,19 @@ const LitBatch = (() => {
     });
   }
 
+  // The panel's X on a queued job: it never opens. A job already under way
+  // is left alone (Stop is for that).
+  function removeJob(msg) {
+    return step(ctx => {
+      if (!ctx.state) return { ok: false, error: 'No batch' };
+      const job = ctx.state.jobs.find(j => j.jobId === String(msg.jobId || ''));
+      if (!job) return { ok: false, error: 'That job is not in this batch' };
+      if (job.status !== 'queued') return { ok: false, error: 'That job has already started' };
+      finish(ctx, job, 'skipped', 'Removed');
+      return { ok: true };
+    });
+  }
+
   function clear() {
     return step(ctx => {
       if (!ctx.state) return { ok: true };
@@ -522,6 +535,7 @@ const LitBatch = (() => {
       case 'LIT_BATCH_START': return respond(start(msg), sendResponse, failed);
       case 'LIT_BATCH_STOP': return respond(stop(), sendResponse, failed);
       case 'LIT_BATCH_CLEAR': return respond(clear(), sendResponse, failed);
+      case 'LIT_BATCH_REMOVE': return respond(removeJob(msg), sendResponse, failed);
       case 'LIT_BATCH_FOCUS': return respond(focus(msg), sendResponse, failed);
       case 'LIT_BATCH_HELLO': return respond(hello(sender), sendResponse, { job: null });
       case 'LIT_BATCH_UPDATE': return respond(update(msg, sender), sendResponse, { ok: false });

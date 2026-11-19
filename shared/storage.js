@@ -87,9 +87,91 @@ const TrackerStorage = (() => {
     duplicateWarnings: true,
     // Daily check-in: the service worker opens reminder/reminder.html at
     // reminderTime (local HH:MM) every day while reminderEnabled is on.
-    reminderEnabled: true,
-    reminderTime: '14:30'
+    // Off for new installs; the service worker keeps it on for installs that
+    // already had it.
+    reminderEnabled: false,
+    reminderTime: '14:30',
+    onboardingDone: false,
+    // Focus area ids from FOCUS_AREAS below.
+    focusAreas: [],
+    // Weekdays (0 = Sunday .. 6 = Saturday) that neither break nor need a
+    // goal. A goal met on a rest day still counts as a bonus streak day.
+    restDays: [],
+    accent: 'coral',
+    comfortMode: false,
+    goingFor: '',
+    coachVoice: 'coach',
+    // { [metricId]: Array<number | 'first-interview'> } of celebrated milestones.
+    seenMilestones: {},
+    shareHideCompanies: true,
+    tipsOff: false
   };
+
+  const ACCENTS = ['coral', 'sage', 'ocean', 'plum', 'amber', 'slate'];
+  const COACH_VOICES = ['gentle', 'coach', 'drill'];
+
+  // Starter trackers offered during onboarding. 'jobs' and 'leetcode' are the
+  // built-in trackers; the rest are created on first pick.
+  const FOCUS_AREAS = [
+    { id: 'jobs', name: 'Applications', unit: 'applications', dailyGoal: 5, color: '#E0674B', icon: 'briefcase' },
+    { id: 'networking', name: 'Networking chats', unit: 'chats', dailyGoal: 1, color: '#5E9270', icon: 'users' },
+    { id: 'outreach', name: 'Cold emails', unit: 'emails', dailyGoal: 3, color: '#3B7EA1', icon: 'mail' },
+    { id: 'prep', name: 'Interview prep', unit: 'sessions', dailyGoal: 1, color: '#8A5A9E', icon: 'target' },
+    { id: 'portfolio', name: 'Portfolio pieces', unit: 'pieces', dailyGoal: 1, color: '#C9821F', icon: 'star' },
+    { id: 'leetcode', name: 'LeetCode', unit: 'problems', dailyGoal: 2, color: '#1e8e3e', icon: 'code' }
+  ];
+  const FOCUS_AREA_IDS = FOCUS_AREAS.map(a => a.id);
+
+  const MILESTONE_THRESHOLDS = [1, 10, 25, 50, 100, 250, 500, 1000];
+  const FIRST_INTERVIEW = 'first-interview';
+
+  // Earn one streak freeze per this many goal days in a run, holding at most
+  // FREEZE_CAP. A freeze is spent automatically on a missed past day.
+  const FREEZE_EARN_EVERY = 7;
+  const FREEZE_CAP = 2;
+
+  function cleanRestDays(v) {
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    v.forEach(x => {
+      const n = typeof x === 'string' && /^\d$/.test(x) ? Number(x) : x;
+      if (Number.isInteger(n) && n >= 0 && n <= 6 && !out.includes(n)) out.push(n);
+    });
+    return out.sort((a, b) => a - b);
+  }
+
+  function cleanSeenMilestones(v) {
+    const out = {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    Object.keys(v).forEach(k => {
+      if (!Array.isArray(v[k])) return;
+      const ids = [];
+      v[k].forEach(id => {
+        if ((Number.isFinite(id) || id === FIRST_INTERVIEW) && !ids.includes(id)) ids.push(id);
+      });
+      out[k] = ids;
+    });
+    return out;
+  }
+
+  // Shape-checks one preference. Returns undefined to reject the value.
+  function cleanPref(key, value) {
+    const def = PREF_DEFAULTS[key];
+    if (value === undefined || value === null) return undefined;
+    if (Array.isArray(def)) {
+      if (!Array.isArray(value)) return undefined;
+      if (key === 'restDays') return cleanRestDays(value);
+      if (key === 'focusAreas') return FOCUS_AREA_IDS.filter(id => value.includes(id));
+      return value.slice();
+    }
+    if (typeof value !== typeof def) return undefined;
+    if (key === 'seenMilestones') return Array.isArray(value) ? undefined : cleanSeenMilestones(value);
+    if (key === 'accent') return ACCENTS.includes(value) ? value : undefined;
+    if (key === 'coachVoice') return COACH_VOICES.includes(value) ? value : undefined;
+    if (key === 'reminderTime') return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : undefined;
+    if (key === 'goingFor') return value.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+    return value;
+  }
 
   function formatSecondsToMMSS(totalSeconds) {
     const s = Math.max(0, parseInt(totalSeconds, 10) || 0);
@@ -256,6 +338,154 @@ const TrackerStorage = (() => {
       prev = d;
     });
     return best;
+  }
+
+  function weekdayOf(dateStr) {
+    return parseLocalDateToNoon(dateStr).getDay();
+  }
+
+  function isRestDay(dateStr, restDays) {
+    return Array.isArray(restDays) && restDays.length > 0 && restDays.includes(weekdayOf(dateStr));
+  }
+
+  // One walk over a tracker's history, oldest to newest, that settles the
+  // current streak, the longest streak, and the streak freezes together.
+  // Deterministic from the history, the goal, and the rest days:
+  //   - a goal-met day extends the run (rest days included, as a bonus);
+  //     every FREEZE_EARN_EVERY-th day of a run earns a freeze, up to FREEZE_CAP;
+  //   - a rest day short of the goal leaves the run as it is;
+  //   - today, still open, never breaks it;
+  //   - any other missed day spends a freeze if one is held (the run holds,
+  //     without growing), otherwise the run starts over.
+  function walkStreak(dailyMap, metricId, goal, todayStr, restDays, options) {
+    const opts = options || {};
+    const earnEvery = Math.max(1, opts.earnEvery || FREEZE_EARN_EVERY);
+    const cap = Math.max(0, opts.cap !== undefined ? opts.cap : FREEZE_CAP);
+    const today = todayStr || getLocalDateStr();
+    const rest = cleanRestDays(restDays);
+    let first = null;
+    Object.keys(dailyMap || {}).forEach(d => {
+      if (isDateStr(d) && d <= today && goalMetOn(dailyMap, d, metricId, goal) && (!first || d < first)) first = d;
+    });
+    const result = { current: 0, longest: 0, available: 0, usedOn: [], earnedOn: [] };
+    if (!first) return result;
+    let run = 0;
+    let available = 0;
+    for (let d = first; d <= today; d = addDays(d, 1)) {
+      if (goalMetOn(dailyMap, d, metricId, goal)) {
+        run++;
+        if (run % earnEvery === 0 && available < cap) {
+          available++;
+          result.earnedOn.push(d);
+        }
+        if (run > result.longest) result.longest = run;
+      } else if (d === today || isRestDay(d, rest)) {
+        // Neutral.
+      } else if (run > 0 && available > 0) {
+        available--;
+        result.usedOn.push(d);
+      } else {
+        run = 0;
+        available = 0;
+      }
+    }
+    result.current = run;
+    result.available = available;
+    return result;
+  }
+
+  function computeStreakWithRest(dailyMap, metricId, goal, todayStr, restDays, options) {
+    const w = walkStreak(dailyMap, metricId, goal, todayStr, restDays, options);
+    return { current: w.current, longest: w.longest };
+  }
+
+  function computeFreezes(dailyMap, metricId, goal, todayStr, restDays, options) {
+    const w = walkStreak(dailyMap, metricId, goal, todayStr, restDays, options);
+    return { available: w.available, usedOn: w.usedOn };
+  }
+
+  // Seven days, Monday to Sunday, of the week holding anchorDate.
+  function buildWeekDots(dailyMap, metricId, goal, anchorDate, todayStr, restDays, usedOn) {
+    const today = todayStr || getLocalDateStr();
+    const start = weekStartOf(isDateStr(anchorDate) ? anchorDate : today);
+    const g = Math.max(1, goal || 1);
+    const rest = cleanRestDays(restDays);
+    const frozen = new Set(Array.isArray(usedOn) ? usedOn : []);
+    const dots = [];
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(start, i);
+      const count = ((dailyMap || {})[date] || {})[metricId] || 0;
+      let state;
+      if (date > today) state = 'future';
+      else if (count >= g) state = 'met';
+      else if (isRestDay(date, rest)) state = 'rest';
+      else if (frozen.has(date)) state = 'frozen';
+      else if (count > 0) state = 'some';
+      else state = 'none';
+      dots.push({ date, count, goal: g, state, isToday: date === today });
+    }
+    return dots;
+  }
+
+  function fallbackMilestoneCopy(count, unit) {
+    const u = unit || 'applications sent';
+    return {
+      title: count === 1 ? 'Your first one is in' : count + ' ' + u,
+      body: count === 1 ? 'Starting is the hardest part, and it is done.' : 'Steady work adds up. Keep going.'
+    };
+  }
+
+  function milestoneCopy(count, unit) {
+    let copy = null;
+    try {
+      const C = typeof LitCopy !== 'undefined' ? LitCopy
+        : (typeof module !== 'undefined' && typeof require === 'function' ? require('./coach-copy') : null);
+      if (C && typeof C.milestone === 'function') copy = C.milestone(count, unit);
+    } catch (e) {
+      copy = null;
+    }
+    return copy && copy.title ? copy : fallbackMilestoneCopy(count, unit);
+  }
+
+  // Milestones from the day totals: each threshold is dated to the day the
+  // running total first reached it. firstInterviewDate (or null) adds the
+  // 'first-interview' milestone. seen lists ids already celebrated.
+  function buildMilestones(dailyMap, metricId, options) {
+    const opts = options || {};
+    const unit = opts.unit;
+    const seen = Array.isArray(opts.seen) ? opts.seen : [];
+    const dates = Object.keys(dailyMap || {}).filter(isDateStr).sort();
+    const reached = [];
+    let total = 0;
+    let ti = 0;
+    dates.forEach(date => {
+      total += ((dailyMap[date] || {})[metricId] || 0);
+      while (ti < MILESTONE_THRESHOLDS.length && total >= MILESTONE_THRESHOLDS[ti]) {
+        const count = MILESTONE_THRESHOLDS[ti];
+        const copy = milestoneCopy(count, unit);
+        reached.push({ id: count, count, date, title: copy.title, body: copy.body });
+        ti++;
+      }
+    });
+    if (opts.firstInterviewDate) {
+      let copy = null;
+      try {
+        const C = typeof LitCopy !== 'undefined' ? LitCopy
+          : (typeof module !== 'undefined' && typeof require === 'function' ? require('./coach-copy') : null);
+        if (C && typeof C.firstInterview === 'function') copy = C.firstInterview();
+      } catch (e) {
+        copy = null;
+      }
+      if (!copy || !copy.title) copy = { title: 'Your first interview', body: 'Someone read your application and wants to talk. That is the work paying off.' };
+      reached.push({ id: FIRST_INTERVIEW, count: null, date: opts.firstInterviewDate, title: copy.title, body: copy.body });
+    }
+    const nextCount = MILESTONE_THRESHOLDS.find(t => t > total);
+    return {
+      total,
+      reached,
+      next: nextCount ? { count: nextCount, remaining: nextCount - total } : null,
+      unseen: reached.map(r => r.id).filter(id => !seen.includes(id))
+    };
   }
 
   // "Acme, Inc." / "ACME Corp" / "acme careers" all normalize to "acme", which
@@ -1439,7 +1669,8 @@ const TrackerStorage = (() => {
     'getStats', 'getActivityHistory', 'getLeetcodeTimeStats', 'getDailyAggregates',
     'findRecentApplication', 'searchLogs', 'getRecentLogs', 'getPipelineSummary',
     'getWeekSummary', 'exportBackup', 'importBackup', 'createSnapshot', 'listSnapshots',
-    'getSnapshot', 'restoreSnapshot', 'maybeAutoSnapshot', 'getStorageInfo', 'rebuildAggregates'
+    'getSnapshot', 'restoreSnapshot', 'maybeAutoSnapshot', 'getStorageInfo', 'rebuildAggregates',
+    'getWeekDots', 'getMilestones', 'mergeSignedOutEntries'
   ];
 
   // JSON messaging turns an undefined argument into null, and null means
@@ -1627,7 +1858,10 @@ const TrackerStorage = (() => {
       return allMetrics.filter(m => m && typeof m === 'object' && typeof m.id === 'string').map(m => {
         const dailyGoal = m.dailyGoal || defaultGoalFor(m.id);
         const weeklyGoal = Math.max(0, parseInt(m.weeklyGoal, 10) || 0);
-        return { ...m, dailyGoal, weeklyGoal };
+        // Hidden trackers (focus areas not picked) keep their data and can be
+        // shown again; 'jobs' is never hidden.
+        const hidden = m.hidden === true && m.id !== 'jobs';
+        return { ...m, dailyGoal, weeklyGoal, hidden };
       }).filter(m => {
         // Installs from before the calorie tracker was removed still have its
         // built-in metric saved; keep it out of the tab bar.
@@ -1966,11 +2200,13 @@ const TrackerStorage = (() => {
         targetEmail = await resolveEmail(userEmailOverride);
       }
       const backend = await getBackend();
-      const [metrics, aggs] = await Promise.all([
+      const [metrics, aggs, prefs] = await Promise.all([
         api.getMetrics(targetEmail),
-        backend.aggregates(userKeyOf(targetEmail))
+        backend.aggregates(userKeyOf(targetEmail)),
+        api.getPrefs().catch(() => PREF_DEFAULTS)
       ]);
       const { dailyMap, logCount } = buildDailyMap(aggs);
+      const restDays = cleanRestDays(prefs && prefs.restDays);
 
       const now = new Date();
       const todayStr = getLocalDateStr(now);
@@ -2003,15 +2239,22 @@ const TrackerStorage = (() => {
         });
       });
 
-      // Goal-based streaks per tracker. currentStreak stays the jobs streak
-      // for older callers.
+      // Goal-based streaks per tracker, honoring rest days and freezes.
+      // currentStreak stays the jobs streak for older callers.
       const streaks = {};
       const longestStreaks = {};
       const weeklyAverages = {};
+      const freezes = {};
+      const goalMet = {};
+      const todayCount = {};
       metrics.forEach(m => {
         const goal = m.dailyGoal || defaultGoalFor(m.id);
-        streaks[m.id] = computeCurrentStreak(dailyMap, m.id, goal, todayStr);
-        longestStreaks[m.id] = computeLongestStreak(dailyMap, m.id, goal);
+        const walk = walkStreak(dailyMap, m.id, goal, todayStr, restDays);
+        streaks[m.id] = walk.current;
+        longestStreaks[m.id] = walk.longest;
+        freezes[m.id] = { available: walk.available, usedOn: walk.usedOn };
+        todayCount[m.id] = today[m.id] || 0;
+        goalMet[m.id] = goalMetOn(dailyMap, todayStr, m.id, goal);
         weeklyAverages[m.id] = parseFloat(((thisWeek[m.id] || 0) / 7).toFixed(1));
       });
 
@@ -2029,8 +2272,201 @@ const TrackerStorage = (() => {
         streaks,
         longestStreaks,
         weeklyAverages,
+        freezes,
+        goalMet,
+        todayCount,
+        restDays,
+        restToday: isRestDay(todayStr, restDays),
         dailyMap
       };
+    },
+
+    // Mon..Sun dots for the week holding anchorDate (this week by default).
+    async getWeekDots(metricId = 'jobs', anchorDate, userEmailOverride) {
+      const email = await resolveEmail(userEmailOverride);
+      const backend = await getBackend();
+      const [metrics, aggs, prefs] = await Promise.all([
+        api.getMetrics(email),
+        backend.aggregates(userKeyOf(email)),
+        api.getPrefs().catch(() => PREF_DEFAULTS)
+      ]);
+      const { dailyMap } = buildDailyMap(aggs);
+      const metric = metrics.find(m => m.id === metricId);
+      const goal = (metric && metric.dailyGoal) || defaultGoalFor(metricId);
+      const todayStr = getLocalDateStr();
+      const restDays = cleanRestDays(prefs && prefs.restDays);
+      const walk = walkStreak(dailyMap, metricId, goal, todayStr, restDays);
+      return buildWeekDots(dailyMap, metricId, goal, anchorDate, todayStr, restDays, walk.usedOn);
+    },
+
+    async getMilestones(metricId = 'jobs', userEmailOverride) {
+      const email = await resolveEmail(userEmailOverride);
+      const backend = await getBackend();
+      const [metrics, aggs, prefs] = await Promise.all([
+        api.getMetrics(email),
+        backend.aggregates(userKeyOf(email)),
+        api.getPrefs().catch(() => PREF_DEFAULTS)
+      ]);
+      const { dailyMap } = buildDailyMap(aggs);
+      const metric = metrics.find(m => m.id === metricId);
+      let firstInterviewDate = null;
+      if (metricId === 'jobs') {
+        const jobs = await backend.query({ userKey: userKeyOf(email), metricId: 'jobs' });
+        jobs.forEach(r => {
+          const status = normalizeStatus(r.status);
+          if (status !== 'interviewing' && status !== 'offer') return;
+          const stamp = r.statusUpdatedAt || r.respondedAt;
+          const when = typeof stamp === 'string' && !isNaN(new Date(stamp).getTime())
+            ? getLocalDateStr(new Date(stamp))
+            : r.date;
+          if (!firstInterviewDate || when < firstInterviewDate) firstInterviewDate = when;
+        });
+      }
+      const seenAll = (prefs && prefs.seenMilestones) || {};
+      const out = buildMilestones(dailyMap, metricId, {
+        unit: metricId === 'jobs' ? 'applications' : (metric && metric.unit) || undefined,
+        seen: seenAll[metricId] || [],
+        firstInterviewDate
+      });
+      return { reached: out.reached, next: out.next, unseen: out.unseen };
+    },
+
+    async markMilestonesSeen(metricId, ids) {
+      if (typeof metricId !== 'string' || !metricId) return [];
+      const add = (Array.isArray(ids) ? ids : [ids]).filter(id => Number.isFinite(id) || id === FIRST_INTERVIEW);
+      const prefs = await api.getPrefs();
+      const seen = Object.assign({}, prefs.seenMilestones);
+      const list = (seen[metricId] || []).slice();
+      add.forEach(id => { if (!list.includes(id)) list.push(id); });
+      seen[metricId] = list;
+      const next = await api.setPrefs({ seenMilestones: seen });
+      return (next.seenMilestones || {})[metricId] || list;
+    },
+
+    // Shows the chosen focus areas' trackers and hides the other starter
+    // trackers. Creates any starter tracker that does not exist yet. Never
+    // deletes, never hides 'jobs', and leaves trackers the user made by hand
+    // alone. Returns the account's trackers (hidden ones included).
+    async setFocusAreas(areas, userEmailOverride) {
+      const chosen = FOCUS_AREA_IDS.filter(id => Array.isArray(areas) && areas.includes(id));
+      const email = await resolveEmail(userEmailOverride);
+      const ownedHere = m => m && (m.isDefault || m.id === 'jobs' || m.id === 'leetcode' ||
+        (normalizeEmail(m.userEmail) || null) === (email || null));
+      const areaOf = m => {
+        if (!m) return null;
+        if (m.id === 'jobs' || m.id === 'leetcode') return m.id;
+        return FOCUS_AREA_IDS.includes(m.focusArea) ? m.focusArea : null;
+      };
+      await enqueueWrite(async () => {
+        let created = [];
+        const shouldHide = (m, current) => {
+          const area = areaOf(m);
+          if (!area || !ownedHere(m) || area === 'jobs') return false;
+          return !chosen.includes(area);
+        };
+        const settled = list => {
+          return chosen.every(a => list.some(m => areaOf(m) === a && ownedHere(m))) &&
+            list.every(m => !areaOf(m) || !ownedHere(m) || (m.hidden === true) === shouldHide(m));
+        };
+        await mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
+          const base = current.length === 0 ? DEFAULT_METRICS.map(m => ({ ...m })) : current.slice();
+          const fresh = [];
+          chosen.forEach(a => {
+            if (base.some(m => areaOf(m) === a && ownedHere(m))) return;
+            const spec = FOCUS_AREAS.find(f => f.id === a);
+            fresh.push({
+              id: a + '-' + Math.random().toString(36).substring(2, 6),
+              name: spec.name,
+              unit: spec.unit,
+              color: spec.color,
+              icon: spec.icon,
+              dailyGoal: spec.dailyGoal,
+              weeklyGoal: 0,
+              focusArea: a,
+              userEmail: email || null,
+              isDefault: false,
+              createdAt: new Date().toISOString()
+            });
+          });
+          created = fresh.map(m => m.id);
+          const next = base.concat(fresh).map(m => {
+            if (!areaOf(m) || !ownedHere(m)) return m;
+            const hide = shouldHide(m);
+            if ((m.hidden === true) === hide) return m;
+            const copy = { ...m };
+            if (hide) copy.hidden = true; else delete copy.hidden;
+            return copy;
+          });
+          if (!fresh.length && settled(current.length ? current : base) && current.length) {
+            return { write: false, result: created };
+          }
+          return { write: true, value: next, verify: settled, result: created };
+        });
+      });
+      await api.setPrefs({ focusAreas: chosen });
+      return api.getMetrics(email);
+    },
+
+    // Moves entries saved while signed out ('' account) into this account.
+    // Safe to run twice: moved entries are no longer signed-out entries.
+    // A signed-out entry for the same listing on the same day as one already
+    // in the account (same tracker, date, and sourceId) is the same piece of
+    // work logged twice, so it is folded in rather than counted again.
+    // Signed-out custom trackers those entries point at move with them.
+    async mergeSignedOutEntries(email) {
+      const target = normalizeEmail(email);
+      if (!target) return { moved: 0, duplicates: 0, metricsMoved: 0 };
+      const uk = userKeyOf(target);
+      const result = await enqueueLogWrite(async () => {
+        const backend = await getBackend();
+        const [loose, mine] = await Promise.all([
+          backend.query({ userKey: '' }),
+          backend.query({ userKey: uk })
+        ]);
+        if (!loose.length) return { moved: 0, duplicates: 0, metricIds: [] };
+        const listingKey = r => (r.sourceId ? r.metricId + '|' + r.date + '|' + r.sourceId : null);
+        const have = new Set(mine.map(listingKey).filter(Boolean));
+        const movedIds = [];
+        const dupIds = [];
+        const metricIds = new Set();
+        for (const rec of loose) {
+          const key = listingKey(rec);
+          if (key && have.has(key)) {
+            const gone = await backend.remove(rec.id, cur => (cur._uk || '') === '');
+            if (gone.status === 'deleted') dupIds.push(rec.id);
+            continue;
+          }
+          const outcome = await backend.update(rec.id, cur => {
+            if ((cur._uk || '') !== '') return { status: 'noop' };
+            return { record: Object.assign({}, cur, { userEmail: target, _uk: uk }) };
+          });
+          if (outcome.status === 'updated' || outcome.status === 'moved') {
+            movedIds.push(rec.id);
+            metricIds.add(rec.metricId);
+            if (key) have.add(key);
+          }
+        }
+        if (movedIds.length || dupIds.length) notifyLogsChanged('merge', movedIds.concat(dupIds));
+        return { moved: movedIds.length, duplicates: dupIds.length, metricIds: Array.from(metricIds) };
+      });
+      let metricsMoved = 0;
+      if (result.metricIds.length) {
+        const ids = result.metricIds;
+        const movable = m => m && ids.includes(m.id) && !m.isDefault && m.id !== 'jobs' && m.id !== 'leetcode' &&
+          !normalizeEmail(m.userEmail);
+        await enqueueWrite(() => mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
+          const n = current.filter(movable).length;
+          metricsMoved = n;
+          if (!n) return { write: false, result: 0 };
+          return {
+            write: true,
+            value: current.map(m => (movable(m) ? { ...m, userEmail: target } : m)),
+            verify: list => !list.some(movable),
+            result: n
+          };
+        }));
+      }
+      return { moved: result.moved, duplicates: result.duplicates, metricsMoved };
     },
 
     // daysCount is a number of days ending today, or 'all' for everything
@@ -2110,6 +2546,21 @@ const TrackerStorage = (() => {
     goalMetOn,
     computeCurrentStreak,
     computeLongestStreak,
+    // Pure progress helpers (exported for tests and for callers that already
+    // hold a dailyMap).
+    walkStreak,
+    computeStreakWithRest,
+    computeFreezes,
+    buildWeekDots,
+    buildMilestones,
+    isRestDay,
+    cleanPref,
+    FOCUS_AREAS,
+    MILESTONE_THRESHOLDS,
+    FREEZE_EARN_EVERY,
+    FREEZE_CAP,
+    ACCENTS,
+    COACH_VOICES,
 
     formatTimeHMS(totalSeconds) {
       const s = Math.max(0, parseInt(totalSeconds, 10) || 0);
@@ -2451,9 +2902,12 @@ const TrackerStorage = (() => {
     async getPrefs() {
       const r = await areaGet(getStorageArea(), [STORAGE_KEYS.PREFS]);
       const stored = r[STORAGE_KEYS.PREFS] && typeof r[STORAGE_KEYS.PREFS] === 'object' ? r[STORAGE_KEYS.PREFS] : {};
-      const out = Object.assign({}, PREF_DEFAULTS);
+      const out = {};
       Object.keys(PREF_DEFAULTS).forEach(k => {
-        if (stored[k] !== undefined && typeof stored[k] === typeof PREF_DEFAULTS[k]) out[k] = stored[k];
+        const def = PREF_DEFAULTS[k];
+        const clean = cleanPref(k, stored[k]);
+        if (clean !== undefined) out[k] = clean;
+        else out[k] = Array.isArray(def) ? def.slice() : (def && typeof def === 'object' ? {} : def);
       });
       return out;
     },
@@ -2463,7 +2917,9 @@ const TrackerStorage = (() => {
         const current = await api.getPrefs();
         const next = Object.assign({}, current);
         Object.keys(patch || {}).forEach(k => {
-          if (k in PREF_DEFAULTS && typeof patch[k] === typeof PREF_DEFAULTS[k]) next[k] = patch[k];
+          if (!(k in PREF_DEFAULTS)) return;
+          const clean = cleanPref(k, patch[k]);
+          if (clean !== undefined) next[k] = clean;
         });
         await areaSet(getStorageArea(), { [STORAGE_KEYS.PREFS]: next });
         return next;

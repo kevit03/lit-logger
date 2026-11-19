@@ -1,4 +1,10 @@
-// Google Authentication module for Chrome Extension
+// Accounts for LIT.
+//
+// Two kinds of account, so entries stay separate per person:
+//   provider 'google'  real Google sign-in, available once the owner configures
+//                      an OAuth client (see WEB_CLIENT_ID and the README).
+//   provider 'local'   a profile kept on this computer only. No Google, no
+//                      password, no server; just a name that keys the data.
 const TrackerAuth = (() => {
   const AUTH_KEY = 'pt_auth_user';
 
@@ -53,9 +59,42 @@ const TrackerAuth = (() => {
   // Google's userinfo endpoint doubles as the token validity check: a 401
   // means the cached token has expired or been revoked.
   const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
+  const OAUTH_SCOPES = ['openid', 'email', 'profile'];
+
+  // Google sign-in is off until the owner configures an OAuth client. Two ways,
+  // either is enough (README, "Turning on Google sign-in"):
+  //
+  //   1. An "oauth2" block in manifest.json with a Chrome Extension client ID.
+  //      Uses chrome.identity.getAuthToken: the account Chrome is signed into,
+  //      no extra window. Chrome only.
+  //   2. WEB_CLIENT_ID below, a "Web application" client whose redirect URI is
+  //      https://<extension-id>.chromiumapp.org/. Uses launchWebAuthFlow: a
+  //      Google sign-in window, any account, works in Edge and Brave too.
+  //
+  // Without either, there is no Google sign-in at all. The fallback is a
+  // local profile kept on this computer, and it says so.
+  let WEB_CLIENT_ID = '';
 
   function hasIdentityApi() {
     return typeof chrome !== 'undefined' && !!chrome.identity && typeof chrome.identity.getAuthToken === 'function';
+  }
+
+  function manifestClientId() {
+    try {
+      const m = chrome.runtime.getManifest();
+      const id = m && m.oauth2 && m.oauth2.client_id;
+      return typeof id === 'string' && /\.apps\.googleusercontent\.com$/.test(id.trim()) ? id.trim() : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // 'chrome' (getAuthToken), 'web' (launchWebAuthFlow), or '' (not set up).
+  function oauthMethod() {
+    if (typeof chrome === 'undefined' || !chrome.identity) return '';
+    if (manifestClientId() && hasIdentityApi()) return 'chrome';
+    if (WEB_CLIENT_ID && typeof chrome.identity.launchWebAuthFlow === 'function') return 'web';
+    return '';
   }
 
   function getAuthToken(interactive) {
@@ -64,10 +103,50 @@ const TrackerAuth = (() => {
         if (chrome.runtime && chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
         } else {
-          resolve(t || null);
+          // Newer Chrome resolves an object ({ token }), older a string.
+          resolve((t && typeof t === 'object' ? t.token : t) || null);
         }
       });
     });
+  }
+
+  function webAuthUrl(interactive) {
+    const redirect = chrome.identity.getRedirectURL();
+    const params = new URLSearchParams({
+      client_id: WEB_CLIENT_ID,
+      response_type: 'token',
+      redirect_uri: redirect,
+      scope: OAUTH_SCOPES.join(' '),
+      include_granted_scopes: 'true',
+      prompt: interactive ? 'select_account' : 'none'
+    });
+    return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+  }
+
+  // Implicit flow: the access token comes back in the redirect's fragment.
+  function launchWebAuth(interactive) {
+    return new Promise((resolve, reject) => {
+      chrome.identity.launchWebAuthFlow({ url: webAuthUrl(interactive), interactive: !!interactive }, responseUrl => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        const hash = String(responseUrl || '').split('#')[1] || '';
+        const params = new URLSearchParams(hash);
+        if (params.get('error')) {
+          reject(new Error(params.get('error')));
+          return;
+        }
+        resolve(params.get('access_token') || null);
+      });
+    });
+  }
+
+  function requestToken(interactive, method) {
+    const how = method || oauthMethod();
+    if (how === 'chrome') return getAuthToken(interactive);
+    if (how === 'web') return launchWebAuth(interactive);
+    return Promise.reject(new Error('Google sign-in is not set up in this build.'));
   }
 
   function removeCachedToken(token) {
@@ -89,19 +168,35 @@ const TrackerAuth = (() => {
     return res.json();
   }
 
-  function profileToUser(info, token) {
+  function profileToUser(info, token, method) {
     return {
       email: info.email,
       name: info.name || info.email.split('@')[0],
       picture: info.picture || '',
       token,
-      provider: 'google'
+      provider: 'google',
+      method: method || 'chrome'
     };
   }
 
+  // A local profile is keyed like an account so entries stay separate, but
+  // nothing about it touches Google. A plain name becomes "<name>@local".
+  const LOCAL_DOMAIN = 'local';
+
+  function localKeyFor(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    if (text.includes('@')) return /^[^@\s]+@[^@\s]+$/.test(text) ? text.toLowerCase() : '';
+    const slug = text.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    return slug ? slug + '@' + LOCAL_DOMAIN : '';
+  }
+
+  // Kept as EMAIL_REQUIRED so existing callers keep working; the message is
+  // honest about what the fallback is.
   function emailRequiredError() {
-    const err = new Error('A Google Account email is required to sign in on this unpacked build.');
+    const err = new Error('Google sign-in is not set up in this build. Use a profile on this computer instead.');
     err.code = 'EMAIL_REQUIRED';
+    err.mode = 'local';
     return err;
   }
 
@@ -115,72 +210,85 @@ const TrackerAuth = (() => {
       });
     },
 
-    // Direct Google-account email sign-in. This is the path for local and
-    // unpacked builds that have no GCP OAuth client ID paired yet; data
-    // isolation keys off the normalized email, so it works identically.
-    async signInWithEmail(rawEmail) {
-      const email = (rawEmail || '').trim();
-      if (!email || !email.includes('@')) {
-        throw new Error('Valid email required for sign-in');
-      }
+    // 'google' when a real Google sign-in is configured, otherwise 'local'.
+    // The popup uses this to label the button honestly.
+    signInMode() {
+      return oauthMethod() ? 'google' : 'local';
+    },
+
+    isGoogleConfigured() {
+      return !!oauthMethod();
+    },
+
+    // A profile on this computer only. Accepts an email or a plain name; data
+    // is kept separately per profile. Nothing is sent anywhere.
+    async signInLocal(rawNameOrEmail) {
+      const key = localKeyFor(rawNameOrEmail);
+      if (!key) throw new Error('Enter a name or email for this profile');
+      const label = String(rawNameOrEmail).trim();
       const user = {
-        email: email.toLowerCase(),
-        name: email.split('@')[0],
-        provider: 'google'
+        email: key,
+        name: label.includes('@') ? label.split('@')[0] : label,
+        provider: 'local'
       };
       await this.setUser(user);
       return user;
     },
 
-    // options.allowPrompt === false makes an unpaired build throw an
-    // EMAIL_REQUIRED error instead of calling window.prompt, so a caller can
-    // collect the email with its own dialog and retry with signInWithEmail.
+    // Older name for the local profile path, kept for callers that collect an
+    // email. It does not sign into Google; the profile is local.
+    async signInWithEmail(rawEmail) {
+      const email = (rawEmail || '').trim();
+      if (!email || !email.includes('@')) {
+        throw new Error('Valid email required for sign-in');
+      }
+      return this.signInLocal(email);
+    },
+
+    // Real Google sign-in when configured. Otherwise: options.allowPrompt ===
+    // false throws EMAIL_REQUIRED so the caller can offer a local profile
+    // with its own dialog; without it, window.prompt asks for a profile name.
     async signInWithGoogle(customEmail, options) {
       const opts = options || {};
 
-      // An explicit email is a request for the direct path: the caller has
-      // already collected it, so do not raise the Identity prompt again.
+      // An explicit email is a request for the local path: the caller has
+      // already collected it, so do not raise a Google window.
       if (customEmail) return this.signInWithEmail(customEmail);
 
-      // 1. Chrome Identity API, when a GCP client ID is paired in the manifest
-      if (hasIdentityApi()) {
-        try {
-          let token = await getAuthToken(true);
-          let info = token ? await fetchProfile(token) : null;
-          if (token && !info) {
-            // Chrome handed back a stale cached token. Evict it and ask again
-            // so the user is not left signed in against a dead session.
-            await removeCachedToken(token);
-            token = await getAuthToken(true);
-            info = token ? await fetchProfile(token) : null;
-          }
-          if (info && info.email) {
-            const user = profileToUser(info, token);
-            await this.setUser(user);
-            return user;
-          }
-        } catch (err) {
-          console.info('Chrome Identity is not paired with a GCP client ID yet; using direct email sign-in:', err.message);
+      const method = oauthMethod();
+      if (method) {
+        let token = await requestToken(true, method);
+        let info = token ? await fetchProfile(token) : null;
+        if (token && !info) {
+          // A stale cached token. Evict it and ask again so the user is not
+          // left signed in against a dead session.
+          await removeCachedToken(token);
+          token = await requestToken(true, method);
+          info = token ? await fetchProfile(token) : null;
         }
+        if (info && info.email) {
+          const user = profileToUser(info, token, method);
+          await this.setUser(user);
+          return user;
+        }
+        throw new Error('Google did not return an account. Try again.');
       }
 
-      // 2. Direct email fallback
       if (opts.allowPrompt === false) throw emailRequiredError();
-      const rawEmail = typeof prompt === 'function'
-        ? prompt('Enter your Google Account email (e.g. user@gmail.com):')
+      const raw = typeof prompt === 'function'
+        ? prompt('Google sign-in is not set up in this build. Name a profile for this computer (for example, your first name):')
         : '';
-      return this.signInWithEmail(rawEmail);
+      return this.signInLocal(raw);
     },
 
-    // Quick validity check for a stored OAuth session, meant for popup open.
-    // A user signed in through the email fallback has no token and is returned
-    // as-is. On a 401 the cached token is evicted and Chrome is asked for a
-    // fresh one interactively; if that is declined, the account is kept (its
-    // entries are still scoped to the email) but the dead token is dropped and
-    // sessionExpired is set so the UI can say so.
+    // Quick validity check for a stored Google session, meant for popup open.
+    // A local profile has no token and is returned as-is. On a 401 the cached
+    // token is evicted and Google is asked again interactively; if that is
+    // declined, the account is kept (its entries are still scoped to the
+    // email) but the dead token is dropped and sessionExpired is set.
     async ensureValidSession() {
       const user = await this.getCurrentUser();
-      if (!user || !user.token || !hasIdentityApi()) return user;
+      if (!user || !user.token) return user;
 
       let info;
       try {
@@ -194,15 +302,18 @@ const TrackerAuth = (() => {
       // Confirmed expired. A rejected re-prompt here means the user declined,
       // which must not be confused with the network guard above.
       await removeCachedToken(user.token);
+      const method = oauthMethod();
       let token = null;
-      try {
-        token = await getAuthToken(true);
-        info = token ? await fetchProfile(token) : null;
-      } catch (err) {
-        info = null;
+      if (method) {
+        try {
+          token = await requestToken(true, method);
+          info = token ? await fetchProfile(token) : null;
+        } catch (err) {
+          info = null;
+        }
       }
       if (info && info.email) {
-        const refreshed = profileToUser(info, token);
+        const refreshed = profileToUser(info, token, method);
         await this.setUser(refreshed);
         return refreshed;
       }
@@ -235,6 +346,13 @@ const TrackerAuth = (() => {
         });
       });
     },
+
+    // Test seam for the launchWebAuthFlow path.
+    _setWebClientId(id) {
+      WEB_CLIENT_ID = typeof id === 'string' ? id : '';
+    },
+
+    _localKeyFor: localKeyFor,
 
     onAuthChanged(cb) {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {

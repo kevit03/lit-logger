@@ -97,6 +97,8 @@ On Jobright (`jobright.ai/jobs/...`), an **Auto-apply** button sits at the botto
 
 LIT never guesses. A job becomes **Needs you** and its tab stays open, with the missing fields outlined, when a required question has no saved answer, a CAPTCHA appears, the form shows an error, the site wants a sign-in (Workday, iCIMS, Taleo), or nothing confirms the submission. Answer it there and LIT learns the answer for next time, so each batch needs you less. Turn off **Submit automatically** to fill only and submit yourself. Submit is clicked at most once per job, even if the page reloads. Jobs already submitted show **Applied** and start unchecked.
 
+The **Refresh** button (circular arrow, top right of the panel) rebuilds the list from the jobs the Jobright page loaded, asks Jobright's Applied list and your tracker log again, and drops anything you have since applied to. It then checks every job card on the page against the list and says so in one line, or warns you to reload the Jobright page when a card is missing from the list. The **X** on a row removes a job you do not want; it stays removed across refreshes and visits until you press **Restore**. Queued jobs in a running batch have an X too, so they never open.
+
 ### Privacy and accounts
 
 Logs are scoped to the signed-in account, so two Google accounts never see each other's data. No backend and no third-party servers: your data lives in your own Chrome sync storage.

@@ -1,9 +1,14 @@
-// Google Auth flow, email normalization, session management, token eviction tests
+// Accounts: real Google sign-in once an OAuth client is configured, an honest
+// local profile otherwise, session renewal, and token eviction.
 const assert = require('assert');
 const { installMockChrome, uninstallMockChrome } = require('./mock_chrome');
 
-function getFreshAuth(initialStore = {}) {
+const CLIENT_ID = '1234567890-abc.apps.googleusercontent.com';
+
+// options.oauth2: true pairs a Chrome Extension client in the manifest.
+function getFreshAuth(initialStore = {}, options = {}) {
   const mock = installMockChrome(initialStore);
+  mock.runtime.getManifest = () => (options.oauth2 ? { oauth2: { client_id: CLIENT_ID, scopes: ['openid', 'email', 'profile'] } } : {});
   delete require.cache[require.resolve('../shared/auth')];
   const TrackerAuth = require('../shared/auth');
   global.TrackerAuth = TrackerAuth;
@@ -32,7 +37,7 @@ async function run() {
     const signedIn = await TrackerAuth.signInWithGoogle('  John.Doe@EXAMPLE.COM  ');
     assert.ok(signedIn);
     assert.strictEqual(signedIn.email, 'john.doe@example.com', 'Email must be trimmed and lowercased');
-    assert.strictEqual(signedIn.provider, 'google');
+    assert.strictEqual(signedIn.provider, 'local', 'an email typed in is a local profile, not a Google sign-in');
 
     // Retrieve current user
     const current = await TrackerAuth.getCurrentUser();
@@ -47,14 +52,14 @@ async function run() {
       await TrackerAuth.signInWithGoogle('   ');
     }, /Valid email required/);
 
-    console.log('[PASS] Direct email sign-in and normalization');
+    console.log('[PASS] Local profile from an email: normalized and labeled local');
     delete global.TrackerAuth;
     uninstallMockChrome();
   }
 
   // 3. OAuth Identity Sign-In Flow with UserInfo
   {
-    const { mock, TrackerAuth } = getFreshAuth();
+    const { mock, TrackerAuth } = getFreshAuth({}, { oauth2: true });
 
     // Mock global fetch for Google UserInfo API
     const originalFetch = global.fetch;
@@ -80,6 +85,9 @@ async function run() {
       assert.strictEqual(user.name, 'Alice Smith');
       assert.strictEqual(user.picture, 'https://example.com/alice.jpg');
       assert.strictEqual(user.token, 'valid-google-oauth-token-999');
+      assert.strictEqual(user.provider, 'google');
+      assert.strictEqual(user.method, 'chrome');
+      assert.strictEqual(TrackerAuth.signInMode(), 'google', 'a paired manifest turns Google sign-in on');
 
       const currentUser = await TrackerAuth.getCurrentUser();
       assert.strictEqual(currentUser.email, 'alice.smith@gmail.com');
@@ -94,7 +102,7 @@ async function run() {
 
   // 3b. A stale cached token (401 from userinfo) is evicted and re-requested
   {
-    const { mock, TrackerAuth } = getFreshAuth();
+    const { mock, TrackerAuth } = getFreshAuth({}, { oauth2: true });
     const originalFetch = global.fetch;
     const seenTokens = [];
     global.fetch = async (url, opts) => {
@@ -131,7 +139,7 @@ async function run() {
 
   // 3c. ensureValidSession refreshes an expired stored session
   {
-    const { mock, TrackerAuth } = getFreshAuth();
+    const { mock, TrackerAuth } = getFreshAuth({}, { oauth2: true });
     await TrackerAuth.setUser({ email: 'carol@gmail.com', name: 'Carol', token: 'expired-token', provider: 'google' });
 
     const originalFetch = global.fetch;
@@ -162,7 +170,7 @@ async function run() {
   // 3d. ensureValidSession keeps the account but drops a dead token when
   //     the user declines to re-authenticate
   {
-    const { mock, TrackerAuth } = getFreshAuth();
+    const { mock, TrackerAuth } = getFreshAuth({}, { oauth2: true });
     await TrackerAuth.setUser({ email: 'dave@gmail.com', name: 'Dave', token: 'dead-token', provider: 'google' });
 
     const originalFetch = global.fetch;
@@ -204,23 +212,87 @@ async function run() {
     uninstallMockChrome();
   }
 
-  // 3f. Unpaired build: allowPrompt:false surfaces EMAIL_REQUIRED instead of
+  // 3f. Unpaired build: no Google window is attempted at all;
+  //     allowPrompt:false surfaces EMAIL_REQUIRED (mode 'local') instead of
   //     window.prompt, and an explicit email skips Identity entirely
   {
     const { mock, TrackerAuth } = getFreshAuth();
-    mock.identity.shouldFail = true;
-    mock.identity.failureMessage = 'OAuth2 not granted or revoked.';
+    let identityCalls = 0;
+    mock.identity.getAuthToken = () => { identityCalls++; };
+    assert.strictEqual(TrackerAuth.signInMode(), 'local');
+    assert.strictEqual(TrackerAuth.isGoogleConfigured(), false);
 
     await assert.rejects(
       () => TrackerAuth.signInWithGoogle(undefined, { allowPrompt: false }),
-      err => err.code === 'EMAIL_REQUIRED'
+      err => err.code === 'EMAIL_REQUIRED' && err.mode === 'local' && /this computer/.test(err.message)
     );
+    assert.strictEqual(identityCalls, 0, 'an unpaired build never opens a Google prompt that cannot work');
 
     const user = await TrackerAuth.signInWithGoogle('Frank@Example.com');
     assert.strictEqual(user.email, 'frank@example.com');
     assert.strictEqual(mock.identity.cachedTokens.size, 0, 'An explicit email must not trigger an Identity prompt');
 
     console.log('[PASS] Unpaired build surfaces EMAIL_REQUIRED and honors explicit email');
+    delete global.TrackerAuth;
+    uninstallMockChrome();
+  }
+
+  // 3g. Local profile by name: keyed per name, never a Google identity
+  {
+    const { TrackerAuth } = getFreshAuth();
+    const user = await TrackerAuth.signInLocal('  Sam Rivera ');
+    assert.strictEqual(user.email, 'sam-rivera@local');
+    assert.strictEqual(user.name, 'Sam Rivera');
+    assert.strictEqual(user.provider, 'local');
+    assert.strictEqual(user.token, undefined);
+    assert.strictEqual(TrackerAuth._localKeyFor('a@b'), 'a@b');
+    assert.strictEqual(TrackerAuth._localKeyFor('bad@'), '');
+    await assert.rejects(() => TrackerAuth.signInLocal('   '), /name or email/);
+    assert.deepStrictEqual(await TrackerAuth.ensureValidSession(), user, 'a local profile needs no validation');
+    console.log('[PASS] Local profile by name is keyed per name and labeled local');
+    delete global.TrackerAuth;
+    uninstallMockChrome();
+  }
+
+  // 3h. Web client configured: launchWebAuthFlow with the implicit flow
+  {
+    const { mock, TrackerAuth } = getFreshAuth();
+    TrackerAuth._setWebClientId('999-web.apps.googleusercontent.com');
+    mock.identity.getRedirectURL = () => 'https://job-tracker-mock-extension-id.chromiumapp.org/';
+    let launched = null;
+    mock.identity.launchWebAuthFlow = (details, cb) => {
+      launched = details;
+      process.nextTick(() => cb('https://job-tracker-mock-extension-id.chromiumapp.org/#access_token=web-token-1&token_type=Bearer&expires_in=3599'));
+    };
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      assert.strictEqual(opts.headers.Authorization, 'Bearer web-token-1');
+      return { ok: true, status: 200, json: async () => ({ email: 'Gail@Gmail.com', name: 'Gail' }) };
+    };
+    try {
+      assert.strictEqual(TrackerAuth.signInMode(), 'google');
+      const user = await TrackerAuth.signInWithGoogle(undefined, { allowPrompt: false });
+      const url = new URL(launched.url);
+      assert.strictEqual(url.hostname, 'accounts.google.com');
+      assert.strictEqual(url.searchParams.get('client_id'), '999-web.apps.googleusercontent.com');
+      assert.strictEqual(url.searchParams.get('response_type'), 'token');
+      assert.strictEqual(url.searchParams.get('redirect_uri'), 'https://job-tracker-mock-extension-id.chromiumapp.org/');
+      assert.strictEqual(launched.interactive, true);
+      assert.strictEqual(user.email, 'gail@gmail.com');
+      assert.strictEqual(user.method, 'web');
+      assert.strictEqual(user.token, 'web-token-1');
+    } finally {
+      global.fetch = originalFetch;
+    }
+
+    // The user closes the Google window: an error, never a silent fallback.
+    mock.identity.launchWebAuthFlow = (details, cb) => {
+      mock.runtime.lastError = { message: 'The user did not approve access.' };
+      cb(undefined);
+      mock.runtime.lastError = null;
+    };
+    await assert.rejects(() => TrackerAuth.signInWithGoogle(undefined, { allowPrompt: false }), /did not approve/);
+    console.log('[PASS] Web OAuth client: launchWebAuthFlow implicit flow, and a closed window is an error');
     delete global.TrackerAuth;
     uninstallMockChrome();
   }

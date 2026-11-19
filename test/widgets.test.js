@@ -21,18 +21,20 @@ async function run() {
     installMockChrome();
     const W = fresh();
     const types = Object.keys(W.TYPES);
-    assert.deepStrictEqual(types.sort(), ['activity', 'details', 'goal', 'pipeline', 'recentList', 'responseStats', 'streak', 'summary', 'timeStats', 'timer']);
+    assert.deepStrictEqual(types.sort(), ['activity', 'details', 'goal', 'pipeline', 'recap', 'recentList', 'responseStats', 'streak', 'summary', 'timeStats', 'timer', 'trophies']);
     const items = W.defaultItems();
-    assert.deepStrictEqual(items.map(i => i.type), ['timer', 'timeStats', 'goal', 'details', 'pipeline', 'recentList', 'streak', 'responseStats', 'summary', 'activity'], 'the recommended layout');
+    assert.deepStrictEqual(items.map(i => i.type), ['timer', 'recentList', 'recap'], 'the lean recommended layout');
+    assert.ok(!items.some(i => i.type === 'goal'), 'the Daily goal bar repeats the ring, so it is not in the default');
     assert.ok(items.every(i => typeof i.id === 'string' && i.id.startsWith(i.type + '-')), 'every default item gets an id');
     assert.strictEqual(new Set(items.map(i => i.id)).size, items.length, 'ids are unique');
-    const activity = items.find(i => i.type === 'activity');
-    assert.deepStrictEqual(activity.options, { metricId: 'active', days: 30, chart: 'bar', showStats: true, size: 'expanded', collapsed: false });
+    assert.deepStrictEqual(W.normalizeOptions('activity', {}), { metricId: 'active', days: 30, chart: 'bar', showStats: true, size: 'expanded', collapsed: false });
     assert.deepStrictEqual(items.find(i => i.type === 'timer').options, { size: 'expanded', collapsed: false });
-    assert.deepStrictEqual(items.find(i => i.type === 'streak').options, { metricId: 'active', size: 'compact', collapsed: false }, 'streak and response rate pair up as compact cards');
-    assert.deepStrictEqual(items.find(i => i.type === 'responseStats').options, { size: 'compact', collapsed: false });
+    assert.deepStrictEqual(items.find(i => i.type === 'recap').options, { metricId: 'active', size: 'expanded', collapsed: false });
+    assert.deepStrictEqual(W.normalizeOptions('trophies', { metricId: 'jobs', junk: 1 }), { metricId: 'jobs', size: 'expanded', collapsed: false }, 'the trophy shelf can be pinned to a goal');
+    assert.deepStrictEqual(W.normalizeOptions('streak', {}), { metricId: 'active', size: 'compact', collapsed: false }, 'streak and response rate pair up as compact cards');
+    assert.deepStrictEqual(W.normalizeOptions('responseStats', {}), { size: 'compact', collapsed: false });
     uninstallMockChrome();
-    console.log('[PASS] Registry exposes ten widget types with a stable recommended layout');
+    console.log('[PASS] Registry exposes twelve card types with a lean recommended layout');
   }
 
   // Normalization is defensive
@@ -74,18 +76,19 @@ async function run() {
     const chrome = installMockChrome();
     const W = fresh();
     let items = await W.load();
-    assert.strictEqual(items.length, 10);
+    assert.strictEqual(items.length, 3);
     assert.ok(chrome.storage.sync.store[W.STORAGE_KEY], 'first load persists the default layout');
     assert.strictEqual(chrome.storage.sync.store[W.STORAGE_KEY].version, 2);
-    assert.deepStrictEqual(items.map(i => i.id), ['timer-default', 'timeStats-default', 'goal-default', 'details-default', 'pipeline-default', 'recentList-default', 'streak-default', 'responseStats-default', 'summary-default', 'activity-default'], 'default ids are fixed');
-    // Trim to the original six so the index arithmetic below stays readable.
-    for (const id of ['pipeline-default', 'recentList-default', 'streak-default', 'responseStats-default']) items = await W.remove(id);
-    assert.strictEqual(items.length, 6);
+    assert.deepStrictEqual(items.map(i => i.id), ['timer-default', 'recentList-default', 'recap-default'], 'default ids are fixed');
 
     // Regression: on a fresh install, an edit keyed by a default id must land.
-    items = await W.reorder('goal-default', null);
-    assert.strictEqual(items[items.length - 1].id, 'goal-default', 'reorder finds a default widget on a fresh install');
-    items = await W.reorder('goal-default', 'details-default');
+    items = await W.reorder('timer-default', null);
+    assert.strictEqual(items[items.length - 1].id, 'timer-default', 'reorder finds a default widget on a fresh install');
+    items = await W.reorder('timer-default', 'recentList-default');
+    assert.deepStrictEqual(items.map(i => i.id), ['timer-default', 'recentList-default', 'recap-default']);
+    // Grow to six cards so the index arithmetic below stays readable.
+    for (const type of ['goal', 'details', 'summary']) items = await W.add(type);
+    assert.strictEqual(items.length, 6);
 
     items = await W.add('streak', { metricId: 'leetcode' });
     assert.strictEqual(items.length, 7);
@@ -175,7 +178,7 @@ async function run() {
     assert.deepStrictEqual(reloaded.map(i => i.id), results[2].map(i => i.id), 'layout survives a popup reopen');
 
     items = await W.reset();
-    assert.deepStrictEqual(items.map(i => i.type), ['timer', 'timeStats', 'goal', 'details', 'pipeline', 'recentList', 'streak', 'responseStats', 'summary', 'activity'], 'reset restores the recommended layout');
+    assert.deepStrictEqual(items.map(i => i.type), ['timer', 'recentList', 'recap'], 'reset restores the recommended layout');
     uninstallMockChrome();
     console.log('[PASS] Add, move, update, remove persist to storage and serialize under a burst');
   }
@@ -204,8 +207,10 @@ async function run() {
     assert.strictEqual(W.isVisible({ type: 'responseStats' }, 'jobs'), true);
 
     const avail = W.availableTypes(W.defaultItems());
-    assert.strictEqual(avail.length, 10);
-    assert.deepStrictEqual(avail.filter(t => t.isNew).map(t => t.type), ['pipeline', 'recentList', 'responseStats'], 'new widget types are flagged in the picker');
+    assert.strictEqual(avail.length, 12);
+    assert.deepStrictEqual(avail.filter(t => t.isNew).map(t => t.type), ['trophies', 'recap'], 'new card types are flagged in the picker');
+    assert.strictEqual(W.isVisible({ type: 'trophies' }, 'custom-1'), true, 'trophies show on every goal');
+    assert.strictEqual(W.isVisible({ type: 'recap' }, 'leetcode'), true);
     assert.strictEqual(avail.find(t => t.type === 'timer').added, true, 'a present singleton is marked added');
     assert.strictEqual(avail.find(t => t.type === 'goal').added, false, 'multi-instance types are always addable');
     assert.strictEqual(avail.find(t => t.type === 'streak').added, false);
@@ -235,6 +240,8 @@ async function run() {
     const chrome = installMockChrome();
     const W = fresh();
     let items = await W.load();
+    items = await W.add('pipeline');
+    items = await W.add('responseStats');
     const pipeId = items.find(i => i.type === 'pipeline').id;
     const listId = items.find(i => i.type === 'recentList').id;
     items = await W.update(pipeId, { size: 'compact', collapsed: true });
@@ -268,6 +275,21 @@ async function run() {
     assert.strictEqual(W3.upgrade(null), null);
     uninstallMockChrome();
     console.log('[PASS] Pipeline, recent list, and response widgets serialize, survive restarts, and upgrade older layouts once');
+  }
+
+  // Someone who already saved the old ten-card layout keeps it exactly: the
+  // lean default is only for new installs and Reset.
+  {
+    const chrome = installMockChrome();
+    const oldTypes = ['timer', 'timeStats', 'goal', 'details', 'pipeline', 'recentList', 'streak', 'responseStats', 'summary', 'activity'];
+    const saved = { version: 2, items: oldTypes.map(type => ({ id: type + '-default', type, options: {} })) };
+    chrome.storage.sync.store['pt_widgets'] = JSON.parse(JSON.stringify(saved));
+    const W = fresh();
+    const items = await W.load();
+    assert.deepStrictEqual(items.map(i => i.type), oldTypes, 'an existing saved layout is untouched');
+    assert.deepStrictEqual(chrome.storage.sync.store['pt_widgets'], saved, 'and is not rewritten');
+    uninstallMockChrome();
+    console.log('[PASS] Existing saved layouts are left alone; only new installs get the lean default');
   }
 
   console.log('--- test/widgets.test.js COMPLETED SUCCESSFULLY ---\n');

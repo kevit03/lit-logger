@@ -19,9 +19,16 @@
 //                   setting on, a tiny bootstrap runs on every page and asks
 //                   for the full universal tracker only on job pages.
 //   Maintenance     A periodic alarm takes the weekly local snapshot.
-//   Reminder        One alarm a day, at the time in prefs (2:30 PM by
-//                   default), opens reminder/reminder.html: a short video
-//                   check-in. Turned off or moved from the popup's settings.
+//   Check-in        Opt-in (prefs.reminderEnabled). One alarm a day at
+//                   prefs.reminderTime shows a Chrome notification in the
+//                   chosen coach voice; clicking it opens
+//                   reminder/reminder.html. Never opens a tab by itself.
+//   Toolbar icon    The padlock is drawn open until today's applications
+//                   goal is met, then locked. Recomputed on every log write,
+//                   at startup, and at local midnight.
+//   Install         A fresh install opens onboarding/onboarding.html. An
+//                   update keeps existing users' check-in on and skips
+//                   onboarding.
 //   Auto-apply      background/batch-runner.js (LitBatch) runs Jobright
 //                   batches; this file only hands it messages and an
 //                   injector for tabs the manifest does not cover.
@@ -49,6 +56,9 @@
 // countdown, to close it out at zero.
 
 importScripts('../shared/auth.js', '../shared/db.js', '../shared/storage.js');
+// Coach copy is a nicety: a missing or broken file must not take the storage
+// host down with it, so it loads on its own and every caller checks for it.
+try { importScripts('../shared/coach-copy.js'); } catch (e) { /* plain fallback text */ }
 importScripts('batch-runner.js');
 // Answer writing for auto-apply: the store and composer have no DOM or window
 // dependency, so they load here too and the API key stays in the worker.
@@ -74,6 +84,14 @@ const MAINTENANCE_ALARM = 'pt-maintenance';
 const MAINTENANCE_PERIOD_MINUTES = 360;
 const REMINDER_ALARM = 'pt-reminder';
 const REMINDER_PAGE = 'reminder/reminder.html';
+const REMINDER_NOTIFICATION = 'lit-checkin';
+const MIDNIGHT_ALARM = 'pt-midnight';
+const ONBOARDING_PAGE = 'onboarding/onboarding.html';
+// chrome.storage.local marker: this device has run the Warm Coach install or
+// update step. Without it a later update would mistake a fresh install's
+// unset reminder for an old install's and switch the check-in on.
+const MIGRATION_KEY = 'pt_shell_migrations';
+const PRIMARY_METRIC = 'jobs';
 
 const MENU_LOG_PAGE = 'lit-log-page';
 const MENU_LOG_ACTION = 'lit-log-page-action';
@@ -93,6 +111,7 @@ const UNIVERSAL_ORIGINS = ['*://*/*'];
 const SHARED_FILES = [
   ['TrackerAuth', 'shared/auth.js'],
   ['TrackerStorage', 'shared/storage.js'],
+  ['LitCopy', 'shared/coach-copy.js'],
   ['AutoTrackerCore', 'shared/auto-tracker-core.js'],
   ['JobMeta', 'shared/job-meta.js']
 ];
@@ -303,25 +322,291 @@ async function scheduleReminder() {
   return when;
 }
 
-// Opens the check-in page once per firing and books the next day. A page
-// already open (the user left yesterday's tab) is focused rather than
-// duplicated.
-async function showReminder() {
-  const url = chrome.runtime.getURL(REMINDER_PAGE);
+// Today's numbers for the primary tracker. Every field has a fallback so a
+// storage build without the newer stats still gives a sensible answer.
+async function primaryProgress() {
+  const [stats, metrics] = await Promise.all([TrackerStorage.getStats(), TrackerStorage.getMetrics()]);
+  const metric = (metrics || []).find(m => m.id === PRIMARY_METRIC) || null;
+  const goal = Math.max(1, parseInt(metric && metric.dailyGoal, 10) || 5);
+  const counts = (stats && (stats.todayCount || stats.today)) || {};
+  const count = Math.max(0, parseInt(counts[PRIMARY_METRIC], 10) || 0);
+  const met = stats && stats.goalMet && typeof stats.goalMet[PRIMARY_METRIC] === 'boolean'
+    ? stats.goalMet[PRIMARY_METRIC]
+    : count >= goal;
+  return { count, goal, met, restToday: !!(stats && stats.restToday), metric };
+}
+
+function reminderCopy(count, goal, voice) {
   try {
-    const open = await new Promise(resolve => chrome.tabs.query({ url }, tabs => resolve(tabs || [])));
-    if (open.length && open[0].id != null) {
-      await chrome.tabs.update(open[0].id, { active: true, url });
-      if (open[0].windowId != null && chrome.windows && chrome.windows.update) {
-        await chrome.windows.update(open[0].windowId, { focused: true }).catch(() => {});
-      }
-    } else {
-      await chrome.tabs.create({ url, active: true });
+    if (typeof LitCopy !== 'undefined' && LitCopy && typeof LitCopy.reminder === 'function') {
+      const c = LitCopy.reminder({ count, goal, voice });
+      if (c && c.title && c.body) return { title: String(c.title), body: String(c.body) };
     }
+  } catch (e) {
+    // Fall through to the plain text.
+  }
+  if (count >= goal) return { title: 'Locked in for today', body: count + ' applications sent. Nice work.' };
+  if (count > 0) return { title: 'Daily check-in', body: count + ' of ' + goal + ' applications sent so far. Want to log the rest?' };
+  return { title: 'Daily check-in', body: 'How is the search going today? Log what you did, even one counts.' };
+}
+
+// Opens (or focuses) the check-in page. Only ever called from a click on the
+// notification, so focusing is what the user asked for.
+async function openCheckinPage(hash) {
+  const base = chrome.runtime.getURL(REMINDER_PAGE);
+  const url = base + (hash ? '#' + hash : '');
+  try {
+    const open = await new Promise(resolve => chrome.tabs.query({}, tabs => resolve(tabs || [])));
+    const existing = open.find(t => t && t.id != null && String(t.url || '').indexOf(base) === 0);
+    if (existing) {
+      await chrome.tabs.update(existing.id, { active: true, url });
+      if (existing.windowId != null && chrome.windows && chrome.windows.update) {
+        await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
+      }
+      return existing.id;
+    }
+    const tab = await chrome.tabs.create({ url, active: true });
+    return tab && tab.id;
   } catch (err) {
-    console.warn('LIT: could not open the daily reminder:', err && err.message);
+    console.warn('LIT: could not open the check-in:', err && err.message);
+    return null;
+  }
+}
+
+// One notification per firing, then books tomorrow. Rest days are skipped:
+// a day off should stay off. Without the notifications API the page opens
+// in a background tab, so the user is still never pulled out of their work.
+async function showReminder() {
+  let prefs = {};
+  try { prefs = await TrackerStorage.getPrefs(); } catch (e) { prefs = {}; }
+  let progress = { count: 0, goal: 5, restToday: false };
+  try { progress = await primaryProgress(); } catch (e) { /* defaults */ }
+
+  if (!progress.restToday) {
+    const copy = reminderCopy(progress.count, progress.goal, prefs.coachVoice || 'coach');
+    try {
+      if (chrome.notifications && typeof chrome.notifications.create === 'function') {
+        chrome.notifications.create(REMINDER_NOTIFICATION, {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+          title: copy.title,
+          message: copy.body,
+          buttons: [{ title: 'Log what I did' }, { title: 'Open my check-in' }],
+          priority: 1
+        }, () => { void chrome.runtime.lastError; });
+      } else {
+        await chrome.tabs.create({ url: chrome.runtime.getURL(REMINDER_PAGE), active: false });
+      }
+    } catch (err) {
+      console.warn('LIT: could not show the daily check-in:', err && err.message);
+    }
   }
   await scheduleReminder();
+}
+
+function clearCheckinNotification() {
+  try { chrome.notifications.clear(REMINDER_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+}
+
+if (chrome.notifications && chrome.notifications.onClicked) {
+  chrome.notifications.onClicked.addListener(id => {
+    if (id !== REMINDER_NOTIFICATION) return;
+    clearCheckinNotification();
+    openCheckinPage('');
+  });
+}
+if (chrome.notifications && chrome.notifications.onButtonClicked) {
+  chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (id !== REMINDER_NOTIFICATION) return;
+    clearCheckinNotification();
+    openCheckinPage(index === 0 ? 'log' : '');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar icon: open padlock until today's goal is met, then locked
+// ---------------------------------------------------------------------------
+const ACCENTS = {
+  coral: '#E0674B', sage: '#5E9270', ocean: '#3B7EA1', plum: '#8A5A9E', amber: '#C9821F', slate: '#3D4A5C'
+};
+// A mid-tone that reads on both light and dark toolbars.
+const OPEN_COLOR = '#8A8178';
+const STATIC_ICON_PATHS = { 16: 'icons/icon16.png', 32: 'icons/icon48.png' };
+
+function iconStateFor(progress) {
+  return progress && progress.met ? 'locked' : 'open';
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+// Same geometry as the inline SVG mark (24-unit box): shackle from (8,11.5)
+// up over a radius-4 arc to (16,11.5); body 14x10 at (5,11). Open swings the
+// shackle 30 degrees off the left post and lifts it.
+function drawPadlock(size, state, accent) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  const color = state === 'locked' ? accent : OPEN_COLOR;
+  ctx.scale(size / 24, size / 24);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = size <= 16 ? 2.8 : 2.4;
+
+  ctx.save();
+  if (state !== 'locked') {
+    ctx.translate(0, -2);
+    ctx.translate(8, 11.5);
+    ctx.rotate(-Math.PI / 6);
+    ctx.translate(-8, -11.5);
+  }
+  ctx.beginPath();
+  ctx.moveTo(8, 11.5);
+  ctx.lineTo(8, 7.5);
+  ctx.arc(12, 7.5, 4, Math.PI, 0);
+  ctx.lineTo(16, 11.5);
+  ctx.stroke();
+  ctx.restore();
+
+  roundRectPath(ctx, 4.5, 10.5, 15, 11, 2.6);
+  ctx.fill();
+  // Keyhole, punched out so the toolbar shows through.
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(12, 15, 1.7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(11.2, 15, 1.6, 3.4);
+  ctx.globalCompositeOperation = 'source-over';
+  return ctx.getImageData(0, 0, size, size);
+}
+
+function setStaticIcon() {
+  try {
+    if (chrome.action && typeof chrome.action.setIcon === 'function') {
+      const p = chrome.action.setIcon({ path: STATIC_ICON_PATHS });
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    }
+  } catch (e) {
+    // Nothing more to fall back to.
+  }
+}
+
+let lastIconKey = null;
+
+async function updateToolbarIcon() {
+  if (!chrome.action || typeof chrome.action.setIcon !== 'function') return null;
+  let state = 'open';
+  try {
+    const [progress, prefs] = await Promise.all([primaryProgress(), TrackerStorage.getPrefs().catch(() => ({}))]);
+    state = iconStateFor(progress);
+    const accent = ACCENTS[prefs && prefs.accent] || ACCENTS.coral;
+    const key = state + accent;
+    if (key === lastIconKey) return state;
+    if (typeof OffscreenCanvas !== 'function') throw new Error('OffscreenCanvas unavailable');
+    const imageData = { 16: drawPadlock(16, state, accent), 32: drawPadlock(32, state, accent) };
+    await chrome.action.setIcon({ imageData });
+    lastIconKey = key;
+    return state;
+  } catch (err) {
+    lastIconKey = null;
+    setStaticIcon();
+    return state;
+  }
+}
+
+let iconTimer = null;
+function scheduleIconUpdate() {
+  if (iconTimer) clearTimeout(iconTimer);
+  iconTimer = setTimeout(() => { iconTimer = null; updateToolbarIcon(); }, 250);
+}
+
+function nextMidnightAt(now = Date.now()) {
+  const at = new Date(now);
+  at.setHours(24, 0, 5, 0);
+  return at.getTime();
+}
+
+async function scheduleMidnight() {
+  try {
+    await chrome.alarms.create(MIDNIGHT_ALARM, { when: nextMidnightAt() });
+  } catch (e) {
+    // The next startup or log write still corrects the icon.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Install and update
+// ---------------------------------------------------------------------------
+function readMigrations() {
+  return new Promise(resolve => {
+    chrome.storage.local.get([MIGRATION_KEY], r => {
+      const v = r && r[MIGRATION_KEY];
+      resolve(v && typeof v === 'object' ? v : {});
+    });
+  });
+}
+
+function writeMigrations(v) {
+  return new Promise(resolve => chrome.storage.local.set({ [MIGRATION_KEY]: v }, () => resolve()));
+}
+
+// The prefs record as stored, before defaults are filled in, so an explicit
+// choice can be told apart from a default.
+function readRawPrefs() {
+  const area = chrome.storage.sync || chrome.storage.local;
+  return new Promise(resolve => {
+    area.get(['pt_prefs'], r => {
+      const v = r && r.pt_prefs;
+      resolve(v && typeof v === 'object' ? v : {});
+    });
+  });
+}
+
+// The check-in used to be on by default and is now opt-in. People who
+// already had it keep it; existing installs skip onboarding.
+async function migrateExistingInstall() {
+  const done = await readMigrations();
+  if (done.warmCoach) return false;
+  const raw = await readRawPrefs();
+  const patch = { onboardingDone: true };
+  if (typeof raw.reminderEnabled !== 'boolean') patch.reminderEnabled = true;
+  try {
+    await TrackerStorage.setPrefs(patch);
+  } catch (e) {
+    return false;
+  }
+  await writeMigrations(Object.assign({}, done, { warmCoach: true }));
+  return true;
+}
+
+async function onFreshInstall() {
+  const done = await readMigrations();
+  await writeMigrations(Object.assign({}, done, { warmCoach: true }));
+  try {
+    await chrome.tabs.create({ url: chrome.runtime.getURL(ONBOARDING_PAGE), active: true });
+  } catch (err) {
+    console.warn('LIT: could not open onboarding:', err && err.message);
+  }
+}
+
+async function onInstalled(details) {
+  const reason = details && details.reason;
+  createMenus();
+  if (reason === 'install') await onFreshInstall();
+  else if (reason === 'update') await migrateExistingInstall();
+  await onStartup();
+  runMaintenance();
 }
 
 chrome.alarms.onAlarm.addListener(alarm => {
@@ -331,6 +616,12 @@ chrome.alarms.onAlarm.addListener(alarm => {
   }
   if (alarm.name === REMINDER_ALARM) {
     showReminder();
+    return;
+  }
+  if (alarm.name === MIDNIGHT_ALARM) {
+    lastIconKey = null;
+    updateToolbarIcon();
+    scheduleMidnight();
     return;
   }
   const key = Object.keys(TIMER_SURFACES).find(k => TIMER_SURFACES[k].alarm === alarm.name);
@@ -410,6 +701,7 @@ async function probeFrame(target) {
     func: () => ({
       TrackerAuth: typeof TrackerAuth !== 'undefined',
       TrackerStorage: typeof TrackerStorage !== 'undefined',
+      LitCopy: typeof LitCopy !== 'undefined',
       AutoTrackerCore: typeof AutoTrackerCore !== 'undefined',
       JobMeta: typeof JobMeta !== 'undefined',
       AutofillStore: typeof AutofillStore !== 'undefined',
@@ -712,6 +1004,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const after = changes.pt_prefs.newValue || {};
     if (before.universalTracking !== after.universalTracking) syncUniversalRegistration().catch(() => {});
     if (before.reminderEnabled !== after.reminderEnabled || before.reminderTime !== after.reminderTime) scheduleReminder();
+    if (before.accent !== after.accent || JSON.stringify(before.restDays) !== JSON.stringify(after.restDays)) scheduleIconUpdate();
+  }
+  // A log write (pt_logs_rev), a changed goal (metrics), or a different
+  // account all can flip today's padlock.
+  if ((area === 'sync' || area === 'local') && (changes.pt_logs_rev || changes.metrics || changes.pt_auth_user)) {
+    scheduleIconUpdate();
   }
 });
 
@@ -732,17 +1030,21 @@ async function onStartup() {
   await reconcileTimers();
   await ensureMaintenanceAlarm();
   await scheduleReminder();
+  await scheduleMidnight();
   await syncUniversalRegistration().catch(() => false);
+  lastIconKey = null;
+  await updateToolbarIcon();
 }
 
 chrome.runtime.onStartup.addListener(() => { onStartup(); runMaintenance(); });
-chrome.runtime.onInstalled.addListener(() => { createMenus(); onStartup(); runMaintenance(); });
+chrome.runtime.onInstalled.addListener(details => { onInstalled(details).catch(err => console.warn('LIT: install step failed:', err && err.message)); });
 
 // A service worker is torn down when idle and revived by an event. Reconciling
 // on every revival keeps alarms correct even if a storage change arrived while
 // the worker was asleep.
 exposeSessionStorage();
 reconcileTimers();
+updateToolbarIcon();
 
 // Test seam: the Node suite loads this file with a mocked chrome and drives
 // these directly.
@@ -761,6 +1063,15 @@ if (typeof module !== 'undefined' && module.exports) {
     nextReminderAt,
     scheduleReminder,
     showReminder,
+    openCheckinPage,
+    reminderCopy,
+    primaryProgress,
+    updateToolbarIcon,
+    iconStateFor,
+    drawPadlock,
+    nextMidnightAt,
+    migrateExistingInstall,
+    onInstalled,
     createMenus,
     staticMatches,
     UNIVERSAL_SCRIPT_ID,

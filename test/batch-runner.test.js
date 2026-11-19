@@ -414,6 +414,33 @@ async function run() {
     console.log('[PASS] Stop skips the queue but keeps in-flight reports; clear; alarm only while needed');
   }
 
+  // 11b. Remove: a queued job is skipped and never opens; a started one stays.
+  {
+    const env = setup();
+    await env.boot();
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 2, jobs: jobs(4) });
+    await env.settle();
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_REMOVE', jobId: 'job3' }), { ok: true });
+    await env.settle();
+    assert.strictEqual(env.job('job3').status, 'skipped');
+    assert.strictEqual(env.job('job3').reason, 'Removed');
+    assert.strictEqual(env.job('job3').tabId, null, 'a removed job never gets a tab');
+    assert.strictEqual(env.job('job4').status, 'queued');
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_REMOVE', jobId: 'job1' })).ok, false, 'a started job is left alone');
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_REMOVE', jobId: 'nope' })).ok, false, 'unknown job');
+    // The last queued job removed and the rest finishing ends the batch.
+    await env.send({ type: 'LIT_BATCH_REMOVE', jobId: 'job4' });
+    for (const id of ['job1', 'job2']) {
+      const t = env.job(id).tabId;
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t));
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'ready' }, env.fromTab(t));
+    }
+    await env.settle();
+    assert.strictEqual(env.batch().status, 'done');
+    uninstallMockChrome();
+    console.log('[PASS] Remove skips a queued job; started jobs stay');
+  }
+
   // 12. Done: the batch finishes and the alarm is cleared; lit_batch_done is
   // capped at the 2000 newest.
   {
