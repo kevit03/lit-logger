@@ -10,15 +10,19 @@
 //
 // Only this file writes lit_batch and lit_batch_done. The Jobright panel
 // reads them; the driver in each job tab (content/autofill/auto-apply.js)
-// reports progress with LIT_BATCH_UPDATE.
+// reports progress with LIT_BATCH_UPDATE. It also answers LIT_BATCH_CAPS
+// (what the panel and driver may count on: all-sites access, Claude answers)
+// and LIT_OPEN_OPTIONS (the panel's link to the Autofill profile page).
 const LitBatch = (() => {
   const KEY = 'lit_batch';
   const DONE_KEY = 'lit_batch_done';
   const ALARM = 'lit-batch-tick';
   const ALARM_PERIOD_MINUTES = 0.5;
 
-  const OPEN_TIMEOUT_MS = 45 * 1000;
-  const HARD_TIMEOUT_MS = 4 * 60 * 1000;
+  // Opening covers up to 3 apply-button hops; the hard limit covers the
+  // answer-writing requests (40 s each, 3 at a time).
+  const OPEN_TIMEOUT_MS = 90 * 1000;
+  const HARD_TIMEOUT_MS = 6 * 60 * 1000;
   const INJECT_AFTER_MS = 20 * 1000;
   const CLOSE_DELAY_MS = 1500;
   const DONE_CAP = 2000;
@@ -28,6 +32,8 @@ const LitBatch = (() => {
   const MAX_LABEL = 80;
   const MAX_REASON = 160;
   const MAX_TEXT = 200;
+  const SETTINGS_KEY = 'af_settings';
+  const ALL_SITES = ['*://*/*'];
 
   const ACTIVE = ['opening', 'filling', 'submitting'];
   const TERMINAL = ['submitted', 'ready', 'needs-you', 'failed', 'skipped'];
@@ -170,7 +176,7 @@ const LitBatch = (() => {
           finish(ctx, job, 'needs-you', 'Timed out');
         } else if (job.status === 'opening' && age >= INJECT_AFTER_MS && !job.helloAt && !job.injectedAt && typeof job.tabId === 'number') {
           // No driver has said hello: the page may be outside the manifest's
-          // matches. Try once; the 45 s timeout covers a refusal.
+          // matches. Try once; the opening timeout covers a refusal.
           job.injectedAt = now;
           ctx.injects.push(job.tabId);
           ctx.dirty = true;
@@ -277,6 +283,7 @@ const LitBatch = (() => {
           updatedAt: ctx.now,
           reason: '',
           filled: 0,
+          composed: 0,
           missing: [],
           helloAt: null,
           injectedAt: null
@@ -363,6 +370,8 @@ const LitBatch = (() => {
       else if (job.frameId !== frameId) return { ok: false };
 
       if (Number.isFinite(msg.filled)) job.filled = Math.max(0, Math.floor(msg.filled));
+      // How many of those the answer writer composed (v2 drivers only).
+      if (Number.isFinite(msg.composed)) job.composed = Math.max(0, Math.floor(msg.composed));
       if (Array.isArray(msg.missing)) {
         job.missing = msg.missing.map(m => text(m, MAX_LABEL)).filter(Boolean).slice(0, MAX_MISSING);
       }
@@ -394,6 +403,39 @@ const LitBatch = (() => {
     return step(null, now);
   }
 
+  // chrome.permissions.contains answers through a callback or a promise
+  // depending on the Chrome version; take whichever comes.
+  function hasAllSites() {
+    return new Promise(resolve => {
+      try {
+        if (!chrome.permissions || typeof chrome.permissions.contains !== 'function') { resolve(false); return; }
+        const r = chrome.permissions.contains({ origins: ALL_SITES }, granted => {
+          try { void chrome.runtime.lastError; } catch (e) { /* ignore */ }
+          resolve(!!granted);
+        });
+        if (r && typeof r.then === 'function') r.then(v => resolve(!!v), () => resolve(false));
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  }
+
+  // Never returns the key itself, only whether answers can be written.
+  async function caps() {
+    const [allSites, settings] = await Promise.all([hasAllSites(), getKey(SETTINGS_KEY)]);
+    const s = settings && typeof settings === 'object' ? settings : {};
+    return { allSites, ai: !!(s.aiEnabled && typeof s.aiKey === 'string' && s.aiKey.trim()) };
+  }
+
+  async function openOptions() {
+    try {
+      await chrome.runtime.openOptionsPage();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: 'Could not open LIT settings' };
+    }
+  }
+
   function respond(promise, sendResponse, fallback) {
     promise.then(
       res => { try { sendResponse(res); } catch (e) { /* the asker went away */ } },
@@ -403,9 +445,12 @@ const LitBatch = (() => {
   }
 
   function handleMessage(msg, sender, sendResponse) {
-    if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('LIT_BATCH_') !== 0) return false;
+    if (!msg || typeof msg.type !== 'string') return false;
     const failed = { ok: false, error: 'Something went wrong' };
+    if (msg.type === 'LIT_OPEN_OPTIONS') return respond(openOptions(), sendResponse, failed);
+    if (msg.type.indexOf('LIT_BATCH_') !== 0) return false;
     switch (msg.type) {
+      case 'LIT_BATCH_CAPS': return respond(caps(), sendResponse, { allSites: false, ai: false });
       case 'LIT_BATCH_START': return respond(start(msg), sendResponse, failed);
       case 'LIT_BATCH_STOP': return respond(stop(), sendResponse, failed);
       case 'LIT_BATCH_CLEAR': return respond(clear(), sendResponse, failed);

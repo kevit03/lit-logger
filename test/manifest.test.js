@@ -141,7 +141,6 @@ async function run() {
   const AUTOFILL_JS = [
     'shared/autofill-store.js',
     'shared/autofill-core.js',
-    'shared/discretion.js',
     'content/autofill/sites/greenhouse.js',
     'content/autofill/sites/lever.js',
     'content/autofill/sites/ashby.js',

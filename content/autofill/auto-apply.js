@@ -1,9 +1,10 @@
 // Auto-apply driver: runs inside each batch tab opened by the background
 // batch runner (background/batch-runner.js) and walks one application:
-// reach the form (pressing up to 3 apply buttons), autofill it, settle the
-// housekeeping questions with shared/discretion.js, have the background write
-// open answers (LIT_COMPOSE_ANSWER), verify every required field, click
-// Submit once, and confirm success.
+// reach the form (pressing up to 3 apply buttons), autofill it, have the
+// background answer the remaining questions it knows from the profile and
+// answer bank (LIT_COMPOSE_ANSWER), verify every required field, click
+// Submit once, and confirm success. It never guesses: a question nothing
+// saved answers stays empty, and a required one ends the job as needs-you.
 //
 // Loads right after content/autofill/autofill-ui.js in every frame where
 // autofill loads. On load it asks the background whether this tab belongs to
@@ -67,9 +68,6 @@
   const SUBSTANTIVE_RE = /\?|^(why|what|how|describe|tell|explain|share|please (describe|explain|share|tell|provide|give))\b/i;
   const IDENTITY_TEXT_RE = /\bname\b|e-?mail|phone|mobile|linkedin|github|twitter|website|portfolio|\burl\b|address|\bcity\b|\bstate\b|\bzip\b|postal|country/i;
   const YES_NO_Q_RE = /^(are|am|do|does|did|have|has|had|were|was|will|would|can|could|is|should)\b/i;
-  const NEUTRAL_RE = /decline|prefer not|rather not|do(n't|n\u2019t| not) wish|not wish|choose not|not to (say|answer|disclose|identify|self)/i;
-  const NA_RE = /^(n\/?a|not applicable)\b/i;
-  const OTHER_RE = /^other\b/i;
   const SUBMIT_TEXT_RE = /submit|send application|apply/i;
   const SUBMIT_EXCLUDE_RE = /linkedin|indeed|save|draft|back|cancel/i;
   const SUCCESS_URL_RE = /confirmation|thanks|thank-you|thank_you|submitted|success/i;
@@ -105,7 +103,6 @@
     missing: [],
     applyClicked: false,
     hops: 0,             // apply-button hops made by this page load
-    decided: 0,          // fields set by the discretion pass and neutral fallback
     composed: 0,         // fields answered through LIT_COMPOSE_ANSWER
     submitClicks: 0,
     sent: []             // statuses sent, accepted or not
@@ -802,11 +799,7 @@
     return report && Array.isArray(report.filled) ? report.filled.length : 0;
   }
 
-  // --- after the autofill: discretion, composed answers, neutral picks ----------
-  function discretion() {
-    return typeof LitDiscretion !== 'undefined' && LitDiscretion && typeof LitDiscretion.decide === 'function' ? LitDiscretion : null;
-  }
-
+  // --- after the autofill: answers the background knows ------------------------
   function siteAdapter() {
     const c = core();
     try { return c && typeof c.getSiteAdapter === 'function' ? c.getSiteAdapter(currentUrl()) : null; } catch (e) { return null; }
@@ -877,7 +870,7 @@
   // Options a choice field offers, or [] when they are unknown. An
   // option-less dropdown asking a yes/no question gets Yes / No; the fill
   // just fails if the menu has neither.
-  function choiceOptions(desc, label, guessYesNo) {
+  function choiceOptions(desc, label) {
     const opts = Array.isArray(desc.options) ? desc.options.map(collapse).filter(Boolean) : [];
     if (desc.kind === 'checkbox' && opts.length < 2) {
       const pressed = pressOptions(desc.el);
@@ -885,52 +878,12 @@
     }
     if (!['radio', 'select', 'combobox', 'checkbox'].includes(desc.kind)) return [];
     if (opts.length) return opts;
-    if (guessYesNo && desc.kind === 'combobox' && YES_NO_Q_RE.test(label)) return ['Yes', 'No'];
+    if (desc.kind === 'combobox' && YES_NO_Q_RE.test(label)) return ['Yes', 'No'];
     return [];
-  }
-
-  async function loadProfile() {
-    try {
-      if (typeof AutofillStore !== 'undefined' && AutofillStore && typeof AutofillStore.getProfile === 'function') {
-        const p = await AutofillStore.getProfile();
-        if (p && typeof p === 'object') return p;
-      }
-    } catch (e) { /* storage unavailable */ }
-    return {};
   }
 
   function jobInfo(job) {
     return { title: String((job && job.title) || ''), company: String((job && job.company) || '') };
-  }
-
-  // Step 2: housekeeping questions, decided by the rule table. One re-scan
-  // after, for questions that appear once another is answered.
-  async function discretionPass(job, handled) {
-    const D = discretion();
-    if (!D) return 0;
-    const profile = await loadProfile();
-    const tried = new Set();
-    let decided = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      const list = emptyFields(tried);
-      let changed = false;
-      for (const desc of list) {
-        tried.add(desc.el);
-        let out = null;
-        try {
-          out = D.decide(Object.assign({}, desc, { label: questionText(desc), required: isRequired(desc) }), { profile, job: jobInfo(job) });
-        } catch (e) { out = null; }
-        if (!out || out.value === null || out.value === undefined) continue;
-        if (await applyValue(desc, out.value)) {
-          handled.add(desc.el);
-          decided++;
-          changed = true;
-        }
-      }
-      if (!changed || !alive()) break;
-      await sleep(timing.settle);
-    }
-    return decided;
   }
 
   // Visible page text outside the form: the job description, as far as the
@@ -1007,12 +960,12 @@
       return { desc, needsAi, msg: { kind: 'text', question: label, maxLength: ml > 0 ? ml : DEFAULT_MAX_LENGTH, required } };
     }
     if (!required) return null;
-    const options = choiceOptions(desc, label, true);
+    const options = choiceOptions(desc, label);
     if (options.length < 2) return null;
     return { desc, needsAi: false, msg: { kind: 'choice', question: label, options, required } };
   }
 
-  // Step 3: open questions and unanswered required choices go to the
+  // Step 2: open questions and unanswered required choices go to the
   // background, which writes from the profile and answer bank (or Claude when
   // the user turned it on). Up to COMPOSE_PARALLEL requests at once; values
   // are applied one at a time so two dropdowns never open together.
@@ -1059,30 +1012,8 @@
     return composed;
   }
 
-  // Step 4: a required choice still empty takes its neutral option. "Other"
-  // only where the question is not a fact about the applicant.
-  async function neutralPass(handled) {
-    const D = discretion();
-    let picked = 0;
-    for (const desc of emptyFields(handled)) {
-      if (!isRequired(desc)) continue;
-      const label = questionText(desc);
-      const options = choiceOptions(desc, label, false);
-      if (options.length < 2) continue;
-      const factual = D && typeof D.isFactual === 'function' ? D.isFactual(label) : true;
-      const pick = options.find(o => NEUTRAL_RE.test(o)) || options.find(o => NA_RE.test(o)) ||
-        (factual ? null : options.find(o => OTHER_RE.test(o)));
-      if (!pick) continue;
-      if (await applyValue(desc, pick)) {
-        handled.add(desc.el);
-        picked++;
-      }
-    }
-    return picked;
-  }
-
   function counts(extra) {
-    return Object.assign({ filled: state.filled, composed: state.composed, decided: state.decided }, extra || {});
+    return Object.assign({ filled: state.filled, composed: state.composed }, extra || {});
   }
 
   // --- the run -------------------------------------------------------------------
@@ -1164,14 +1095,11 @@
 
     // Fields the passes below set, so a later pass leaves them alone.
     const handled = new Set();
-    state.phase = 'deciding';
-    state.decided = await discretionPass(job, handled);
     state.phase = 'composing';
     state.composed = await composePass(job, handled);
     if (!alive()) { state.phase = 'dead'; return state; }
-    state.decided += await neutralPass(handled);
-    state.filled = filled + state.decided + state.composed;
-    if (state.decided || state.composed) await sleep(timing.settle);
+    state.filled = filled + state.composed;
+    if (state.composed) await sleep(timing.settle);
 
     state.phase = 'verifying';
     const missing = missingRequired(document);

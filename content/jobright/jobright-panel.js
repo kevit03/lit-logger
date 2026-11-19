@@ -6,6 +6,13 @@
 // background orchestrator does the rest (LIT_BATCH_START). While a batch
 // exists the sheet becomes a live view of `lit_batch`.
 //
+// Every job is preselected except sign-in walls and ones already applied to:
+// the batch runs on its own and leaves anything it cannot finish open for
+// the user. On open it asks LIT_BATCH_CAPS and says, in one quiet line each,
+// when company sites cannot be reached (no all-sites access) or open
+// questions cannot be written (no Claude key; links to the options page via
+// LIT_OPEN_OPTIONS).
+//
 // This script only reads Jobright's own list API (same origin, the user's
 // cookies) and only writes `lit_batch_prefs`. It never clicks anything on the
 // Jobright page. Everything lives in a closed shadow root so neither side's
@@ -53,8 +60,10 @@
     supported: 'Supported',
     generic: 'Generic form',
     signin: 'Sign-in needed',
-    unsupported: 'Not supported'
+    unsupported: 'Company site'
   };
+  const CAPS_SITES_TEXT = 'Turn on Detect applications on any career site in LIT settings so company sites can be filled.';
+  const CAPS_AI_TEXT = 'Add a Claude API key in Autofill profile to write answers to open questions.';
   const STATUS_LABEL = {
     queued: 'Queued',
     opening: 'Opening',
@@ -252,6 +261,9 @@
     .switch:checked { background: var(--accent); }
     .switch:checked::after { transform: translateX(14px); background: var(--knob); }
     .hint { margin: -6px 0 0; font-size: 12px; color: var(--text-3); }
+    .caps { margin: 0; font-size: 12px; color: var(--text-2); }
+    .caps.quiet { color: var(--text-3); }
+    .caps .link { padding: 0; font-size: 12px; white-space: normal; }
     .error { margin: 0; font-size: 12px; color: var(--danger); }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .link { padding: 6px 2px; color: var(--accent-text); }
@@ -293,7 +305,8 @@
     batch: null,
     startError: '',
     actionError: '',
-    starting: false
+    starting: false,
+    caps: null             // { allSites, ai } from LIT_BATCH_CAPS, null until known
   };
   let ui = null;           // { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot }
   let pollTimer = null;
@@ -482,7 +495,7 @@
         // Preselect once, when a job first appears; later the user decides.
         if (!st.seen.has(job.jobId)) {
           st.seen.add(job.jobId);
-          if (classifyHost(job.host) === 'supported' && !st.done[job.jobId]) st.selected.add(job.jobId);
+          if (preselectable(job)) st.selected.add(job.jobId);
         }
       });
       st.position = position + size;
@@ -582,12 +595,18 @@
     return st.jobs.filter(j => st.selected.has(j.jobId));
   }
 
-  function supportedOpen() {
-    return st.jobs.filter(j => classifyHost(j.host) === 'supported' && !st.done[j.jobId]);
+  // Full autonomy: everything LIT can get into on its own. Sign-in walls stay
+  // off until the user picks them.
+  function preselectable(job) {
+    return classifyHost(job.host) !== 'signin' && !st.done[job.jobId];
   }
 
-  function toggleSupported() {
-    const targets = supportedOpen();
+  function selectableOpen() {
+    return st.jobs.filter(preselectable);
+  }
+
+  function toggleAll() {
+    const targets = selectableOpen();
     const all = targets.length > 0 && targets.every(j => st.selected.has(j.jobId));
     if (all) st.selected.clear();
     else { st.selected.clear(); targets.forEach(j => st.selected.add(j.jobId)); }
@@ -633,6 +652,16 @@
     return response;
   }
 
+  async function loadCaps() {
+    const response = await send({ type: 'LIT_BATCH_CAPS' });
+    st.caps = response && typeof response.allSites === 'boolean'
+      ? { allSites: response.allSites, ai: !!response.ai }
+      : null;
+    render();
+    return st.caps;
+  }
+
+  const openOptions = () => send({ type: 'LIT_OPEN_OPTIONS' });
   const stopBatch = () => action({ type: 'LIT_BATCH_STOP' });
   const focusJob = jobId => action({ type: 'LIT_BATCH_FOCUS', jobId });
   async function clearBatch() {
@@ -861,12 +890,21 @@
       ? 'Anything LIT is unsure of stays open for you.'
       : 'Forms are filled and left open for you to submit.'));
 
+    if (st.caps && !st.caps.allSites && selectedJobs().some(j => classifyHost(j.host) === 'unsupported')) {
+      ui.foot.appendChild(h('p', 'caps caps-sites', CAPS_SITES_TEXT));
+    }
+    if (st.caps && !st.caps.ai) {
+      const line = h('p', 'caps quiet caps-ai', CAPS_AI_TEXT + ' ');
+      line.appendChild(keyed(button('link open-options', 'Open Autofill profile', () => { openOptions(); }), 'open-options'));
+      ui.foot.appendChild(line);
+    }
+
     if (st.startError) ui.foot.appendChild(h('p', 'error start-error', st.startError));
 
     const actions = h('div', 'actions');
-    const targets = supportedOpen();
+    const targets = selectableOpen();
     const allOn = targets.length > 0 && targets.every(j => st.selected.has(j.jobId));
-    const sel = button('link select-supported', allOn ? 'Clear selection' : 'Select all supported', toggleSupported);
+    const sel = button('link select-all', allOn ? 'Clear selection' : 'Select all', toggleAll);
     sel.disabled = !targets.length && !picked;
     keyed(sel, 'select');
     actions.appendChild(sel);
@@ -883,7 +921,6 @@
     const done = !!st.done[job.jobId];
     const row = h('label', 'job');
     row.setAttribute('data-job-id', job.jobId);
-    if (kind === 'unsupported') row.classList.add('muted');
     const cb = h('input', 'check');
     cb.setAttribute('type', 'checkbox');
     keyed(cb, 'job-' + job.jobId);
@@ -969,7 +1006,7 @@
     if (!ui || !st.onRoute) return Promise.resolve();
     st.open = true;
     render();
-    return ensureJobs();
+    return Promise.all([ensureJobs(), loadCaps()]).then(() => undefined);
   }
 
   // The picker needs a list; a panel that opened into a batch view has none.
@@ -1049,7 +1086,8 @@
       exhausted: st.exhausted,
       batch: st.batch ? { status: st.batch.status, summary: summarize(st.batch.jobs), total: st.batch.jobs.length } : null,
       startError: st.startError,
-      actionError: st.actionError
+      actionError: st.actionError,
+      caps: st.caps ? Object.assign({}, st.caps) : null
     };
   }
 

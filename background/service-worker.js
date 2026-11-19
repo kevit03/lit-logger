@@ -102,8 +102,7 @@ const SHARED_FILES = [
 // button script are safe to load twice.
 const AUTOFILL_SHARED = [
   ['AutofillStore', 'shared/autofill-store.js'],
-  ['AutofillCore', 'shared/autofill-core.js'],
-  ['LitDiscretion', 'shared/discretion.js']
+  ['AutofillCore', 'shared/autofill-core.js']
 ];
 const AUTOFILL_FILES = [
   'content/autofill/sites/greenhouse.js',

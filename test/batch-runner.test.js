@@ -1,7 +1,9 @@
 // Auto-apply orchestrator (background/batch-runner.js): start validation, the
 // concurrency cap, the batch window, HELLO and frame claims, the transition
 // table, timeouts on an injected clock, user-closed tabs, stop/clear/focus,
-// the done record, and surviving a worker restart.
+// the done record, and surviving a worker restart. v2: 90 s / 6 min timeouts,
+// LIT_BATCH_CAPS (never leaks the key), LIT_OPEN_OPTIONS, and the
+// composed counts from driver updates.
 const assert = require('assert');
 const path = require('path');
 const { installMockChrome, uninstallMockChrome } = require('./mock_chrome');
@@ -282,7 +284,11 @@ async function run() {
     await env.LB._tick(env.now + 1000);
     await settle();
     assert.strictEqual(env.injected.filter(id => id === t3).length, 1, 'injection is tried once');
-    env.now = launched3 + 45000;
+    env.now = launched3 + 89000;
+    await env.LB._tick(env.now);
+    await env.settle();
+    assert.strictEqual(env.job('job3').status, 'opening', 'still opening at 89 s: apply-button hops take time');
+    env.now = launched3 + 90000;
     await env.LB._tick(env.now);
     await env.settle();
     assert.strictEqual(env.job('job3').status, 'needs-you');
@@ -295,8 +301,17 @@ async function run() {
     await env.send({ type: 'LIT_BATCH_HELLO' }, env.fromTab(t4));
     await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t4));
     const before = env.injected.length;
-    // Hard timeout: still filling 4 min after launch.
+    // Hard timeout: still filling 6 min after launch (not at 4).
     env.now = env.job('job4').startedAt + 4 * 60 * 1000;
+    await env.LB._tick(env.now);
+    await env.settle();
+    assert.strictEqual(env.job('job4').status, 'filling', 'answer writing may run past 4 min');
+    // The jobs launched into the freed slots start filling, so they are still
+    // in flight two minutes later.
+    for (const j of env.batch().jobs.filter(x => x.status === 'opening')) {
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(j.tabId));
+    }
+    env.now = env.job('job4').startedAt + 6 * 60 * 1000;
     await env.LB._tick(env.now);
     await env.settle();
     assert.strictEqual(env.job('job4').status, 'needs-you');
@@ -456,7 +471,7 @@ async function run() {
     mock.alarms.onAlarm.emit({ name: 'pt-maintenance' });
     await env.settle();
     assert.strictEqual(JSON.stringify(env.batch()), snapshot, 'other alarms do nothing');
-    env.now += 45000;
+    env.now += 90000;
     mock.alarms.onAlarm.emit({ name: 'lit-batch-tick' });
     await env.settle();
     assert.strictEqual(env.job('job2').status, 'needs-you', 'the tick alarm applies timeouts');
@@ -492,6 +507,56 @@ async function run() {
     assert.ok(!mock.alarms.store.has('lit-batch-tick'));
     uninstallMockChrome();
     console.log('[PASS] Alarm routing, and a restarted worker resumes from storage');
+  }
+
+  // 15. v2: timeouts, capabilities, the options link, composed counts.
+  {
+    const env = setup({ af_settings: { showButton: true, aiEnabled: true, aiKey: 'sk-ant-secret-key', aiModel: 'claude-opus-5-5' } });
+    const { mock } = env;
+    let granted = false;
+    const asked = [];
+    mock.permissions = { contains: async q => { asked.push(q); return granted; } };
+    let opened = 0;
+    mock.runtime.openOptionsPage = async () => { opened++; };
+    await env.boot();
+    assert.strictEqual(env.LB.OPEN_TIMEOUT_MS, 90 * 1000);
+    assert.strictEqual(env.LB.HARD_TIMEOUT_MS, 6 * 60 * 1000);
+
+    let caps = await env.send({ type: 'LIT_BATCH_CAPS' });
+    assert.deepStrictEqual(caps, { allSites: false, ai: true });
+    assert.deepStrictEqual(asked[0], { origins: ['*://*/*'] });
+    assert.ok(!JSON.stringify(caps).includes('sk-ant'), 'the key never leaves the worker');
+    granted = true;
+    mock.storage.local.store.af_settings = { aiEnabled: true, aiKey: '   ' };
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_CAPS' }), { allSites: true, ai: false }, 'a blank key is no key');
+    mock.storage.local.store.af_settings = { aiEnabled: false, aiKey: 'sk-ant-x' };
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_CAPS' })).ai, false, 'switched off');
+    delete mock.storage.local.store.af_settings;
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_CAPS' })).ai, false, 'no settings yet');
+    // Callback-style permissions API (older Chrome).
+    mock.permissions = { contains: (q, cb) => { cb(true); } };
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_CAPS' })).allSites, true);
+    delete mock.permissions;
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_CAPS' })).allSites, false, 'no permissions API');
+
+    assert.deepStrictEqual(await env.send({ type: 'LIT_OPEN_OPTIONS' }), { ok: true });
+    assert.strictEqual(opened, 1);
+    mock.runtime.openOptionsPage = async () => { throw new Error('nope'); };
+    assert.strictEqual((await env.send({ type: 'LIT_OPEN_OPTIONS' })).ok, false);
+    assert.strictEqual(env.LB.handleMessage({ type: 'LIT_COMPOSE_ANSWER' }, {}, () => {}), false, 'the answer writer is not ours');
+
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 2, jobs: jobs(2) });
+    await env.settle();
+    assert.strictEqual(env.job('job1').composed, 0);
+    const t1 = env.job('job1').tabId;
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t1));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting', filled: 14, composed: 3.7 }, env.fromTab(t1));
+    assert.strictEqual(env.job('job1').filled, 14);
+    assert.strictEqual(env.job('job1').composed, 3);
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitted', composed: 'lots' }, env.fromTab(t1));
+    assert.strictEqual(env.job('job1').composed, 3, 'non-numbers ignored');
+    uninstallMockChrome();
+    console.log('[PASS] v2: 90 s / 6 min timeouts, LIT_BATCH_CAPS without the key, LIT_OPEN_OPTIONS, composed stored');
   }
 
   console.log('--- test/batch-runner.test.js COMPLETED SUCCESSFULLY ---');

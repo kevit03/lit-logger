@@ -7,9 +7,8 @@
 // runs a caller-supplied plan, the real AutofillCore for scanning, and a fake
 // background that answers LIT_BATCH_HELLO / LIT_BATCH_UPDATE with the
 // contract's transition rules, and (v2) LIT_COMPOSE_ANSWER / LIT_BATCH_CAPS
-// through caller-supplied handlers. The real shared/discretion.js is loaded
-// as the LitDiscretion global; site adapters registered by other suites are
-// set aside for each page and restored at cleanup.
+// through caller-supplied handlers. Site adapters registered by other suites
+// are set aside for each page and restored at cleanup.
 const fs = require('fs');
 const path = require('path');
 const dom = require('./mock_dom');
@@ -19,7 +18,6 @@ const ROOT = path.resolve(__dirname, '..');
 const DRIVER = path.join(ROOT, 'content', 'autofill', 'auto-apply.js');
 const AA_FIXTURES = path.join(__dirname, 'fixtures', 'auto-apply');
 const CORE = require('../shared/autofill-core.js');
-const DISCRETION = require('../shared/discretion.js');
 const SAVED_ADAPTERS = CORE.listSiteAdapters();
 
 function readFixture(name) {
@@ -208,8 +206,6 @@ function page(opts = {}) {
   global.document = doc;
   global.location = location;
   global.AutofillCore = CORE;
-  if (opts.noDiscretion) delete global.LitDiscretion;
-  else global.LitDiscretion = DISCRETION;
   if (opts.profile) global.AutofillStore = { getProfile: async () => opts.profile };
   else delete global.AutofillStore;
   CORE._resetSiteAdapters();
@@ -231,7 +227,6 @@ function cleanup() {
   delete global.location;
   delete global.chrome;
   delete global.AutofillCore;
-  delete global.LitDiscretion;
   delete global.AutofillStore;
   CORE._resetSiteAdapters();
   SAVED_ADAPTERS.forEach(a => CORE.registerSiteAdapter(a));
