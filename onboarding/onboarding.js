@@ -155,10 +155,10 @@
   async function saveFocus() {
     if (!hasStorage) return;
     const areas = FOCUS.map(f => f.id).filter(id => state.focus.has(id));
-    if (typeof TrackerStorage.setFocusAreas === 'function') {
-      await TrackerStorage.setFocusAreas(areas);
-    }
-    await TrackerStorage.setPrefs({ focusAreas: areas });
+    // setFocusAreas also saves prefs.focusAreas; older storage builds only
+    // get the preference.
+    if (typeof TrackerStorage.setFocusAreas === 'function') await TrackerStorage.setFocusAreas(areas);
+    else await TrackerStorage.setPrefs({ focusAreas: areas });
   }
 
   // ----- Step 2: goal, going for, rest days ----------------------------------

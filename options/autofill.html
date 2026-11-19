@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LIT Autofill</title>
+  <title>LIT Autofill profile</title>
   <link rel="stylesheet" href="autofill.css">
 </head>
 <body>
@@ -11,13 +11,16 @@
     <div class="topbar-inner">
       <div class="brand">
         <img src="../icons/icon48.png" alt="" width="28" height="28">
-        <h1>Autofill</h1>
+        <div class="brand-text">
+          <h1>Autofill profile</h1>
+          <span class="brand-sub">Fill once, reuse on every application</span>
+        </div>
       </div>
       <nav class="tabs" role="tablist" aria-label="Sections">
         <button type="button" role="tab" id="tab-profile" data-tab="profile" aria-controls="profile">Profile</button>
         <button type="button" role="tab" id="tab-resume" data-tab="resume" aria-controls="resume">Resume</button>
         <button type="button" role="tab" id="tab-answers" data-tab="answers" aria-controls="answers">Answers<span class="count" id="count-answers"></span></button>
-        <button type="button" role="tab" id="tab-rules" data-tab="rules" aria-controls="rules">Rules<span class="count" id="count-rules"></span></button>
+        <button type="button" role="tab" id="tab-rules" data-tab="rules" aria-controls="rules">Learned<span class="count" id="count-rules"></span></button>
         <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-controls="settings">Settings</button>
       </nav>
       <span id="save-status" class="save-status is-idle is-visible" role="status" aria-live="polite">Saves automatically</span>
@@ -29,7 +32,10 @@
 
     <section id="profile" class="panel" role="tabpanel" aria-labelledby="tab-profile">
       <div class="panel-head">
-        <h2>Profile</h2>
+        <div>
+          <h2>Your profile</h2>
+          <p class="panel-lede">The basics most application forms ask for. LIT types them in for you, and nothing is ever submitted without you.</p>
+        </div>
         <div class="progress">
           <span id="progress-text" class="progress-text"></span>
           <div class="meter" aria-hidden="true"><span id="progress-bar"></span></div>
@@ -40,7 +46,10 @@
 
     <section id="resume" class="panel hidden" role="tabpanel" aria-labelledby="tab-resume">
       <div class="panel-head">
-        <h2>Resume</h2>
+        <div>
+          <h2>Resume</h2>
+          <p class="panel-lede">LIT attaches this file when a form asks for a resume.</p>
+        </div>
       </div>
       <div id="resume-drop" class="dropzone is-empty">
         <span class="file-mark" aria-hidden="true">
@@ -62,9 +71,12 @@
 
     <section id="answers" class="panel hidden" role="tabpanel" aria-labelledby="tab-answers">
       <div class="panel-head">
-        <h2>Saved answers</h2>
+        <div>
+          <h2>Saved answers</h2>
+          <p class="panel-lede">Write an answer once and LIT offers it again when a similar question comes up.</p>
+        </div>
         <div class="head-actions">
-          <input type="search" id="answers-search" class="input input-search" placeholder="Search" aria-label="Search saved answers">
+          <input type="search" id="answers-search" class="input input-search" placeholder="Search your answers" aria-label="Search saved answers">
           <button type="button" class="btn btn-accent" id="answer-add-btn">Add answer</button>
         </div>
       </div>
@@ -75,7 +87,7 @@
         </div>
         <div class="field">
           <label class="field-label" for="answer-new-text">Answer</label>
-          <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Your answer"></textarea>
+          <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Write it the way you would say it"></textarea>
         </div>
         <div class="row-actions">
           <button type="button" class="btn btn-ghost" id="answer-new-cancel">Cancel</button>
@@ -89,15 +101,18 @@
 
     <section id="rules" class="panel hidden" role="tabpanel" aria-labelledby="tab-rules">
       <div class="panel-head">
-        <h2>Learned rules</h2>
+        <div>
+          <h2>What LIT has learned</h2>
+          <p class="panel-lede">When you fix a field after autofill, LIT remembers it for next time. Remove anything that looks wrong.</p>
+        </div>
         <div class="head-actions">
-          <input type="search" id="rules-search" class="input input-search" placeholder="Filter by site or label" aria-label="Filter learned rules">
+          <input type="search" id="rules-search" class="input input-search" placeholder="Search by site or question" aria-label="Search what LIT has learned">
         </div>
       </div>
       <div class="card table-wrap" id="rules-card">
         <table class="rules-table">
           <thead>
-            <tr><th scope="col">Site</th><th scope="col">Label</th><th scope="col">Maps to</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+            <tr><th scope="col">Where</th><th scope="col">When a form asks</th><th scope="col">LIT fills</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
           </thead>
           <tbody id="rules-body"></tbody>
         </table>
@@ -107,26 +122,43 @@
 
     <section id="settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings">
       <div class="panel-head">
-        <h2>Settings</h2>
+        <div>
+          <h2>Settings</h2>
+          <p class="panel-lede">Choose how much LIT helps on application pages.</p>
+        </div>
       </div>
       <div class="card rows">
-        <label class="row" title="Adds an Autofill button to job application pages">
-          <span class="row-title">Show the Autofill button</span>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Show the Autofill button</span>
+            <span class="row-sub">A small button on job application pages. Alt+Shift+F works either way.</span>
+          </span>
           <input type="checkbox" class="switch" data-setting="showButton" aria-label="Show the Autofill button">
         </label>
-        <label class="row" title="Fills gender, race, veteran and disability questions from the EEO answers in your profile">
-          <span class="row-title">Fill EEO questions</span>
-          <input type="checkbox" class="switch" data-setting="fillEeo" aria-label="Fill EEO questions">
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Fill diversity questions</span>
+            <span class="row-sub">Optional. Uses your answers from "Diversity questions" in your profile.</span>
+          </span>
+          <input type="checkbox" class="switch" data-setting="fillEeo" aria-label="Fill diversity questions">
         </label>
-        <label class="row" title="Saves a rule whenever you fix or fill a field after autofill">
-          <span class="row-title">Learn from corrections</span>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Learn from my fixes</span>
+            <span class="row-sub">When you fix a field after autofill, LIT remembers it for next time.</span>
+          </span>
           <input type="checkbox" class="switch" data-setting="autoLearn" aria-label="Learn from corrections">
         </label>
       </div>
 
-      <h3 class="panel-subhead" id="answer-writing">Answer writing</h3>
+      <details class="advanced" id="answer-writing">
+        <summary class="advanced-summary">
+          <span class="advanced-title">Advanced (AI answers)</span>
+          <span class="advanced-sub">Optional. Let Claude draft answers to open questions like "Why this company?"</span>
+        </summary>
       <div class="card rows">
-        <label class="row" title="Lets auto-apply write answers to open questions with Claude, using only your profile and saved answers">
+        <p class="row-note row-note-top">Most people never need this. If you have your own Anthropic API key, LIT can use it to draft answers from your profile and saved answers. You stay in control: nothing is submitted for you.</p>
+        <label class="row">
           <span class="row-title">Write answers with Claude</span>
           <input type="checkbox" class="switch" data-setting="aiEnabled" aria-label="Write answers with Claude">
         </label>
@@ -146,27 +178,34 @@
         </div>
         <p class="row-note" id="ai-note">Your profile, saved answers, and the job description are sent to Anthropic to write answers. The key never leaves this device except to api.anthropic.com.</p>
       </div>
+      </details>
 
-      <h3 class="panel-subhead" id="data">Data</h3>
+      <h3 class="panel-subhead" id="data">Your data</h3>
       <div class="card rows">
         <div class="row">
-          <span class="row-title">Backup</span>
+          <span class="row-text">
+            <span class="row-title">Backup</span>
+            <span class="row-sub">Save a copy of your profile, answers, and resume as a file.</span>
+          </span>
           <div class="row-actions">
-            <button type="button" class="btn btn-ghost" id="export-btn" title="Downloads a JSON backup of everything on this page, including your resume">Export</button>
+            <button type="button" class="btn btn-ghost" id="export-btn" title="Downloads a backup file of everything on this page, including your resume">Export</button>
             <button type="button" class="btn btn-ghost" id="import-btn" title="Restores a backup file. Asks before replacing anything">Import</button>
             <input type="file" id="import-file" accept="application/json,.json" class="hidden">
           </div>
         </div>
         <div id="import-confirm" class="confirm-panel hidden" role="group" aria-labelledby="import-confirm-title">
           <p class="confirm-title" id="import-confirm-title"></p>
-          <p class="confirm-text">Replaces your profile, answers, rules, settings and resume. You can undo right after.</p>
+          <p class="confirm-text">This swaps in the file's profile, answers, learned fixes, settings, and resume. You can undo right after.</p>
           <div class="row-actions">
             <button type="button" class="btn btn-ghost" id="import-cancel">Keep my data</button>
             <button type="button" class="btn btn-danger" id="import-confirm-btn">Replace with file</button>
           </div>
         </div>
         <div class="row">
-          <span class="row-title">Erase all autofill data</span>
+          <span class="row-text">
+            <span class="row-title">Erase all autofill data</span>
+            <span class="row-sub">Clears this page. Your job tracker history is not touched.</span>
+          </span>
           <button type="button" class="btn btn-danger-ghost" id="clear-all-btn">Erase</button>
         </div>
       </div>

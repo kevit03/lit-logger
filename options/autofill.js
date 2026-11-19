@@ -51,10 +51,11 @@
     {
       title: 'Links',
       fields: [
-        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'https://www.linkedin.com/in/...' },
-        { key: 'github', label: 'GitHub', type: 'url', placeholder: 'https://github.com/...' },
-        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'https://' },
-        { key: 'website', label: 'Website', type: 'url', placeholder: 'https://' }
+        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'https://www.linkedin.com/in/your-name' },
+        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'Work samples, a Behance or Dribbble page' },
+        { key: 'website', label: 'Website', type: 'url', placeholder: 'Personal site or blog' },
+        // Only some roles ask for it, so it sits last and is not counted.
+        { key: 'github', label: 'GitHub', type: 'url', placeholder: 'https://github.com/your-name', optional: true }
       ]
     },
     {
@@ -90,8 +91,8 @@
       ]
     },
     {
-      title: 'EEO',
-      note: 'Filled only while "Fill EEO questions" is on in Settings.',
+      title: 'Diversity questions (optional)',
+      note: 'Always voluntary, and "Leave blank" is fine. LIT fills these only while "Fill diversity questions" is on in Settings.',
       optional: true,
       fields: [
         { key: 'eeo.gender', label: 'Gender', options: eeo(['Male', 'Female', 'Non-binary', DECLINE]) },
@@ -220,7 +221,7 @@
 
   function reportError(err) {
     setStatus('Not saved', 'error');
-    showError(el('page-error'), errText(err));
+    showError(el('page-error'), "Something didn't save: " + errText(err));
   }
 
   // Tracks a storage write in the save indicator. Storage changes made by
@@ -421,8 +422,11 @@
           // text under every field.
           if (f.hint) control.node.title = f.hint;
           controls[f.key] = control;
+          // Optional fields say so, unless the whole group is optional.
+          const label = make('label', { className: 'field-label', id: id + '-label', for: f.toggle ? undefined : id, text: f.label });
+          if (f.optional && !group.optional) label.append(make('span', { className: 'field-optional', text: 'optional' }));
           return make('div', { className: 'field' + (f.wide ? ' wide' : '') }, [
-            make('label', { className: 'field-label', id: id + '-label', for: f.toggle ? undefined : id, text: f.label }),
+            label,
             control.root || control.node
           ]);
         }))
@@ -483,7 +487,7 @@
     el('resume-upload-btn').textContent = resume ? 'Replace' : 'Choose file';
     if (!resume) {
       el('resume-name').textContent = 'Drop your resume here';
-      el('resume-meta').textContent = 'PDF, DOC, DOCX, RTF or TXT, up to 5 MB';
+      el('resume-meta').textContent = 'Or choose a file. PDF, Word, RTF, or plain text, up to 5 MB.';
       download.removeAttribute('href');
       return;
     }
@@ -507,7 +511,7 @@
     if (!file) return;
     showError(resumeError, '');
     if (file.size > store.RESUME_MAX_BYTES) {
-      showError(resumeError, '"' + file.name + '" is ' + formatBytes(file.size) + '. The limit is 5 MB.');
+      showError(resumeError, '"' + file.name + '" is ' + formatBytes(file.size) + ', a bit over the 5 MB limit. A PDF export is usually smaller.');
       return;
     }
     try {
@@ -581,9 +585,10 @@
     // With nothing saved yet, offer starting points: each opens the
     // new-answer form with the question filled in.
     renderEmpty('answers-empty', !visible.length, lists.answers.length
-      ? [make('p', { text: 'No saved answers match "' + search.text + '".' })]
+      ? [make('p', { text: 'Nothing matches "' + search.text + '". Try a shorter word.' })]
       : [
-        make('p', { text: 'No saved answers yet. Start from a common question:' }),
+        make('p', { className: 'empty-title', text: 'No saved answers yet' }),
+        make('p', { text: 'Pick a question most applications ask, and write your answer once:' }),
         make('div', { className: 'template-list' },
           ANSWER_TEMPLATES.map(q => button('btn btn-ghost btn-sm template-btn', q, () => openNewAnswer(q))))
       ]);
@@ -607,7 +612,7 @@
       const answer = aText.value;
       if (question === a.question && answer === a.answer) return;
       if (!question || !answer.trim()) {
-        showError(err, 'A saved answer needs both a question and an answer. Use Delete to remove it.');
+        showError(err, 'A saved answer needs both a question and an answer. To remove it, use Delete.');
         return;
       }
       showError(err, '');
@@ -667,12 +672,12 @@
 
   function ruleRow(rule) {
     const [kind, target] = rule.profileKey
-      ? ['Profile', FIELD_LABELS[rule.profileKey] || rule.profileKey]
-      : ['Value', rule.value === '' ? '(empty)' : rule.value];
-    const del = button('btn btn-danger-ghost btn-sm', 'Delete');
-    armedDelete(del, 'Yes, delete rule', () => deleteEntry('rules', rule.id, id => store.deleteRule(id), 'Rule deleted.'));
+      ? ['Your profile', FIELD_LABELS[rule.profileKey] || rule.profileKey]
+      : ['Your answer', rule.value === '' ? '(left blank)' : rule.value];
+    const del = button('btn btn-danger-ghost btn-sm', 'Forget');
+    armedDelete(del, 'Yes, forget it', () => deleteEntry('rules', rule.id, id => store.deleteRule(id), 'LIT forgot that one.'));
     return make('tr', null, [
-      make('td', { className: 'mono' }, [rule.host === '*' ? make('span', { className: 'chip', text: 'All sites' }) : rule.host]),
+      make('td', { className: 'site' }, [rule.host === '*' ? make('span', { className: 'chip', text: 'Every site' }) : rule.host]),
       make('td', { text: rule.labelKey }),
       make('td', null, [make('span', { className: 'chip chip-soft', text: kind }), ' ', target]),
       make('td', { className: 'actions' }, [del])
@@ -688,13 +693,17 @@
 
     let empty;
     if (lists.rules.length) {
-      empty = [make('p', { text: 'No rules match "' + search.text + '".' })];
+      empty = [make('p', { text: 'Nothing matches "' + search.text + '".' })];
     } else if (settings.autoLearn) {
-      empty = [make('p', { text: 'No rules yet. Fix a field after autofill and LIT remembers it here.' })];
+      empty = [
+        make('p', { className: 'empty-title', text: 'Nothing learned yet' }),
+        make('p', { text: 'After autofill, fix any field that came out wrong. LIT remembers it here for next time.' })
+      ];
     } else {
       // The likely reason for an empty list, with the fix one click away.
       empty = [
-        make('p', { text: 'No rules yet. Learn from corrections is off.' }),
+        make('p', { className: 'empty-title', text: 'Nothing learned yet' }),
+        make('p', { text: '"Learn from my fixes" is off, so LIT is not remembering corrections.' }),
         button('btn btn-ghost btn-sm', 'Turn it on', () => saveSetting('autoLearn', true).catch(() => {}))
       ];
     }
@@ -826,7 +835,7 @@
       const snapshot = await store.exportAll({ includeKey: true });
       const counts = await write(store.importAll(job.text));
       await loadAll();
-      setStatus('Imported ' + counts.answers + ' answers, ' + counts.rules + ' rules', 'saved');
+      setStatus('Imported ' + counts.answers + ' answers and ' + counts.rules + ' learned fixes', 'saved');
       offerUndo('Imported "' + job.name + '".', () => store.importAll(snapshot));
     } catch (err) {
       reportError(err);
@@ -841,24 +850,57 @@
   });
 
   // ---------------------------------------------------------------------------
-  // Theme (follows the popup's light/dark choice)
+  // Look: the popup's light/dark choice (the OS scheme until one is made),
+  // plus the accent color and comfort mode from LIT's preferences.
   // ---------------------------------------------------------------------------
+  let chosenTheme = '';
+
+  function prefersDark() {
+    try {
+      return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function applyTheme(theme) {
-    document.body.classList.toggle('pt-dark', theme === 'dark');
+    chosenTheme = theme === 'dark' || theme === 'light' ? theme : '';
+    document.body.classList.toggle('pt-dark', chosenTheme ? chosenTheme === 'dark' : prefersDark());
+  }
+
+  const ACCENT_IDS = ['coral', 'sage', 'ocean', 'plum', 'amber', 'slate'];
+  function applyPrefs(prefs) {
+    const root = document.documentElement;
+    if (!root || typeof root.setAttribute !== 'function') return;
+    const p = prefs && typeof prefs === 'object' ? prefs : {};
+    root.setAttribute('data-accent', ACCENT_IDS.indexOf(p.accent) >= 0 ? p.accent : 'coral');
+    root.setAttribute('data-comfort', p.comfortMode ? 'on' : 'off');
+  }
+
+  // Theme and prefs live in sync storage when it is there, else local.
+  function readSetting(key, done) {
+    const area = chrome.storage.sync || chrome.storage.local;
+    area.get([key], r => {
+      if (r && r[key] !== undefined) return done(r[key]);
+      if (area === chrome.storage.local) return done(undefined);
+      chrome.storage.local.get([key], l => done(l && l[key]));
+    });
   }
 
   function loadTheme() {
     try {
-      const area = chrome.storage.sync || chrome.storage.local;
-      area.get(['pt_theme'], r => {
-        if (r && r.pt_theme) return applyTheme(r.pt_theme);
-        chrome.storage.local.get(['pt_theme'], l => applyTheme(l && l.pt_theme));
-      });
+      readSetting('pt_theme', applyTheme);
+      readSetting('pt_prefs', applyPrefs);
       chrome.storage.onChanged.addListener(changes => {
         if (changes.pt_theme) applyTheme(changes.pt_theme.newValue);
+        if (changes.pt_prefs) applyPrefs(changes.pt_prefs.newValue);
       });
+      if (typeof window.matchMedia === 'function') {
+        const mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', () => { if (!chosenTheme) applyTheme(''); });
+      }
     } catch (e) {
-      // Light theme by default.
+      // Light theme and the default accent.
     }
   }
 

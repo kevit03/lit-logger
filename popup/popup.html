@@ -729,11 +729,11 @@
           <h3 id="email-signin-title">Sign in with your Google email</h3>
           <button id="close-email-signin-modal" class="close-btn" type="button" aria-label="Close" title="Close">&times;</button>
         </div>
-        <p class="form-hint">Signing in keeps your streak on every computer where you use Chrome.</p>
+        <p class="form-hint" id="email-signin-hint">Signing in keeps your streak on every computer where you use Chrome.</p>
         <form id="email-signin-form">
           <div class="form-group">
-            <label for="email-signin-input">Your Google email</label>
-            <input type="email" id="email-signin-input" placeholder="you@gmail.com" autocomplete="email" spellcheck="false" required title="Each account keeps its own entries" />
+            <label for="email-signin-input" id="email-signin-label">Your Google email</label>
+            <input type="email" id="email-signin-input" placeholder="you@gmail.com" autocomplete="email" spellcheck="false" required title="Each account or profile keeps its own entries" />
           </div>
           <div class="modal-actions">
             <button type="button" id="cancel-email-signin-btn" class="btn btn-ghost">Cancel</button>

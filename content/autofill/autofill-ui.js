@@ -21,7 +21,7 @@
 //   - A missed short field filled with a profile value learns label -> key.
 //   - Any other value asks "Remember this for '<label>'?" and saves a literal.
 //   - Overwriting a filled field with another profile value moves the rule.
-//   - A textarea left with 40+ characters offers "Save to answer bank?".
+//   - A textarea left with 40+ characters offers "Add to your saved answers?".
 // Nothing is ever learned from password, card, or SSN-like fields, and
 // nothing on the page is ever clicked.
 //
@@ -86,7 +86,20 @@
   // `at-left` flip the stacking and alignment so cards never hang offscreen.
   const UI_CSS = `
     :host { all: initial; }
+    /* "Warm Coach": a light card in the user's accent (set on .wrap from
+       LIT's prefs), dark when the OS is dark. */
     .wrap {
+      --surface: #FFFFFF;
+      --surface-2: #F4EFE7;
+      --ink: #2A2622;
+      --body: #4A433D;
+      --muted: #6F665E;
+      --line: #ECE5DA;
+      --success: #5E9270;
+      --warn: #B7791F;
+      --accent: var(--accent-l, #E0674B);
+      --on-accent: #FFFFFF;
+      --shadow: 0 12px 32px rgba(42, 38, 34, 0.14), 0 2px 6px rgba(42, 38, 34, 0.08);
       position: fixed;
       right: 16px;
       bottom: 16px;
@@ -96,15 +109,30 @@
       align-items: flex-end;
       gap: 8px;
       pointer-events: none;
-      font-family: "Google Sans", Inter, Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
-      color: #ecedee;
+      color: var(--ink);
       transition: opacity 160ms ease;
+    }
+    @media (prefers-color-scheme: dark) {
+      .wrap {
+        --surface: #26221E;
+        --surface-2: #2F2A25;
+        --ink: #F3EDE4;
+        --body: #D9D1C6;
+        --muted: #A89E92;
+        --line: #3A342D;
+        --success: #82B592;
+        --warn: #E3A54A;
+        --accent: var(--accent-d, #F07A5E);
+        --on-accent: #1C1916;
+        --shadow: 0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+      }
     }
     .wrap.at-top { flex-direction: column-reverse; }
     .wrap.at-left { align-items: flex-start; }
     .wrap.dragging, .wrap.dragging * { cursor: grabbing !important; user-select: none; }
-    .wrap.dragging .card, .wrap.dragging .dock { box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.25); }
+    .wrap.dragging .card, .wrap.dragging .dock { box-shadow: 0 18px 40px rgba(42, 38, 34, 0.28), 0 2px 6px rgba(42, 38, 34, 0.16); }
     .stack { display: flex; flex-direction: column; gap: 8px; align-items: inherit; }
     .wrap.at-top .stack { flex-direction: column-reverse; }
     button {
@@ -116,22 +144,26 @@
       font-size: 12px;
       line-height: 1;
       padding: 7px 11px;
-      border-radius: 8px;
-      color: #ecedee;
-      background: rgba(255, 255, 255, 0.07);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      color: var(--ink);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
       white-space: nowrap;
       transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-    button:hover { background: rgba(255, 255, 255, 0.14); }
+    button:hover { background: var(--line); }
     button:active { transform: scale(0.97); }
-    button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 2px; }
-    /* In a card the main answer is a blue tint, not a fill: the solid blue
-       stays on the Autofill button alone. */
-    button.primary { background: rgba(138, 180, 248, 0.16); color: #aecbfa; border-color: rgba(138, 180, 248, 0.38); }
-    button.primary:hover { background: rgba(138, 180, 248, 0.26); }
-    button.quiet { background: transparent; border-color: transparent; color: #9aa0a6; }
-    button.quiet:hover { background: rgba(255, 255, 255, 0.08); color: #ecedee; }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* In a card the main answer is an accent tint, not a fill: the solid
+       accent stays on the Autofill button alone. */
+    button.primary {
+      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+      color: var(--ink);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    }
+    button.primary:hover { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+    button.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+    button.quiet:hover { background: var(--surface-2); color: var(--ink); }
     .hidden { display: none !important; }
 
     .grip {
@@ -141,12 +173,12 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #7c8086;
+      color: var(--muted);
       cursor: grab;
       touch-action: none;
       border-radius: 6px;
     }
-    .grip:hover { color: #ecedee; }
+    .grip:hover { color: var(--ink); }
     .grip svg { display: block; }
 
     .dock {
@@ -156,20 +188,20 @@
       gap: 2px;
       padding: 3px;
       border-radius: 999px;
-      background: rgba(24, 25, 28, 0.94);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.2);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
       transition: box-shadow 160ms ease;
     }
     .dock .grip { width: 16px; margin-left: 4px; }
-    /* The one control in brand blue: everything else in the widget is
+    /* The one control in the accent: everything else in the widget is
        neutral, so the Autofill button is what the eye lands on. */
     .fab {
       font-size: 13px;
       padding: 8px 14px 8px 12px;
       border-radius: 999px;
-      background: #8ab4f8;
-      color: #111316;
+      background: var(--accent);
+      color: var(--on-accent);
       border-color: transparent;
       touch-action: none;
     }
@@ -183,7 +215,7 @@
       background: currentColor;
       vertical-align: 1px;
     }
-    .fab:hover { background: #aecbfa; }
+    .fab:hover { background: var(--accent); filter: brightness(1.06); }
     .fab.busy { opacity: 0.75; cursor: progress; }
     .fab.busy::before { animation: lit-pulse 900ms ease-in-out infinite; }
     .x {
@@ -197,9 +229,9 @@
       border-radius: 50%;
       background: transparent;
       border-color: transparent;
-      color: #7c8086;
+      color: var(--muted);
     }
-    .x:hover { background: rgba(255, 255, 255, 0.1); color: #ecedee; }
+    .x:hover { background: var(--surface-2); color: var(--ink); }
     .x svg { display: block; }
     /* Hide sits apart from Autofill, behind a hairline, so a slightly-off
        click on the main button does not dismiss the widget. */
@@ -209,7 +241,7 @@
       position: absolute;
       left: -4px; top: 5px; bottom: 5px;
       width: 1px;
-      background: rgba(255, 255, 255, 0.14);
+      background: var(--line);
     }
 
     .card {
@@ -218,12 +250,12 @@
       width: 300px;
       max-width: calc(100vw - 24px);
       padding: 10px 10px 14px 14px;
-      border-radius: 14px;
-      background: rgba(24, 25, 28, 0.97);
+      border-radius: 16px;
+      background: var(--surface);
       font-size: 12px;
       line-height: 1.5;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
       position: relative;
       overflow: hidden;
       animation: lit-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -233,10 +265,10 @@
       position: absolute;
       left: 0; top: 0; bottom: 0;
       width: 3px;
-      background: #5f6368;
+      background: var(--line);
     }
-    .card.success::before { background: #34a853; }
-    .card.warn::before { background: #fbbc04; }
+    .card.success::before { background: var(--accent); }
+    .card.warn::before { background: var(--warn); }
     /* Type scale: 13 title, 12 body and buttons, 11 notes. The title is the
        heaviest and brightest line; the body steps down in contrast. */
     .head { display: flex; align-items: center; gap: 6px; margin: 0 0 4px -6px; }
@@ -248,28 +280,28 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      color: #9aa0a6;
+      color: var(--muted);
     }
     .icon svg { display: block; }
-    .success .icon { color: #81c995; }
-    .warn .icon { color: #fdd663; }
+    .success .icon { color: var(--accent); }
+    .warn .icon { color: var(--warn); }
     .title {
       flex: 1;
       min-width: 0;
       font-size: 13px;
       font-weight: 600;
       line-height: 1.35;
-      color: #ecedee;
+      color: var(--ink);
     }
-    .body { word-break: break-word; padding-right: 4px; color: #bdc1c6; }
+    .body { word-break: break-word; padding-right: 4px; color: var(--body); }
     .value {
       margin-top: 8px;
       margin-right: 4px;
       padding: 6px 8px;
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: #c8cbd0;
+      border-radius: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      color: var(--body);
       font-size: 12px;
       line-height: 1.4;
       max-height: 54px;
@@ -281,21 +313,21 @@
       padding-right: 4px;
       font-size: 11px;
       line-height: 1.45;
-      color: #9aa0a6;
+      color: var(--muted);
     }
-    .key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11px; color: #bdc1c6; }
+    .key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11px; color: var(--body); }
     .key span { display: inline-flex; align-items: center; gap: 6px; }
     .swatch { width: 12px; height: 8px; border-radius: 2px; box-sizing: border-box; }
     .swatch.filled { border: 2px solid #34a853; }
     .swatch.unmatched { border: 2px dashed #f9ab00; }
     .actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
-    .actions button { border-radius: 7px; }
+    .actions button { border-radius: 10px; }
     .bar {
       position: absolute;
       left: 0; bottom: 0;
       height: 2px;
       width: 100%;
-      background: rgba(255, 255, 255, 0.22);
+      background: color-mix(in srgb, var(--accent) 45%, transparent);
       transform-origin: left center;
       animation: lit-drain var(--life, 20000ms) linear forwards;
     }
@@ -604,6 +636,7 @@
     ui = { host, shadow, wrap, stack, dock, fab };
     applyPos();
     loadPos();
+    loadAccent();
     return ui;
   }
 
@@ -622,7 +655,7 @@
   function hideForPage() {
     hiddenForPage = true;
     setFabVisible(false);
-    showToast('Autofill is hidden on this page. Alt+Shift+F or "Autofill this page" in the LIT menu still fills it.', { variant: 'info' });
+    showToast('Autofill is hidden on this page. Press Alt+Shift+F, or pick "Autofill this page" in the LIT menu, whenever you want it.', { variant: 'info' });
   }
 
   // --- position, dragging, and staying out of the way ---------------------------
@@ -695,6 +728,27 @@
     } catch (e) {
       return null;
     }
+  }
+
+  // The user's accent from LIT's prefs (looks only; nothing else reads it).
+  const ACCENTS = {
+    coral: ['#E0674B', '#F07A5E'], sage: ['#5E9270', '#7FB291'], ocean: ['#3B7EA1', '#5FA3C7'],
+    plum: ['#8A5A9E', '#B285C6'], amber: ['#C9821F', '#E3A54A'], slate: ['#3D4A5C', '#A9B6C8']
+  };
+  function loadAccent() {
+    try {
+      if (!alive() || !chrome.storage) return;
+      const area = chrome.storage.sync || chrome.storage.local;
+      if (!area) return;
+      area.get('pt_prefs', items => {
+        try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
+        const prefs = items && items.pt_prefs;
+        const pair = ACCENTS[prefs && prefs.accent];
+        if (!pair || !ui || !ui.wrap.style || typeof ui.wrap.style.setProperty !== 'function') return;
+        ui.wrap.style.setProperty('--accent-l', pair[0]);
+        ui.wrap.style.setProperty('--accent-d', pair[1]);
+      });
+    } catch (e) { /* the default accent is fine */ }
   }
 
   function loadPos() {
@@ -995,7 +1049,7 @@
     const current = { el: null, timer: null };
     const close = () => { if (toast === current) closeToast(); };
     const variant = options.variant || 'info';
-    const titles = { success: 'Autofill', warn: 'Autofill needs attention', info: 'Autofill' };
+    const titles = { success: 'Autofill', warn: 'Autofill needs a hand', info: 'Autofill' };
     const el = buildCard('toast ' + variant, {
       title: options.title || titles[variant] || 'Autofill',
       variant,
@@ -1255,7 +1309,7 @@
       if (doneText) showToast(doneText, { variant: 'success' });
       return true;
     } catch (err) {
-      showToast('Could not save that: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn' });
+      showToast("Couldn't save that: " + (err && err.message ? err.message : 'unknown error'), { variant: 'warn' });
       return false;
     }
   }
@@ -1318,10 +1372,10 @@
     const desc = entry.desc;
     entry.offered = value;
     showPrompt(entry, {
-      title: 'Save to answer bank?',
+      title: 'Add to your saved answers?',
       text: desc.label || labelKeyOf(desc) || 'Long answer',
       value: preview(value, 160),
-      note: 'LIT can reuse it when a similar question comes up.'
+      note: 'LIT will offer it again the next time a similar question comes up.'
     }, [
       {
         label: 'Save answer',
@@ -1329,9 +1383,9 @@
         onClick: async () => {
           try {
             await store.saveAnswer(Object.assign({ question: desc.label || labelKeyOf(desc), answer: value }, pageJobContext()));
-            showToast('Saved to your answer bank.', { variant: 'success' });
+            showToast('Added to Saved answers.', { variant: 'success' });
           } catch (err) {
-            showToast('Could not save that answer: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn' });
+            showToast("Couldn't save that answer: " + (err && err.message ? err.message : 'unknown error'), { variant: 'warn' });
           }
         }
       },
@@ -1345,7 +1399,7 @@
     const value = readValue(desc);
     if (!value || value === entry.value) return;
     entry.value = value;
-    // Long answers are offered to the answer bank on blur instead.
+    // Long answers are offered to Saved answers on blur instead.
     if (desc.kind === 'textarea' && value.length >= ANSWER_MIN_CHARS) return;
     const labelKey = labelKeyOf(desc);
     if (!labelKey) return;
@@ -1563,7 +1617,7 @@
       const need = unmatched.length + skipped.length;
       const empty = filled.length === 0 && profileIsEmpty(profile);
       const text = empty
-        ? 'Your Autofill profile is empty. Open LIT and choose Autofill profile to set it up.'
+        ? 'Your Autofill profile is empty. Add your details once in LIT (Autofill profile) and this button fills them in.'
         : formatResult(filled.length, need);
       // The Autofill button already reads "Fill again", so the toast's copy
       // of it stays secondary.
@@ -1571,11 +1625,11 @@
         variant: filled.length ? 'success' : 'warn',
         durationMs: RESULT_TOAST_MS,
         key: !empty && filled.length + need > 0,
-        note: empty ? '' : 'Nothing was submitted. Check the form before you send it.',
+        note: empty ? '' : 'Nothing was sent. Give the form a quick look before you submit.',
         actions: [{ label: 'Fill again', onClick: () => { fill(); } }]
       });
     } catch (err) {
-      showToast('Autofill could not finish: ' + (err && err.message ? err.message : 'unknown error'), { variant: 'warn', durationMs: RESULT_TOAST_MS });
+      showToast("Autofill couldn't finish: " + (err && err.message ? err.message : 'unknown error'), { variant: 'warn', durationMs: RESULT_TOAST_MS });
     } finally {
       running = false;
       setFabBusy(false);

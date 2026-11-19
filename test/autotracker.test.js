@@ -1715,7 +1715,7 @@ async function run() {
     assert.deepStrictEqual(withCopy.coach, ['Coach says hi.', 'Day 3. Keep it rolling.']);
     assert.strictEqual(withCopy.title, 'Application logged · 1 of 5 today', 'the progress title stays exact');
     assert.deepStrictEqual(seen[0][1], { count: 1, goal: 5, unit: 'applications', label: 'Applications', voice: 'gentle', firstOfDay: true, streak: 3 });
-    assert.deepStrictEqual(seen[1][1], { days: 3, restToday: false, freezeUsed: true }, 'a freeze spent yesterday is passed along');
+    assert.deepStrictEqual(seen[1][1], { days: 3, restToday: false, freezeUsed: true, voice: 'gentle' }, 'a freeze spent yesterday is passed along');
 
     // Placement: top right by default; the Autofill widget's remembered corner otherwise.
     assert.deepStrictEqual(core.toastPlacement(null), { h: 'right', v: 'top', x: 16, y: 16 });
