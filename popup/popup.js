@@ -2385,7 +2385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     li.style.setProperty('--c', options.color || (metric ? metric.color : '#1a73e8'));
     if (options.delay) li.style.animationDelay = Math.min(options.delay, 10) * 18 + 'ms';
     const main = make('div', 'entry-main');
-    const titleText = log.company || log.role || log.notes || (metric ? metric.name : 'Entry');
+    const titleText = log.company || log.role || log.notes || (log.metricId === 'jobs' ? 'Application' : (metric ? metric.name : 'Entry'));
     // A one-tracker list gets a company monogram; mixed lists keep the
     // tracker-colored dot, since there the color tells entries apart.
     if (options.monogram) {
@@ -3186,7 +3186,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         showStatus(coach('rejection', [voice()], 'Every no is a rep. You\'re still in it.'), 'ok');
       } else if ((value === 'interviewing' || value === 'offer') && current !== 'interviewing' && current !== 'offer') {
         showStatus('Moved to ' + statusMeta(value).label + '. That is the work paying off.', 'ok');
-        checkMilestones();
+        checkMilestones(true);
       } else {
         showStatus('Moved ' + (updated.company || updated.role || 'that application') + ' to ' + statusMeta(value).label + '.', 'ok');
       }
@@ -4376,9 +4376,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Milestones: a one-time card with gentle confetti and a Share button
   // ---------------------------------------------------------------------------
   let milestoneShown = null;
-  async function checkMilestones() {
+  // Runs after each data load, but only does work when the totals or the
+  // job stages changed since the last look (the popup stays snappy).
+  let milestoneKey = null;
+  async function checkMilestones(force) {
     if (!has(TrackerStorage, 'getMilestones') || !metrics.length) return;
     const current = metricById(activeMetricId) || metrics[0];
+    const key = current.id + ':' + ((stats && stats.totalLogs) || 0);
+    if (!force && key === milestoneKey) return;
+    milestoneKey = key;
     const ids = current.id === 'jobs' ? ['jobs'] : [current.id, 'jobs'];
     const token = bumpToken('milestones');
     for (const metricId of ids) {

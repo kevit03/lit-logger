@@ -76,7 +76,7 @@
   --accent-fill: var(--accent-ink-l);
   --on-accent: #FFFFFF;
   --accent-soft: color-mix(in srgb, var(--accent) 13%, var(--surface));
-  --success-text: #54735A;
+  --success-text: #4A6650;
   --success-soft: color-mix(in srgb, var(--success) 16%, var(--surface));
   --rest-text: #656C7A;
   --rest-soft: color-mix(in srgb, var(--rest) 18%, var(--surface));
@@ -364,7 +364,7 @@ body.pt-dark .icon-moon { display: none; }
   border: 1px solid var(--border-soft);
   animation: slide-in 0.32s var(--ease);
 }
-.status-line.status-ok { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.status-line.status-ok { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
 .status-line.status-error { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 @keyframes slide-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
@@ -617,7 +617,7 @@ body.pt-dark .tab-indicator { background: var(--surface-3); box-shadow: none; }
 .digest-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .digest-total { grid-area: total; justify-self: end; font-size: var(--fs-md); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .digest-total small { font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); }
-.digest-row.met .digest-total { color: var(--success); }
+.digest-row.met .digest-total { color: var(--success-text); }
 .digest-detail {
   grid-area: detail;
   min-width: 0;
@@ -757,7 +757,7 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
   transition: border-color 0.4s var(--ease), background 0.4s var(--ease), transform 0.4s var(--ease);
 }
 .milestone.reached { border-color: var(--tracker); background: var(--tracker); transform: scale(1.1); }
-.goal-bar.met .milestone.reached { border-color: var(--success); background: var(--success); }
+.goal-bar.met .milestone.reached { border-color: var(--success-text); background: var(--success); }
 .milestone-labels { position: relative; height: 14px; font-size: var(--fs-2xs); color: var(--text-3); font-weight: 600; }
 .milestone-labels span { position: absolute; transform: translateX(-50%); }
 .milestone-labels span:last-child { transform: translateX(-100%); }
@@ -1505,7 +1505,7 @@ body.pt-dark .switch[aria-checked="true"] span { background: var(--bg); }
 .response-legend i { width: 7px; height: 7px; border-radius: 50%; background: var(--stage); }
 
 /* Weekly goal met in the recap: check mark next to the number */
-.digest-check { display: inline-grid; margin-left: 3px; vertical-align: middle; color: var(--success); }
+.digest-check { display: inline-grid; margin-left: 3px; vertical-align: middle; color: var(--success-text); }
 
 /* -/+ steppers in the pipeline count editor */
 .pipeline-editor .stage { grid-template-columns: 148px 1fr auto; }
@@ -1983,4 +1983,4 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
 /* Small additions */
 .sync-dot[data-state="local"] { background: var(--success); }
 .widget-picker-desc { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.35; margin-top: 1px; }
-.widget-picker-row { align-items: center; padding-top: 8px; padding-bottom: 8px; }
+.widget-picker-row { align-items: center; padding-top: 8px; padding-bottom: 8px; flex-shrink: 0; }

@@ -98,7 +98,7 @@
           <span class="date-text" id="current-date-text"></span>
           <span class="day-headline" id="day-headline">Ready when you are</span>
         </div>
-        <span class="streak-pill" id="streak-pill" data-size="0">
+        <span class="streak-pill" id="streak-pill" data-size="0" role="img" aria-label="Fresh start today">
           <span class="flame" id="streak-flame" aria-hidden="true"><svg viewBox="0 0 14 14" width="14" height="14" focusable="false"><path d="M7 12.6c2.5 0 4-1.6 4-3.8 0-1.8-1-3-1.8-4.1.1 1.1-.5 1.7-1 1.7.4-1.8-.3-3.4-1.8-4.7-.1 1.4-.8 2.6-1.8 3.6-.9.9-1.4 2-1.4 3.3 0 2.2 1.4 4 3.8 4z" fill="currentColor"/><path class="flame-core" d="M7 12.4c1.2 0 2-.8 2-1.9 0-.9-.5-1.5-.9-2-.1.6-.5.9-.8.9.1-.9-.3-1.6-.9-2.2-.1.7-.4 1.2-.8 1.7-.4.4-.6.9-.6 1.6 0 1.1.8 1.9 2 1.9z" fill="currentColor"/></svg></span>
           <span class="streak-text" id="streak-text">Fresh start today</span>
           <span class="freeze-chip hidden" id="freeze-chip">
@@ -169,6 +169,23 @@
         </div>
       </section>
 
+      <!-- One-time milestone card -->
+      <section class="milestone-card hidden" id="milestone-card" aria-labelledby="milestone-title">
+        <div class="confetti" id="milestone-confetti" aria-hidden="true"></div>
+        <div class="milestone-badge" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" focusable="false"><path d="M7.5 4h9v4.5a4.5 4.5 0 0 1-9 0z" fill="currentColor"/><path d="M7.5 5.5H5a2.5 2.5 0 0 0 2.6 3.4M16.5 5.5H19a2.5 2.5 0 0 1-2.6 3.4M12 13v3.5M8.5 20h7M9.5 16.5h5V20h-5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="milestone-text">
+          <div class="milestone-kicker">Milestone</div>
+          <div class="milestone-title" id="milestone-title"></div>
+          <p class="milestone-body" id="milestone-body"></p>
+        </div>
+        <div class="milestone-actions">
+          <button type="button" class="btn btn-accent btn-sm" id="milestone-share-btn">Share</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="milestone-dismiss-btn">Nice</button>
+        </div>
+      </section>
+
       <!-- First-run setup checklist (new users only, until done or hidden) -->
       <section class="setup-card first-run-card hidden" id="first-run-card" aria-labelledby="setup-title">
         <header class="setup-head">
@@ -185,23 +202,6 @@
           </button>
         </header>
         <ul class="setup-list first-run-tips" id="first-run-tips"></ul>
-      </section>
-
-      <!-- One-time milestone card -->
-      <section class="milestone-card hidden" id="milestone-card" aria-labelledby="milestone-title">
-        <div class="confetti" id="milestone-confetti" aria-hidden="true"></div>
-        <div class="milestone-badge" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" focusable="false"><path d="M7.5 4h9v4.5a4.5 4.5 0 0 1-9 0z" fill="currentColor"/><path d="M7.5 5.5H5a2.5 2.5 0 0 0 2.6 3.4M16.5 5.5H19a2.5 2.5 0 0 1-2.6 3.4M12 13v3.5M8.5 20h7M9.5 16.5h5V20h-5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div class="milestone-text">
-          <div class="milestone-kicker">Milestone</div>
-          <div class="milestone-title" id="milestone-title"></div>
-          <p class="milestone-body" id="milestone-body"></p>
-        </div>
-        <div class="milestone-actions">
-          <button type="button" class="btn btn-accent btn-sm" id="milestone-share-btn">Share</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="milestone-dismiss-btn">Nice</button>
-        </div>
       </section>
 
       <!-- Last week's recap, shown in a new week until dismissed -->
