@@ -5,7 +5,7 @@
 <p align="center"><b>The accountability layer for the job hunt.</b><br>
 Every application sent, every problem solved, counted automatically and painted onto your calendar.</p>
 
-<p align="center"><i>Locked In Tracker · Chrome Extension · v1.3.0</i></p>
+<p align="center"><i>Locked In Tracker · Chrome Extension · v1.6.0</i></p>
 
 ---
 
