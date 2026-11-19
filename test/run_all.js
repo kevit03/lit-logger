@@ -7,6 +7,7 @@ const path = require('path');
 const SUITES = [
   { name: 'Storage CRUD & Math Suite', file: './storage.test.js' },
   { name: 'Metrics & Tracker Suite', file: './metrics.test.js' },
+  { name: 'Progress, Coach Copy & Share Card Suite', file: './progress.test.js' },
   { name: 'Authentication & Session Suite', file: './auth.test.js' },
   { name: 'Multi-User Isolation Suite', file: './isolation.test.js' },
   { name: 'Event & Real-Time Sync Suite', file: './events.test.js' },

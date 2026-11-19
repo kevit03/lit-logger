@@ -1,17 +1,19 @@
-/* LIT popup.
+/* LIT popup, "Warm Coach".
    Tokens first, then layout top to bottom: top bar, account menu, search,
-   subhead, tracker tabs, counter card, recap, widgets, footer, modals.
-   Motion uses one curve (--ease) everywhere; prefers-reduced-motion turns
-   the flourishes off at the bottom of the file. */
+   subhead, goal tabs, counter card, notes and recap, cards, footer, modals,
+   then the delight layer (padlock, bursts, confetti, customize mode).
+   Motion uses --ease (and --spring for the playful bits); reduced motion
+   (the OS setting or data-motion="reduce" on <html>) turns it all off at the
+   bottom of the file. */
 
 :root {
-  --font: "Google Sans", "Google Sans Text", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --mono: "Google Sans Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* Type scale. 1px steps for dense UI text below the 13px base, then a
-     1.25 ratio for titles and figures (13, 16, 20, 25, 39). Secondary text
-     drops a step and a contrast level (--text-2 / --text-3), not just one. */
+     1.25 ratio for titles and figures. Comfort mode bumps the whole scale. */
   --fs-2xs: 10px;
   --fs-xs: 11px;
   --fs-sm: 12px;
@@ -19,27 +21,23 @@
   --fs-md: 16px;
   --fs-lg: 20px;
   --fs-xl: 25px;
-  --fs-display: 39px;
+  --fs-display: 40px;
 
-  /* Radius scale. Nested shapes follow outer = inner + padding, so a 14px
-     menu with 6px padding holds 8px items. */
-  --radius-2xs: 3px;
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius: 10px;
+  /* Radius scale: 12 to 16px on cards and controls. */
+  --radius-2xs: 4px;
+  --radius-xs: 8px;
+  --radius-sm: 10px;
+  --radius: 12px;
   --radius-md: 12px;
   --radius-lg: 14px;
   --radius-xl: 16px;
   --radius-pill: 999px;
 
-  /* One height for text inputs and buttons so rows line up. */
-  --control-h: 32px;
-  --control-h-sm: 28px;
+  --control-h: 34px;
+  --control-h-sm: 30px;
+  --tap: 24px;
   --measure: 60ch;
 
-  /* 8px grid: cards share one padding and one radius; the page gutter is
-     16px. Cards sit on the soft page background with a hairline border and
-     no shadow; only floating layers (menus, popovers, dialogs) cast one. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -50,76 +48,121 @@
   --radius-card: var(--radius-xl);
   --row-h: 44px;
 
-  --bg: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #f1f2f4;
-  --surface-3: #e7e9ec;
-  --border: #e1e3e7;
-  --border-soft: #eceef1;
-  --text: #1b1d21;
-  --text-2: #5f6368;
-  --text-3: #6b7075;
-  --accent: #1a73e8;
-  --accent-text: #1967d2;
-  --accent-soft: #e8f0fe;
-  --on-accent: #ffffff;
-  --success: #1e8e3e;
-  --success-soft: #e6f4ea;
-  --warn: #b06000;
-  --warn-soft: #fef7e0;
-  --danger: #d93025;
-  --danger-soft: #fce8e6;
-  --focus: #1a73e8;
-  --scrim: rgba(24, 25, 28, 0.42);
-  --shadow-sm: 0 1px 2px rgba(60, 64, 67, 0.08);
-  --shadow: 0 1px 2px rgba(60, 64, 67, 0.05);
-  --shadow-lg: 0 16px 40px rgba(24, 25, 28, 0.16), 0 2px 8px rgba(24, 25, 28, 0.06);
-  --tooltip-bg: #202124;
-  --tooltip-text: #ffffff;
+  /* Warm Coach tokens (shared contract) */
+  --bg: #FBF8F3;
+  --surface: #FFFFFF;
+  --surface-2: #F4EFE7;
+  --ink: #2A2622;
+  --muted: #6F665E;
+  --line: #ECE5DA;
+  --success: #6B9E7A;
+  --rest: #8C9BB5;
 
-  --stage-applied: #5f6368;
-  --stage-review: #b06000;
-  --stage-interviewing: #7e57c2;
-  --stage-offer: #1e8e3e;
-  --stage-rejected: #a50e0e;
+  /* Accent pair from data-accent; -ink is the shade that keeps 4.5:1 for
+     text and for white text on a filled button. */
+  --accent-l: #E0674B;
+  --accent-d: #F07A5E;
+  --accent-ink-l: #A9543F;
 
-  --tracker: #1a73e8;
-  --on-tracker: #ffffff;
+  /* Derived */
+  --surface-3: #EDE6DB;
+  --text: var(--ink);
+  --text-2: var(--muted);
+  --text-3: var(--muted);
+  --border: var(--line);
+  --border-soft: #F3EEE6;
+  --accent: var(--accent-l);
+  --accent-text: var(--accent-ink-l);
+  --accent-fill: var(--accent-ink-l);
+  --on-accent: #FFFFFF;
+  --accent-soft: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  --success-text: #54735A;
+  --success-soft: color-mix(in srgb, var(--success) 16%, var(--surface));
+  --rest-text: #656C7A;
+  --rest-soft: color-mix(in srgb, var(--rest) 18%, var(--surface));
+  --warn: #8A5A12;
+  --warn-soft: #FBF0DC;
+  --danger: #B3402E;
+  --danger-soft: #FBE9E4;
+  --flame: #D9772B;
+  --frost: #5B87A8;
+  --focus: var(--accent-text);
+  --scrim: rgba(42, 38, 34, 0.42);
+  --shadow-sm: 0 1px 2px rgba(42, 38, 34, 0.06);
+  --shadow: 0 1px 3px rgba(42, 38, 34, 0.05);
+  --shadow-lg: 0 18px 40px rgba(42, 38, 34, 0.16), 0 2px 8px rgba(42, 38, 34, 0.06);
+  --tooltip-bg: #2A2622;
+  --tooltip-text: #FBF8F3;
+
+  --stage-applied: #6F665E;
+  --stage-review: #8A5A12;
+  --stage-interviewing: #7A4F92;
+  --stage-offer: #4F6E55;
+  --stage-rejected: #9A4A3A;
+
+  --tracker: var(--accent);
+  --on-tracker: #FFFFFF;
 }
 
-body.pt-dark {
-  --bg: #0f1012;
-  --surface: #17181b;
-  --surface-2: #1e2024;
-  --surface-3: #26282d;
-  --border: rgba(255, 255, 255, 0.1);
-  --border-soft: rgba(255, 255, 255, 0.06);
-  --text: #ecedee;
-  --text-2: #a1a4aa;
-  --text-3: #8b8f96;
-  --accent: #8ab4f8;
-  --accent-text: #8ab4f8;
-  --accent-soft: rgba(138, 180, 248, 0.14);
-  --on-accent: #0f1012;
-  --success: #81c995;
-  --success-soft: rgba(129, 201, 149, 0.14);
-  --warn: #fdd663;
-  --warn-soft: rgba(253, 214, 99, 0.12);
-  --danger: #f28b82;
-  --danger-soft: rgba(242, 139, 130, 0.12);
-  --focus: #8ab4f8;
-  --scrim: rgba(0, 0, 0, 0.6);
-  --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  --tooltip-bg: #ecedee;
-  --tooltip-text: #0f1012;
+:root[data-accent="sage"] { --accent-l: #5E9270; --accent-d: #7FB291; --accent-ink-l: #4F745A; }
+:root[data-accent="ocean"] { --accent-l: #3B7EA1; --accent-d: #5FA3C7; --accent-ink-l: #39728F; }
+:root[data-accent="plum"] { --accent-l: #8A5A9E; --accent-d: #B285C6; --accent-ink-l: #88599C; }
+:root[data-accent="amber"] { --accent-l: #C9821F; --accent-d: #E3A54A; --accent-ink-l: #906120; }
+:root[data-accent="slate"] { --accent-l: #3D4A5C; --accent-d: #A9B6C8; --accent-ink-l: #3D4A5C; }
 
-  --stage-applied: #a1a4aa;
-  --stage-review: #fdd663;
-  --stage-interviewing: #c58af9;
-  --stage-offer: #81c995;
-  --stage-rejected: #f28b82;
+body.pt-dark {
+  --bg: #1C1916;
+  --surface: #26221E;
+  --surface-2: #2F2A25;
+  --ink: #F3EDE4;
+  --muted: #A89E92;
+  --line: #3A342D;
+  --success: #82B592;
+  --rest: #9FB0CC;
+
+  --surface-3: #3A342D;
+  --border-soft: #312C27;
+  --accent: var(--accent-d);
+  --accent-text: var(--accent-d);
+  --accent-fill: var(--accent-d);
+  --on-accent: #1C1916;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  --success-text: #8FC09D;
+  --rest-text: #9FB0CC;
+  --warn: #E3B566;
+  --warn-soft: rgba(227, 181, 102, 0.14);
+  --danger: #F0907E;
+  --danger-soft: rgba(240, 144, 126, 0.14);
+  --flame: #F0A05A;
+  --frost: #9CC3E0;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --tooltip-bg: #F3EDE4;
+  --tooltip-text: #1C1916;
+
+  --stage-applied: #A89E92;
+  --stage-review: #E3B566;
+  --stage-interviewing: #C59BD8;
+  --stage-offer: #8FC09D;
+  --stage-rejected: #E59A88;
+
+  --on-tracker: #1C1916;
+}
+
+/* Comfort mode: 15px base type and 44px tap targets. */
+:root[data-comfort="on"] {
+  --fs-2xs: 12px;
+  --fs-xs: 13px;
+  --fs-sm: 14px;
+  --fs-base: 15px;
+  --fs-md: 17px;
+  --fs-lg: 21px;
+  --fs-display: 44px;
+  --control-h: 44px;
+  --control-h-sm: 44px;
+  --tap: 44px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

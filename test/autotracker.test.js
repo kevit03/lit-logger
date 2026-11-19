@@ -1659,6 +1659,72 @@ async function run() {
     console.log('[PASS] Quick log: pre-filled card, editable fields, no prompt on a repeat, reusable entry point');
   }
 
+  // -------------------------------------------------------------------------
+  // 15. Toast progress: segments, copy, streak line, LitCopy, placement
+  // -------------------------------------------------------------------------
+  {
+    const core = fresh('shared/auto-tracker-core.js');
+    assert.deepStrictEqual(core.segmentsFor(3, 5), { segments: 5, filled: 3 });
+    assert.deepStrictEqual(core.segmentsFor(9, 5), { segments: 5, filled: 5 }, 'past the goal stays full');
+    assert.deepStrictEqual(core.segmentsFor(10, 40), { segments: core.MAX_SEGMENTS, filled: 2 }, 'a big goal is capped to proportional segments');
+    assert.deepStrictEqual(core.segmentsFor(0, 0), { segments: 1, filled: 0 });
+
+    assert.strictEqual(core.unitNoun({ id: 'jobs', unit: 'jobs' }), 'Application');
+    assert.strictEqual(core.unitNoun({ id: 'networking', unit: 'chats', name: 'Networking chats' }), 'Chat');
+    assert.strictEqual(core.unitNoun({ id: 'x', name: 'Portfolio pieces' }), 'Portfolio piece');
+
+    const stats = (count, extra = {}) => Object.assign({
+      todayStr: '2026-11-19',
+      metrics: [{ id: 'jobs', name: 'Applications', unit: 'applications', dailyGoal: 5 }],
+      today: { jobs: count },
+      streaks: { jobs: 0 }
+    }, extra);
+
+    const third = core.buildToastProgress({ stats: stats(3), prefs: { accent: 'sage' }, metricId: 'jobs', logCount: 1 });
+    assert.strictEqual(third.title, 'Application logged · 3 of 5 today');
+    assert.deepStrictEqual([third.segments, third.filled, third.prevFilled], [5, 3, 2]);
+    assert.deepStrictEqual(third.coach, ['2 more to lock in today.'], 'no streak line after the first log');
+    assert.strictEqual(third.lock, 'open');
+    assert.strictEqual(third.accent, 'sage');
+
+    const fifth = core.buildToastProgress({ stats: stats(5, { streaks: { jobs: 8 } }), metricId: 'jobs', logCount: 1 });
+    assert.strictEqual(fifth.title, 'Locked in for today');
+    assert.ok(fifth.justMet && fifth.lock === 'shut' && fifth.glow, 'meeting the goal shuts the padlock (glowing at 7+ days)');
+    const sixth = core.buildToastProgress({ stats: stats(6), metricId: 'jobs', logCount: 1 });
+    assert.strictEqual(sixth.title, 'Application logged · 6 today');
+    assert.strictEqual(sixth.lock, 'locked', 'already locked: no second animation');
+
+    // todayCount (DATA's field) wins over today; first log of the day gets a streak line.
+    const first = core.buildToastProgress({ stats: stats(0, { todayCount: { jobs: 1 }, streaks: { jobs: 4 } }), metricId: 'jobs', logCount: 1 });
+    assert.ok(first.firstOfDay);
+    assert.strictEqual(first.coach[1], '4 days in a row so far. Keep it rolling.');
+    assert.strictEqual(core.buildToastProgress({ stats: stats(0), metricId: 'jobs', logCount: 1 }), null, 'nothing counted, nothing shown');
+    assert.strictEqual(core.buildToastProgress({ stats: null, metricId: 'jobs' }), null);
+
+    // LitCopy supplies the coach copy when it is loaded.
+    const seen = [];
+    global.LitCopy = {
+      toast: args => { seen.push(['toast', args]); return { title: 'ignored', sub: 'Coach says hi.' }; },
+      streak: args => { seen.push(['streak', args]); return 'Day 3. Keep it rolling.'; }
+    };
+    const withCopy = core.buildToastProgress({
+      stats: stats(1, { streaks: { jobs: 3 }, restToday: false, freezes: { jobs: { available: 1, usedOn: ['2026-11-18'] } } }),
+      prefs: { coachVoice: 'gentle' }, metricId: 'jobs', logCount: 1
+    });
+    delete global.LitCopy;
+    assert.deepStrictEqual(withCopy.coach, ['Coach says hi.', 'Day 3. Keep it rolling.']);
+    assert.strictEqual(withCopy.title, 'Application logged · 1 of 5 today', 'the progress title stays exact');
+    assert.deepStrictEqual(seen[0][1], { count: 1, goal: 5, unit: 'applications', label: 'Applications', voice: 'gentle', firstOfDay: true, streak: 3 });
+    assert.deepStrictEqual(seen[1][1], { days: 3, restToday: false, freezeUsed: true }, 'a freeze spent yesterday is passed along');
+
+    // Placement: top right by default; the Autofill widget's remembered corner otherwise.
+    assert.deepStrictEqual(core.toastPlacement(null), { h: 'right', v: 'top', x: 16, y: 16 });
+    assert.deepStrictEqual(core.toastPlacement({ h: 'left', v: 'bottom', x: 20, y: 30 }), { h: 'left', v: 'bottom', x: 20, y: 82 }, 'stacks just past the widget');
+    assert.deepStrictEqual(core.toastPlacement({ h: 'middle', v: 'top', x: 1, y: 1 }), { h: 'right', v: 'top', x: 16, y: 16 });
+    Object.keys(core.ACCENTS).forEach(id => assert.strictEqual(core.ACCENTS[id].length, 2, id + ' has a light and a dark shade'));
+    console.log('[PASS] Toast progress: segmented bar, lock states, streak line on the first log, LitCopy hand-off, placement');
+  }
+
   console.log('--- test/autotracker.test.js COMPLETED SUCCESSFULLY ---\n');
 }
 
