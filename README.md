@@ -21,7 +21,7 @@ Applying to 12 roles on Tuesday and 0 on Wednesday, and by Friday you can't reme
 
 ## The solution
 
-LIT makes the grind visible with **zero manual logging**.
+LIT reminds you with no **zero manual logging**.
 
 | | |
 | --- | --- |
@@ -58,7 +58,7 @@ LIT makes the grind visible with **zero manual logging**.
 
 ## The product
 
-### The popup: your command center
+### The popup
 
 A fixed counter card up top (big number, `+1`, `-1`) and below it a **fully customizable widget board**.
 
@@ -67,7 +67,7 @@ A fixed counter card up top (big number, `+1`, `-1`) and below it a **fully cust
 | **Daily Goal** | Progress bar toward today's target. Click the number to change it. |
 | **Week / Month / Total** | Rolling counts at a glance. |
 | **Activity Chart** | 7, 14, or 30 days of bars, with total, average, active days, and best day. |
-| **Streak** | Current and longest run of goal-hitting days. Don't break the chain. |
+| **Streak** | Current and longest run of goal-hitting days |
 | **Solve Timer** | Interview-style countdown for LeetCode. **Space** to start/pause. |
 | **Solve Time Stats** | Today, all-time, average, fastest. See yourself getting faster. |
 | **Add Details** | Tag the next entry with company, role, and notes. |
@@ -88,7 +88,6 @@ The button and its cards stay out of the way. Drag the grip (or the button) anyw
 
 - **No AI and no servers.** Fields are matched by rules: site-specific selectors first, then rules you taught it, then the page's `autocomplete` hints, then a dictionary of common phrasings ("legal first name", "will you now or in the future require sponsorship").
 - **It learns from everything you answer.** Text boxes, dropdowns (including custom ones like Workday's and Greenhouse's), multiple choice, checkboxes, and yes/no buttons. Fill or change one and LIT either learns it outright (when it matches your profile) or offers to remember it for that site or all sites. Fields that appear on later steps count too. Long answers can go into an answer bank and get suggested the next time a similar question shows up.
-- **You stay in control.** Autofill never clicks Submit. EEO questions are left blank unless you turn them on. LIT never learns from password, card, or SSN fields.
 - **Your data stays on this device**, in `chrome.storage.local`. Export and import it as JSON from the profile page.
 
 ### Privacy and accounts
@@ -148,12 +147,6 @@ with fallbacks for the other formats Calendar uses across views.
 ### Storage built to survive `chrome.storage.sync`
 
 `shared/storage.js` wraps `chrome.storage.sync` with a **write queue and read-back verification**. The popup and content scripts each hold their own copy of the module against one shared store, and `chrome.storage` has no compare-and-swap.
-
-Sync caps out at 100KB total and 8KB per item, so:
-
-- **Chunked logs.** The log array is split into size-bounded chunks (`logs__meta`, `logs__c0`, `logs__c1`, ...).
-- **Graceful overflow.** If a very long history fills the budget, new entries fall back to `chrome.storage.local['logs_overflow']` instead of being lost. The overflow clears itself once history shrinks back under quota.
-- **Seamless migration.** Older local-only installs move their history into sync automatically on first run after updating.
 
 Logs, trackers, theme, widget layout (`pt_widgets`), and the signed-in account all live in sync storage.
 
