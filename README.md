@@ -25,10 +25,10 @@ LIT reminds you with no **zero manual logging**.
 
 | | |
 | --- | --- |
-| **It auto-tracks.** | Hit *Accepted* on LeetCode, pass a problem on NeetCode, or submit an application on Greenhouse, Lever, Ashby, or Workday, and LIT logs it. A toast confirms it. Nothing else to do. |
-| **It lives on your calendar.** | Every day on Google Calendar gets a small pill: *"3 Job Applications"*, *"2 LeetCode"*. Filled means you hit your goal. You'll see the gaps. |
-| **It keeps you honest.** | Daily goals, streaks, rolling week/month totals, activity charts, and a solve timer, all in a popup you can rearrange to fit how you work. |
-| **It follows you.** | Everything syncs through your Chrome profile. Laptop, desktop, library computer: same numbers. |
+| Hit *Accepted* on LeetCode, pass a problem on NeetCode, or submit an application on Greenhouse, Lever, Ashby, or Workday, and LIT logs it. A toast confirms it. Nothing else to do. |
+| Every day on Google Calendar gets a small pill: *"3 Job Applications"*, *"2 LeetCode"*. Filled means you hit your goal. You'll see the gaps. |
+| Daily goals, streaks, rolling week/month totals, activity charts, and a solve timer, all in a popup you can rearrange to fit how you work. |
+| Everything syncs through your Chrome profile. Laptop, desktop, library computer: same numbers. |
 
 ## How it works
 
