@@ -21,7 +21,7 @@ async function run() {
     installMockChrome();
     const W = fresh();
     const types = Object.keys(W.TYPES);
-    assert.deepStrictEqual(types.sort(), ['activity', 'details', 'goal', 'pipeline', 'recap', 'recentList', 'responseStats', 'streak', 'summary', 'timeStats', 'timer', 'trophies']);
+    assert.deepStrictEqual(types.sort(), ['activity', 'compare', 'countdown', 'details', 'goal', 'notes', 'pipeline', 'quote', 'recap', 'recentList', 'responseStats', 'streak', 'summary', 'timeStats', 'timer', 'trophies', 'watchlist']);
     const items = W.defaultItems();
     assert.deepStrictEqual(items.map(i => i.type), ['timer', 'recentList', 'recap'], 'the lean recommended layout');
     assert.ok(!items.some(i => i.type === 'goal'), 'the Daily goal bar repeats the ring, so it is not in the default');
@@ -34,7 +34,7 @@ async function run() {
     assert.deepStrictEqual(W.normalizeOptions('streak', {}), { metricId: 'active', size: 'compact', collapsed: false }, 'streak and response rate pair up as compact cards');
     assert.deepStrictEqual(W.normalizeOptions('responseStats', {}), { size: 'compact', collapsed: false });
     uninstallMockChrome();
-    console.log('[PASS] Registry exposes twelve card types with a lean recommended layout');
+    console.log('[PASS] Registry exposes seventeen card types with a lean recommended layout');
   }
 
   // Normalization is defensive
@@ -207,8 +207,8 @@ async function run() {
     assert.strictEqual(W.isVisible({ type: 'responseStats' }, 'jobs'), true);
 
     const avail = W.availableTypes(W.defaultItems());
-    assert.strictEqual(avail.length, 12);
-    assert.deepStrictEqual(avail.filter(t => t.isNew).map(t => t.type), ['trophies', 'recap'], 'new card types are flagged in the picker');
+    assert.strictEqual(avail.length, 17);
+    assert.deepStrictEqual(avail.filter(t => t.isNew).map(t => t.type), ['trophies', 'recap', 'countdown', 'compare', 'watchlist', 'notes', 'quote'], 'new card types are flagged in the picker');
     assert.strictEqual(W.isVisible({ type: 'trophies' }, 'custom-1'), true, 'trophies show on every goal');
     assert.strictEqual(W.isVisible({ type: 'recap' }, 'leetcode'), true);
     assert.strictEqual(avail.find(t => t.type === 'timer').added, true, 'a present singleton is marked added');
@@ -232,6 +232,48 @@ async function run() {
     assert.deepStrictEqual(Array.from(W.soloCompactIds([])), []);
     uninstallMockChrome();
     console.log('[PASS] Compact widgets pair two to a row; an unpaired one takes the full row');
+  }
+
+  // Personalization: custom names and colors on any card, per-card display
+  // choices stored sparsely, duplicate, and bulk updates.
+  {
+    installMockChrome();
+    const W = fresh();
+    assert.deepStrictEqual(W.normalizeOptions('summary', { title: '  My   numbers ', color: '#5e9270', periods: ['total', 'today', 'bogus'] }),
+      { metricId: 'active', periods: ['today', 'total'], title: 'My numbers', color: '#5E9270', size: 'expanded', collapsed: false }, 'title trims, color uppercases, periods keep their canonical order');
+    assert.deepStrictEqual(W.normalizeOptions('summary', { periods: ['week', 'month', 'total'], title: '', color: '#123456' }),
+      { metricId: 'active', size: 'expanded', collapsed: false }, 'default periods, empty titles, and off-palette colors are not stored');
+    assert.deepStrictEqual(W.normalizeOptions('summary', { periods: [] }), { metricId: 'active', size: 'expanded', collapsed: false }, 'no periods falls back to the default');
+    assert.deepStrictEqual(W.normalizeOptions('goal', { showWeekly: false, showCheckpoints: true }), { metricId: 'active', showWeekly: false, size: 'expanded', collapsed: false });
+    assert.deepStrictEqual(W.normalizeOptions('streak', { showLongest: false }), { metricId: 'active', showLongest: false, size: 'compact', collapsed: false });
+    assert.deepStrictEqual(W.normalizeOptions('recentList', { count: 20 }), { count: 20, size: 'expanded', collapsed: false });
+    assert.deepStrictEqual(W.normalizeOptions('recentList', { count: 7 }), { size: 'expanded', collapsed: false }, 'only offered counts are kept');
+    assert.strictEqual(W.normalizeOptions('goal', { title: 'x'.repeat(80) }).title.length, W.MAX_TITLE);
+    assert.deepStrictEqual(W.normalizeOptions('countdown', { date: '2027-03-01', label: ' First day ' }),
+      { metricId: 'active', date: '2027-03-01', label: 'First day', size: 'compact', collapsed: false }, 'a countdown keeps its date and label');
+    assert.deepStrictEqual(W.normalizeOptions('countdown', { date: '03/01/2027', label: '' }),
+      { metricId: 'active', size: 'compact', collapsed: false }, 'a malformed date is dropped');
+    assert.strictEqual(W.normalizeOptions('quote', { quoteText: 'y'.repeat(300) }).quoteText.length, W.MAX_QUOTE);
+    assert.deepStrictEqual(W.normalizeOptions('quote', { quoteText: '   ' }), { size: 'expanded', collapsed: false }, 'an empty quote falls back to the daily line');
+    assert.deepStrictEqual(W.normalizeOptions('watchlist', { junk: 1 }), { size: 'expanded', collapsed: false });
+
+    let items = await W.load();
+    const listId = items.find(i => i.type === 'recentList').id;
+    items = await W.update(listId, { title: 'Latest', count: 5 });
+    items = await W.duplicate(listId);
+    const idx = items.findIndex(i => i.id === listId);
+    assert.strictEqual(items[idx + 1].type, 'recentList', 'the copy sits right after the original');
+    assert.deepStrictEqual(items[idx + 1].options, items[idx].options, 'the copy keeps every setting');
+    assert.notStrictEqual(items[idx + 1].id, listId);
+    const timerId = items.find(i => i.type === 'timer').id;
+    const before = items.length;
+    items = await W.duplicate(timerId);
+    assert.strictEqual(items.length, before, 'singleton cards are not copied');
+    items = await W.update(listId, { title: '' });
+    assert.strictEqual(items.find(i => i.id === listId).options.title, undefined, 'clearing the title restores the standard name');
+    items = await W.updateMany(items.map(i => i.id), { size: 'compact' });
+    assert.ok(items.every(i => i.options.size === 'compact'), 'bulk updates reach every card');
+    uninstallMockChrome();
   }
 
   // The new widgets serialize, survive a browser restart, and a version-1

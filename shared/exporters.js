@@ -73,6 +73,45 @@ const LitExport = (() => {
     return lines.join('\n') + '\n';
   }
 
+  // Tab-separated rows for pasting straight into Google Sheets or Excel: a
+  // paste splits on tabs into columns. Tabs and line breaks inside a value
+  // become spaces, and formula-looking cells get the same quote guard as CSV.
+  function tsvCell(value) {
+    let s = value === null || value === undefined ? '' : String(value);
+    s = s.replace(/[\t\r\n]+/g, ' ').trim();
+    if (/^[=+@]/.test(s) || /^-(?![\d.\s])/.test(s)) s = "'" + s;
+    return s;
+  }
+
+  function buildTsv(logs, metricNames) {
+    const names = metricNames || {};
+    const rows = [['Date', 'Goal', 'Count', 'Company', 'Role', 'Status', 'Notes', 'Link'].join('\t')];
+    (logs || []).forEach(l => {
+      rows.push([
+        l.date, names[l.metricId] || l.metricId, l.count || 1, l.company, l.role, statusText(l), l.notes, l.url
+      ].map(tsvCell).join('\t'));
+    });
+    return rows.join('\n');
+  }
+
+  // Narrows entries for an export: one goal (or 'all') and the last `days`
+  // days counted back from `today` (YYYY-MM-DD), or every day for 'all'.
+  // Returns oldest first, the order a spreadsheet reads best.
+  function filterLogs(logs, options = {}) {
+    const metricId = options.metricId || 'all';
+    const days = options.days === 'all' || !options.days ? 'all' : Math.max(1, parseInt(options.days, 10) || 1);
+    let since = '';
+    if (days !== 'all' && options.today) {
+      const d = new Date(options.today + 'T12:00:00');
+      d.setDate(d.getDate() - (days - 1));
+      since = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    return (logs || [])
+      .filter(l => l && (metricId === 'all' || l.metricId === metricId) && (!since || String(l.date) >= since))
+      .slice()
+      .sort((a, b) => (String(a.date) + String(a.timestamp || '')).localeCompare(String(b.date) + String(b.timestamp || '')));
+  }
+
   function backupFilename(prefix, ext, date) {
     const d = date || new Date();
     const stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -84,6 +123,9 @@ const LitExport = (() => {
     buildCsv,
     markdownCell,
     buildMarkdown,
+    tsvCell,
+    buildTsv,
+    filterLogs,
     backupFilename,
     statusText
   };

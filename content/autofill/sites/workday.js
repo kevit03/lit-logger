@@ -23,126 +23,16 @@
 // Plain inputs return undefined so AutofillCore.setValue handles them, unless
 // the node was re-rendered away, in which case the fresh node is filled.
 (() => {
-  if (typeof AutofillCore === 'undefined' || !AutofillCore) return;
+  if (typeof AutofillCore === 'undefined' || !AutofillCore || !AutofillCore.siteKit) return;
 
   const HOSTS = /(^|\.)(myworkdayjobs|myworkdaysite)\.com$/;
 
-  // --- widget helpers (same block in greenhouse.js, ashby.js, workday.js) ---
+  // Widget helpers shared by the adapters (shared/autofill-core.js); every
+  // wait takes its timeout from this adapter's own `timing`.
   const timing = { wait: 3000, confirm: 1000 };
-
-  const W = typeof window !== 'undefined' ? window : null;
-
-  const norm = s => String(s == null ? '' : s).toLowerCase()
-    .replace(/&/g, ' and ').replace(/[^a-z0-9+]+/g, ' ').trim();
-
-  const ALIASES = [
-    ['united states', 'united states of america', 'us', 'usa', 'u s', 'u s a'],
-    ['united kingdom', 'uk', 'u k', 'great britain']
-  ];
-  const canon = s => { for (const g of ALIASES) if (g.includes(s)) return g[0]; return s; };
-
-  // 1 exact, 0.95 alias, 0.9 yes/no prefix ("Yes, I am..."), 0.7-0.8 whole-word
-  // containment (shorter options win), then token Jaccard scaled to 0.6.
-  function scoreOption(label, value) {
-    const o = norm(label);
-    const v = norm(value);
-    if (!o || !v) return 0;
-    if (o === v) return 1;
-    const loc = AutofillCore.scoreLocation ? AutofillCore.scoreLocation(value, label) : null;
-    if (loc !== null) return loc;
-    if (canon(o) === canon(v)) return 0.95;
-    if (v === 'yes' || v === 'no') return new RegExp('^' + v + '\\b').test(o) ? 0.9 : 0;
-    if ((' ' + o + ' ').includes(' ' + v + ' ')) return 0.7 + 0.1 * (v.length / o.length);
-    if ((' ' + v + ' ').includes(' ' + o + ' ')) return 0.6 + 0.1 * (o.length / v.length);
-    const a = new Set(o.split(' '));
-    const b = new Set(v.split(' '));
-    let inter = 0;
-    a.forEach(t => { if (b.has(t)) inter++; });
-    return 0.6 * inter / (a.size + b.size - inter);
-  }
-
-  function bestOption(nodes, value) {
-    let best = null;
-    let bestScore = 0;
-    for (const n of nodes) {
-      const s = scoreOption(n.textContent, value);
-      if (s > bestScore) { best = n; bestScore = s; }
-    }
-    return bestScore >= 0.5 ? best : null;
-  }
-
-  function fire(el, type, init) {
-    const opts = Object.assign({ bubbles: true, cancelable: true, composed: true }, init);
-    const C = !W ? null
-      : /^pointer/.test(type) ? (W.PointerEvent || W.MouseEvent)
-      : /^(mouse|click)/.test(type) ? W.MouseEvent
-      : /^key/.test(type) ? W.KeyboardEvent
-      : W.Event;
-    let ev;
-    if (C) {
-      ev = new C(type, opts);
-    } else {
-      ev = Object.assign({ type, defaultPrevented: false }, opts);
-      ev.preventDefault = function preventDefault() { this.defaultPrevented = true; };
-      ev.stopPropagation = function stopPropagation() {};
-    }
-    el.dispatchEvent(ev);
-  }
-
-  // The full sequence a real click produces; widgets differ on which one they
-  // listen to (react-select opens on mousedown/mouseup, options select on click).
-  function press(el) {
-    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t =>
-      fire(el, t, { button: 0, buttons: /down$/.test(t) ? 1 : 0 }));
-  }
-
-  function typeInto(input, text) {
-    const proto = W && (W.HTMLTextAreaElement && input instanceof W.HTMLTextAreaElement
-      ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement && W.HTMLInputElement.prototype);
-    const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
-    if (desc && desc.set) desc.set.call(input, text); else input.value = text;
-    fire(input, 'input');
-  }
-
-  function key(el, name, code) {
-    fire(el, 'keydown', { key: name, code: name, keyCode: code, which: code });
-    fire(el, 'keyup', { key: name, code: name, keyCode: code, which: code });
-  }
-
-  // Resolves with the first truthy result of `find`, re-checked on every DOM
-  // mutation under `root` (and on a slow poll as a backstop), or null after
-  // `timeout`. Always disconnects its observer.
-  function waitFor(find, root, timeout = timing.wait) {
-    const probe = typeof find === 'string' ? () => root.querySelector(find) : find;
-    return new Promise(resolve => {
-      let done = false;
-      let obs = null;
-      let poll = null;
-      let timer = null;
-      const finish = v => {
-        if (done) return;
-        done = true;
-        if (obs) obs.disconnect();
-        clearInterval(poll);
-        clearTimeout(timer);
-        resolve(v || null);
-      };
-      const check = () => {
-        let v = null;
-        try { v = probe(); } catch (e) { v = null; }
-        if (v && !(Array.isArray(v) && !v.length)) finish(v);
-      };
-      check();
-      if (done) return;
-      if (typeof MutationObserver === 'function' && root) {
-        obs = new MutationObserver(check);
-        obs.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
-      }
-      poll = setInterval(check, 100);
-      timer = setTimeout(() => finish(null), timeout);
-    });
-  }
-  // --- end widget helpers ----------------------------------------------------
+  const kit = AutofillCore.siteKit;
+  const { scoreText, bestNode, fire, press, typeInto, key, sleep } = kit;
+  const waitFor = (find, root, timeout = timing.wait) => kit.waitFor(find, root, timeout);
 
   const LISTBOX_BUTTON = 'button[aria-haspopup="listbox"]';
   const PROMPT_CONTAINER = '[data-automation-id="multiSelectContainer"], [data-automation-id="multiselectInputContainer"], [data-uxi-widget-type="multiselect"]';
@@ -228,7 +118,7 @@
     const button = () => refetch(doc, el, keySel);
     const start = button();
     if (!start) return false;
-    if (scoreOption(start.textContent, value) >= 0.9) return true;
+    if (scoreText(start.textContent, value) >= 0.9) return true;
 
     press(start);
     let list = await waitFor(() => findListbox(doc, button()), root);
@@ -240,12 +130,12 @@
 
     const options = () => Array.from(list.querySelectorAll('[role="option"]'))
       .filter(o => o.getAttribute('aria-disabled') !== 'true');
-    let hit = bestOption(options(), value);
+    let hit = bestNode(options(), value);
     if (!hit) {
       // Long lists can be virtualized; Workday listboxes jump on typeahead.
       for (const ch of String(value).slice(0, 12)) fire(list, 'keydown', { key: ch });
-      await new Promise(resolve => setTimeout(resolve, 150));
-      hit = bestOption(options(), value);
+      await sleep(150);
+      hit = bestNode(options(), value);
     }
     if (!hit) {
       key(list, 'Escape', 27);
@@ -255,7 +145,7 @@
     press(hit.querySelector('[data-automation-id="promptOption"]') || hit.firstElementChild || hit);
     const done = await waitFor(() => {
       const b = button();
-      if (b && scoreOption(b.textContent, want) >= 0.9) return b;
+      if (b && scoreText(b.textContent, want) >= 0.9) return b;
       return !keySel && !list.isConnected ? list : null;
     }, root, timing.confirm);
     return Boolean(done);
@@ -274,7 +164,7 @@
     const selectedMatch = () => {
       const f = fieldOf(input());
       if (!f) return null;
-      return Array.from(f.querySelectorAll(SELECTED_ITEM)).find(s => scoreOption(s.textContent, value) >= 0.7) || null;
+      return Array.from(f.querySelectorAll(SELECTED_ITEM)).find(s => scoreText(s.textContent, value) >= 0.7) || null;
     };
     if (selectedMatch()) return true;
 
@@ -304,7 +194,7 @@
       const opts = await waitFor(() => { const o = promptOptions(); return changed(o) ? o : null; }, root);
       if (!opts) break;
       seen = opts;
-      const hit = bestOption(opts, value) || (opts.length === 1 ? opts[0] : null);
+      const hit = bestNode(opts, value) || (opts.length === 1 ? opts[0] : null);
       if (!hit) break;
       press(hit);
       // Either the pick lands in selectedItemList, or a category opened a
@@ -329,40 +219,39 @@
     return false;
   }
 
+  // The custom widget fill for this node (a promise), or null for a plain input.
+  function widgetFill(doc, node, value) {
+    if (node.matches(LISTBOX_BUTTON)) return fillListbox(doc, node, stableSelector(node), value);
+    if (isPromptInput(node)) return fillPrompt(doc, node, stableSelector(node), value);
+    return null;
+  }
+
+  // The field was re-rendered away since the scan: wait for its replacement
+  // and fill that one, through its widget fill or AutofillCore.setValue.
+  async function fillReplacement(doc, desc, value) {
+    const tries = candidateSelectors(desc.el, desc);
+    const fresh = await waitFor(() => {
+      for (const s of tries) {
+        const hit = doc.querySelector(s);
+        if (hit) return hit;
+      }
+      return null;
+    }, doc.documentElement);
+    if (!fresh) return false;
+    return widgetFill(doc, fresh, value) || AutofillCore.setValue(Object.assign({}, desc, { el: fresh }), value);
+  }
+
   AutofillCore.registerSiteAdapter({
     id: 'workday',
     timing,
-    matches(url) {
-      try {
-        return HOSTS.test(new URL(String(url && url.href ? url.href : url)).hostname);
-      } catch (e) {
-        return false;
-      }
-    },
+    matches: kit.hostMatcher(HOSTS),
     fields: FIELDS,
     fill(desc, value) {
       const el = desc && desc.el;
       if (!el || typeof el.matches !== 'function') return undefined;
       const doc = el.ownerDocument;
-      const route = node => {
-        if (node.matches(LISTBOX_BUTTON)) return fillListbox(doc, node, stableSelector(node), value);
-        if (isPromptInput(node)) return fillPrompt(doc, node, stableSelector(node), value);
-        return null;
-      };
-      if (el.isConnected) return route(el) || undefined;
-      // Re-rendered away since the scan: find the replacement and fill that.
-      const tries = candidateSelectors(el, desc);
-      return (async () => {
-        const fresh = await waitFor(() => {
-          for (const s of tries) {
-            const hit = doc.querySelector(s);
-            if (hit) return hit;
-          }
-          return null;
-        }, doc.documentElement);
-        if (!fresh) return false;
-        return route(fresh) || AutofillCore.setValue(Object.assign({}, desc, { el: fresh }), value);
-      })();
+      if (el.isConnected) return widgetFill(doc, el, value) || undefined;
+      return fillReplacement(doc, desc, value);
     }
   });
 })();

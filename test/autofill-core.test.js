@@ -733,6 +733,35 @@ async function run() {
     console.log('[PASS] Multiple choice: nameless radios, tiles, in-page listboxes, select-all-that-apply groups');
   }
 
+  // Date and month inputs: ISO dates convert by hand, so a timezone west of
+  // UTC never moves the day or month (Date reads "2027-06-01" as UTC midnight).
+  {
+    const savedTz = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    const { doc, h, restore } = installAutofillDom();
+    try {
+      const C = freshCore();
+      const month = h('input', { id: 'm', type: 'month' });
+      const date = h('input', { id: 'd', type: 'date' });
+      doc.body.appendChild(h('form', {},
+        h('label', { for: 'm' }, 'Available from (month)'), month,
+        h('label', { for: 'd' }, 'Start date'), date));
+      const f = id => C.scanFields(doc, { includeFilled: true }).find(x => x.id === id);
+      assert.strictEqual(await C.setValue(f('m'), '2027-06-01'), true);
+      assert.strictEqual(month.value, '2027-06', 'an ISO date goes into a month input as its own month');
+      assert.strictEqual(await C.setValue(f('d'), '2027-06'), true);
+      assert.strictEqual(date.value, '2027-06-01', 'an ISO month goes into a date input as its first day');
+      assert.strictEqual(await C.setValue(f('d'), '2027-06-15'), true);
+      assert.strictEqual(date.value, '2027-06-15', 'an ISO date is kept as is');
+      assert.strictEqual(await C.setValue(f('m'), 'June 2027'), true);
+      assert.strictEqual(month.value, '2027-06', 'other forms still parse in local time');
+    } finally {
+      restore();
+      if (savedTz === undefined) delete process.env.TZ; else process.env.TZ = savedTz;
+    }
+    console.log('[PASS] Date and month inputs get the profile date without a timezone shift');
+  }
+
   console.log('--- autofill-core: all tests passed ---');
 }
 

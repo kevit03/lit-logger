@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-accent="coral">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My applications - LIT</title>
+  <link rel="stylesheet" href="applications.css">
+</head>
+<body>
+  <a class="skip-link" href="#list">Skip to your applications</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" width="32" height="32">
+        <div class="brand-text">
+          <h1>My applications</h1>
+          <p class="brand-sub">Every job you have applied to, in one place.</p>
+        </div>
+      </div>
+      <button type="button" class="btn btn-quiet" id="export-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="export-label">Export CSV</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="page">
+    <div id="page-error" class="banner" role="alert" hidden></div>
+
+    <section class="summary" id="summary" aria-labelledby="summary-title">
+      <h2 class="visually-hidden" id="summary-title">Your numbers</h2>
+      <dl class="stats">
+        <div class="stat">
+          <dt>Applied</dt>
+          <dd id="stat-applied">0</dd>
+        </div>
+        <div class="stat">
+          <dt>Heard back</dt>
+          <dd id="stat-responded">0</dd>
+          <span class="stat-note" id="stat-rate"></span>
+        </div>
+        <div class="stat">
+          <dt>Interviews</dt>
+          <dd id="stat-interviews">0</dd>
+        </div>
+        <div class="stat stat-offer">
+          <dt>Offers</dt>
+          <dd id="stat-offers">0</dd>
+        </div>
+      </dl>
+      <p class="summary-line" id="summary-line"></p>
+    </section>
+
+    <section class="nudge" id="nudge" hidden aria-labelledby="nudge-text">
+      <svg class="nudge-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6.5h16v11H4z M4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+      <p class="nudge-text" id="nudge-text"></p>
+      <button type="button" class="btn btn-primary btn-small" id="nudge-btn">Show them</button>
+    </section>
+
+    <section class="toolbar" aria-label="Search and filters">
+      <label class="search">
+        <span class="visually-hidden">Search your applications</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13Zm4.8 11.3L20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input type="search" id="search" placeholder="Search role, company, notes" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="field">
+        <span class="field-label">Stage</span>
+        <select id="filter-status">
+          <option value="all">All stages</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Work style</span>
+        <select id="filter-mode">
+          <option value="all">Any</option>
+          <option value="remote">Remote</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="onsite">On-site</option>
+        </select>
+      </label>
+      <div class="segmented" role="radiogroup" aria-label="Show" id="show-group">
+        <button type="button" role="radio" data-show="all" id="show-all" aria-checked="true">All</button>
+        <button type="button" role="radio" data-show="due" id="show-due" aria-checked="false">Follow-up due<span class="count" id="count-due"></span></button>
+        <button type="button" role="radio" data-show="quiet" id="show-quiet" aria-checked="false">Gone quiet<span class="count" id="count-quiet"></span></button>
+      </div>
+    </section>
+
+    <p class="view-hint" id="view-hint" hidden></p>
+    <p class="result-line" id="result-line" role="status" aria-live="polite"></p>
+
+    <section class="list" id="list" aria-label="Applications" tabindex="-1">
+      <div class="table-wrap" id="table-wrap">
+        <table class="apps" id="apps-table">
+          <caption class="visually-hidden">Your job applications. Use the column buttons to sort.</caption>
+          <thead>
+            <tr>
+              <th scope="col" id="th-company" aria-sort="none"><button type="button" class="sort-btn" data-sort="company" id="sort-company">Role and company<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 10l4-4 4 4M8 14l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></th>
+              <th scope="col" id="th-date" aria-sort="descending"><button type="button" class="sort-btn" data-sort="date" id="sort-date">Applied<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 10l4-4 4 4M8 14l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></th>
+              <th scope="col" id="th-status" aria-sort="none"><button type="button" class="sort-btn" data-sort="status" id="sort-status">Stage<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 10l4-4 4 4M8 14l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></th>
+              <th scope="col">Details</th>
+              <th scope="col">Follow-up</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="apps-body"></tbody>
+        </table>
+      </div>
+      <div class="more" id="more" hidden>
+        <button type="button" class="btn btn-quiet" id="more-btn">Show more</button>
+      </div>
+
+      <div class="empty" id="empty-state" hidden>
+        <svg class="empty-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 8.5h16v10.5H4z M9 8.5V6.5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6.5v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <h2>No applications yet</h2>
+        <p>When you apply on a job site, LIT can log it for you. You can also log one from the LIT button in your toolbar. Everything you log shows up here.</p>
+      </div>
+
+      <div class="empty" id="no-match" hidden>
+        <h2>Nothing matches</h2>
+        <p id="no-match-text">Try a different search, or clear the filters to see everything.</p>
+        <button type="button" class="btn btn-quiet" id="clear-filters">Clear filters</button>
+      </div>
+    </section>
+
+    <details class="settings" id="settings">
+      <summary>Follow-up reminders</summary>
+      <div class="settings-body">
+        <label class="check">
+          <input type="checkbox" id="pref-enabled">
+          <span>Remind me once a day when an application is ready for a follow-up</span>
+        </label>
+        <label class="field field-inline">
+          <span class="field-label">Suggest a follow-up after</span>
+          <select id="pref-days"></select>
+        </label>
+        <p class="hint">Only applications still at Applied count. After about a month with no reply, they move to Gone quiet. LIT never changes a stage for you.</p>
+      </div>
+    </details>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span id="toast-text"></span>
+    <button type="button" class="toast-btn" id="toast-btn" hidden>Undo</button>
+  </div>
+
+  <script src="../shared/auth.js"></script>
+  <script src="../shared/db.js"></script>
+  <script src="../shared/storage.js"></script>
+  <script src="../shared/exporters.js"></script>
+  <script src="../shared/followups.js"></script>
+  <script src="applications.js"></script>
+</body>
+</html>

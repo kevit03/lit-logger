@@ -87,6 +87,13 @@
     signin: 'Sign-in needed',
     unsupported: 'Company site'
   };
+  // What each tag means, on hover.
+  const KIND_TIP = {
+    supported: 'LIT knows this job site well.',
+    generic: 'LIT fills the common fields on this kind of form.',
+    signin: 'This site needs you to sign in, so it is not picked for you.',
+    unsupported: "A company's own site. LIT fills what it can."
+  };
   const CAPS_SITES_TEXT = 'Turn on Detect applications on any career site in LIT settings so company sites can be filled.';
   const CAPS_AI_TEXT = 'Add a Claude API key in Autofill profile to write answers to open questions.';
   const STATUS_LABEL = {
@@ -102,36 +109,58 @@
   };
   const IN_FLIGHT = new Set(['opening', 'filling', 'submitting']);
   const OPENABLE = new Set(['needs-you', 'ready', 'failed']);
+  const OPEN_LABEL = { 'needs-you': 'Open tab', ready: 'Review', failed: 'Open tab' };
+  // Plain words for the short reasons the runner and the driver record.
+  // Anything not listed is shown as it is.
+  const REASON_COPY = {
+    'CAPTCHA': 'The site wants to check you are not a robot.',
+    'Sign-in required': 'This site needs you to sign in first.',
+    'Workday needs you to sign in': 'Workday needs you to sign in first.',
+    'Could not find Submit': 'Filled in. LIT could not find the Submit button.',
+    'Submit is disabled': 'Filled in, but the site is not ready to submit yet.',
+    'Submitted but no confirmation seen': 'LIT pressed Submit but saw no confirmation. Check the tab.',
+    'No application form found': 'LIT could not find the application form.',
+    'Timed out': 'This one took too long. Have a look in the tab.',
+    'Tab closed': 'The tab was closed.',
+    'Stopped': 'Stopped before it started.',
+    'Stopped before submitting': 'Stopped before submitting. The form is still open if you want to finish it.',
+    'Removed': 'Taken off this batch.',
+    'Could not open a tab': 'Chrome could not open a tab for it.',
+    'Something went wrong': 'Something went wrong on this page.'
+  };
+  const MISSING_SHOWN = 3;
 
   const HOST_STYLE = 'all: initial !important; position: fixed !important; width: 0 !important; height: 0 !important; ' +
     'left: 0 !important; bottom: 0 !important; z-index: 2147483645 !important; display: block !important;';
 
-  // Tokens mirror popup/popup.css (light) and its pt-dark set (dark).
+  // Warm Coach tokens, mirroring popup/popup.css (light) and its pt-dark set
+  // (dark). --accent-fill is the coral shade that keeps white text at 4.5:1.
   const UI_CSS = `
     :host { all: initial; }
     .wrap {
-      --font: "Google Sans", "Google Sans Text", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, -apple-system, sans-serif;
       --ease: cubic-bezier(0.16, 1, 0.3, 1);
       --surface: #ffffff;
-      --surface-2: #f1f2f4;
-      --surface-3: #e7e9ec;
-      --border: #e1e3e7;
-      --border-soft: #eceef1;
-      --text: #1b1d21;
-      --text-2: #5f6368;
-      --text-3: #6b7075;
-      --accent: #1a73e8;
-      --accent-text: #1967d2;
-      --accent-soft: #e8f0fe;
+      --surface-2: #F4EFE7;
+      --surface-3: #EDE6DB;
+      --border: #E2D9CC;
+      --border-soft: #F0EAE1;
+      --text: #2A2622;
+      --text-2: #6F665E;
+      --text-3: #6F665E;
+      --accent: #E0674B;
+      --accent-text: #A9543F;
+      --accent-fill: #A9543F;
+      --accent-soft: #FBEBE6;
       --on-accent: #ffffff;
-      --success: #1e8e3e;
-      --success-soft: #e6f4ea;
-      --warn: #b06000;
-      --warn-soft: #fef7e0;
-      --danger: #d93025;
-      --danger-soft: #fce8e6;
-      --focus: #1a73e8;
-      --shadow-lg: 0 16px 40px rgba(24, 25, 28, 0.16), 0 2px 8px rgba(24, 25, 28, 0.06);
+      --success: #4A6650;
+      --success-soft: #E9F1EB;
+      --warn: #8A5A12;
+      --warn-soft: #FBF0DC;
+      --danger: #B3402E;
+      --danger-soft: #FBE9E4;
+      --focus: #A9543F;
+      --shadow-lg: 0 18px 40px rgba(42, 38, 34, 0.16), 0 2px 8px rgba(42, 38, 34, 0.06);
       --knob: #ffffff;
       font-family: var(--font);
       font-size: 13px;
@@ -141,27 +170,28 @@
     }
     @media (prefers-color-scheme: dark) {
       .wrap {
-        --surface: #17181b;
-        --surface-2: #1e2024;
-        --surface-3: #26282d;
-        --border: rgba(255, 255, 255, 0.1);
-        --border-soft: rgba(255, 255, 255, 0.06);
-        --text: #ecedee;
-        --text-2: #a1a4aa;
-        --text-3: #8b8f96;
-        --accent: #8ab4f8;
-        --accent-text: #8ab4f8;
-        --accent-soft: rgba(138, 180, 248, 0.14);
-        --on-accent: #0f1012;
-        --success: #81c995;
-        --success-soft: rgba(129, 201, 149, 0.14);
-        --warn: #fdd663;
-        --warn-soft: rgba(253, 214, 99, 0.12);
-        --danger: #f28b82;
-        --danger-soft: rgba(242, 139, 130, 0.12);
-        --focus: #8ab4f8;
+        --surface: #26221E;
+        --surface-2: #2F2A25;
+        --surface-3: #3A342D;
+        --border: #463F37;
+        --border-soft: #3A342D;
+        --text: #F3EDE4;
+        --text-2: #A89E92;
+        --text-3: #9A9085;
+        --accent: #F07A5E;
+        --accent-text: #F07A5E;
+        --accent-fill: #F07A5E;
+        --accent-soft: rgba(240, 122, 94, 0.16);
+        --on-accent: #1C1916;
+        --success: #82B592;
+        --success-soft: rgba(130, 181, 146, 0.14);
+        --warn: #E3B566;
+        --warn-soft: rgba(227, 181, 102, 0.12);
+        --danger: #F0907E;
+        --danger-soft: rgba(240, 144, 126, 0.12);
+        --focus: #F07A5E;
         --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
-        --knob: #0f1012;
+        --knob: #1C1916;
       }
     }
     *, *::before, *::after { box-sizing: border-box; }
@@ -249,7 +279,8 @@
     label.job { cursor: pointer; }
     label.job:hover { background: var(--surface-2); }
     .job.muted .job-title, .job.muted .job-meta { color: var(--text-3); }
-    .check { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+    .check { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent-fill); cursor: pointer; }
+    .job:focus-within { background: var(--surface-2); }
     .main { flex: 1; min-width: 0; }
     .job-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .job-meta { margin-top: 2px; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -278,6 +309,15 @@
     .summary-text { font-size: 12px; color: var(--text-2); }
     .bar { margin-top: 8px; height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
     .bar-fill { height: 100%; width: 0; border-radius: 999px; background: var(--accent); transition: width 240ms var(--ease); }
+    .bar-fill.done { background: var(--success); }
+    .callout {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 16px; font-size: 12px; color: var(--warn); background: var(--warn-soft);
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .callout-text { min-width: 0; }
+    .callout .btn { flex: none; color: var(--warn); border-color: currentColor; }
+    .missing { margin-top: 2px; font-size: 12px; color: var(--text-3); }
 
     .foot { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 16px; border-top: 1px solid var(--border-soft); }
     .ctl { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -295,7 +335,7 @@
       content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
       background: #ffffff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: transform 180ms var(--ease);
     }
-    .switch:checked { background: var(--accent); }
+    .switch:checked { background: var(--accent-fill); }
     .switch:checked::after { transform: translateX(14px); background: var(--knob); }
     .hint { margin: -6px 0 0; font-size: 12px; color: var(--text-3); }
     .caps { margin: 0; font-size: 12px; color: var(--text-2); }
@@ -305,12 +345,16 @@
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .link { padding: 6px 2px; color: var(--accent-text); }
     .link:hover { text-decoration: underline; }
-    .cta { height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
+    .cta { height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600; color: var(--on-accent); background: var(--accent-fill); }
     .cta:not([disabled]):hover { opacity: 0.9; }
     .btn { height: 30px; padding: 0 12px; color: var(--text); background: transparent; border: 1px solid var(--border); }
     .btn:not([disabled]):hover { background: var(--surface-2); }
     .btn-sm { height: 24px; padding: 0 10px; font-size: 11px; }
     .actions .btn { margin-left: auto; }
+    .sel { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
+    .stop { height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600; color: var(--danger); border-color: var(--danger); }
+    .stop:not([disabled]):hover { background: var(--danger-soft); }
+    .stop-hint { margin: 0; font-size: 12px; color: var(--text-3); }
 
     @media (max-width: 420px) {
       .panel { left: 8px; width: calc(100vw - 16px); }
@@ -351,7 +395,8 @@
     startError: '',
     actionError: '',
     starting: false,
-    caps: null             // { allSites, ai } from LIT_BATCH_CAPS, null until known
+    caps: null,            // { allSites, ai } from LIT_BATCH_CAPS, null until known
+    opened: new Set()      // batch jobIds the user opened from here, for "Open next"
   };
   let ui = null;           // { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot, refreshBtn }
   let pollTimer = null;
@@ -726,7 +771,7 @@
         chrome.storage.local.get([BATCH_KEY, DONE_KEY, PREFS_KEY, DISMISSED_KEY], items => {
           try { void chrome.runtime.lastError; } catch (e) { /* context gone */ }
           const all = items || {};
-          st.batch = validBatch(all[BATCH_KEY]);
+          setBatch(all[BATCH_KEY]);
           st.done = all[DONE_KEY] && typeof all[DONE_KEY] === 'object' ? all[DONE_KEY] : {};
           st.prefs = normPrefs(all[PREFS_KEY]);
           st.dismissed = validDismissed(all[DISMISSED_KEY]);
@@ -773,6 +818,13 @@
     return b && typeof b === 'object' && Array.isArray(b.jobs) ? b : null;
   }
 
+  // A different batch starts its "Open next" from the top.
+  function setBatch(raw) {
+    const before = st.batch ? st.batch.id : null;
+    st.batch = validBatch(raw);
+    if (!st.batch || st.batch.id !== before) st.opened.clear();
+  }
+
   function dropDone() {
     Object.keys(st.done).forEach(id => st.selected.delete(id));
     Object.keys(st.dismissed).forEach(id => st.selected.delete(id));
@@ -784,7 +836,7 @@
     if (!alive()) { destroy(); return; }
     let dirty = false;
     if (changes[BATCH_KEY]) {
-      st.batch = validBatch(changes[BATCH_KEY].newValue);
+      setBatch(changes[BATCH_KEY].newValue);
       if (st.batch) st.startError = '';
       else st.actionError = '';
       dirty = true;
@@ -834,11 +886,16 @@
     return listedJobs().filter(preselectable);
   }
 
-  function toggleAll() {
-    const targets = selectableOpen();
-    const all = targets.length > 0 && targets.every(j => st.selected.has(j.jobId));
-    if (all) st.selected.clear();
-    else { st.selected.clear(); targets.forEach(j => st.selected.add(j.jobId)); }
+  // Select all: everything LIT can get into on its own (sign-in walls stay
+  // for the user to pick). None: nothing.
+  function selectAll() {
+    st.selected.clear();
+    selectableOpen().forEach(j => st.selected.add(j.jobId));
+    render();
+  }
+
+  function selectNone() {
+    st.selected.clear();
     render();
   }
 
@@ -956,7 +1013,10 @@
 
   const openOptions = () => send({ type: 'LIT_OPEN_OPTIONS' });
   const stopBatch = () => action({ type: 'LIT_BATCH_STOP' });
-  const focusJob = jobId => action({ type: 'LIT_BATCH_FOCUS', jobId });
+  const focusJob = jobId => {
+    st.opened.add(String(jobId));
+    return action({ type: 'LIT_BATCH_FOCUS', jobId });
+  };
   // Off a running batch before it starts, and off the picker from then on.
   async function removeFromBatch(job) {
     const response = await action({ type: 'LIT_BATCH_REMOVE', jobId: job.jobId });
@@ -986,6 +1046,34 @@
     if (n.running) parts.push(n.running + ' running');
     if (n.queued) parts.push(n.queued + ' queued');
     return parts.join(', ');
+  }
+
+  function reasonText(job) {
+    const raw = clean(job && job.reason, ERROR_MAX);
+    if (/^Error:/i.test(raw)) return REASON_COPY['Something went wrong'];
+    const m = /^(\d+) required fields? needs? you$/i.exec(raw);
+    if (m) return m[1] === '1' ? '1 question needs your answer.' : m[1] + ' questions need your answer.';
+    return REASON_COPY[raw] || raw;
+  }
+
+  // "Still to answer: Why us?, Pronouns and 2 more", from the driver's list.
+  function missingText(job) {
+    const list = (Array.isArray(job && job.missing) ? job.missing : []).map(m => clean(m, 60)).filter(Boolean);
+    if (!list.length || job.status !== 'needs-you') return '';
+    const shown = list.slice(0, MISSING_SHOWN).join(', ');
+    const more = list.length - MISSING_SHOWN;
+    return 'Still to answer: ' + shown + (more > 0 ? ' and ' + more + ' more' : '');
+  }
+
+  // A finished job's tab is still there to open (the runner forgets a tab
+  // once it is closed).
+  function canOpen(job) {
+    return OPENABLE.has(job.status) && typeof job.tabId === 'number';
+  }
+
+  // Finished jobs waiting on the user, with their tab open for them.
+  function waitingJobs(jobs) {
+    return (jobs || []).filter(j => (j.status === 'needs-you' || j.status === 'ready') && canOpen(j));
   }
 
   function progress(jobs) {
@@ -1068,11 +1156,10 @@
     const panel = h('section', 'panel hidden');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-label', 'Auto-apply');
-    panel.addEventListener('keydown', event => {
-      if (!event || event.key !== 'Escape') return;
-      close();
-      try { if (ui) ui.launcher.focus(); } catch (e) { /* no focus */ }
-    });
+    // Focusable itself, so opening can put the keyboard inside the sheet
+    // before the list has loaded.
+    panel.setAttribute('tabindex', '-1');
+    panel.addEventListener('keydown', onPanelKey);
 
     const head = h('header', 'head');
     const titles = h('div', 'titles');
@@ -1150,6 +1237,51 @@
     return node;
   }
 
+  function activeEl() {
+    try { return (ui && ui.shadow.activeElement) || null; } catch (e) { return null; }
+  }
+
+  function focusEl(node) {
+    try { if (node && typeof node.focus === 'function') node.focus(); } catch (e) { /* not focusable */ }
+  }
+
+  function prevent(event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  }
+
+  // Keys inside the sheet: Esc closes it; Up / Down (and Home / End) move
+  // between the jobs in the list; Left / Right change "Jobs at a time".
+  function onPanelKey(event) {
+    if (!event || !ui) return;
+    const key = event.key;
+    if (key === 'Escape') {
+      close();
+      focusEl(ui.launcher);
+      return;
+    }
+    const active = activeEl();
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const n = active && active.getAttribute ? parseInt(active.getAttribute('data-count'), 10) : NaN;
+      if (!Number.isFinite(n)) return;
+      prevent(event);
+      setCount(n + (key === 'ArrowRight' ? 1 : -1));
+      focusEl(ui.panel.querySelector('[data-count="' + st.prefs.concurrency + '"]'));
+      return;
+    }
+    if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return;
+    const items = Array.prototype.slice.call(ui.body.querySelectorAll('[data-nav]'));
+    const i = items.indexOf(active);
+    // Only from the sheet itself or a row; elsewhere the keys keep their usual job.
+    if (!items.length || (i < 0 && active !== ui.panel)) return;
+    prevent(event);
+    let next;
+    if (key === 'Home') next = 0;
+    else if (key === 'End') next = items.length - 1;
+    else if (i < 0) next = key === 'ArrowDown' ? 0 : items.length - 1;
+    else next = Math.min(items.length - 1, Math.max(0, i + (key === 'ArrowDown' ? 1 : -1)));
+    focusEl(items[next]);
+  }
+
   function renderPicker() {
     const listed = listedJobs();
     const n = listed.length;
@@ -1174,7 +1306,7 @@
     }
 
     const count = h('div', 'ctl');
-    count.appendChild(h('span', 'ctl-label', 'Parallel'));
+    count.appendChild(h('span', 'ctl-label', 'Jobs at a time'));
     const seg = h('div', 'seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'Jobs at a time');
@@ -1223,9 +1355,16 @@
     const actions = h('div', 'actions');
     const targets = selectableOpen();
     const allOn = targets.length > 0 && targets.every(j => st.selected.has(j.jobId));
-    const sel = button('link select-all', allOn ? 'Clear selection' : 'Select all', toggleAll);
-    sel.disabled = !targets.length && !picked;
-    keyed(sel, 'select');
+    const sel = h('div', 'sel');
+    sel.setAttribute('role', 'group');
+    sel.setAttribute('aria-label', 'Select');
+    const all = keyed(button('link select-all', 'Select all', selectAll), 'select-all');
+    all.disabled = !targets.length || allOn;
+    const none = keyed(button('link select-none', 'None', selectNone), 'select-none');
+    none.disabled = !picked;
+    sel.appendChild(all);
+    sel.appendChild(h('span', 'sel-sep', '/'));
+    sel.appendChild(none);
     actions.appendChild(sel);
     const verb = st.prefs.mode === 'submit' ? 'Apply to ' : 'Fill ';
     const cta = button('cta start', st.starting ? 'Starting...' : verb + picked, () => { start(); });
@@ -1264,6 +1403,7 @@
     const cb = h('input', 'check');
     cb.setAttribute('type', 'checkbox');
     keyed(cb, 'job-' + job.jobId);
+    cb.setAttribute('data-nav', '');
     cb.checked = st.selected.has(job.jobId);
     cb.addEventListener('change', () => {
       if (cb.checked) st.selected.add(job.jobId);
@@ -1277,7 +1417,9 @@
     main.appendChild(title);
     main.appendChild(h('div', 'job-meta', [job.company, shortHost(job.host)].filter(Boolean).join(' · ')));
     row.appendChild(main);
-    row.appendChild(h('span', 'tag tag-' + kind, KIND_LABEL[kind]));
+    const tag = h('span', 'tag tag-' + kind, KIND_LABEL[kind]);
+    tag.setAttribute('title', KIND_TIP[kind]);
+    row.appendChild(tag);
     row.appendChild(removeButton(job, () => dismiss(job.jobId)));
     return row;
   }
@@ -1305,20 +1447,42 @@
     const summary = h('div', 'summary');
     summary.appendChild(h('div', 'summary-text', summarize(b.jobs) || 'No jobs'));
     const bar = h('div', 'bar');
-    const fill = h('div', 'bar-fill');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', p.finished + ' of ' + p.total + ' done');
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', String(p.total));
+    bar.setAttribute('aria-valuenow', String(p.finished));
+    const fill = h('div', 'bar-fill' + (running ? '' : ' done'));
     fill.style.width = (p.total ? Math.round((p.finished / p.total) * 100) : 0) + '%';
     bar.appendChild(fill);
     summary.appendChild(bar);
     ui.body.appendChild(summary);
+
+    // Jobs waiting on the user, said once at the top with the next one a
+    // click away. Each row also has its own Open button.
+    const waiting = waitingJobs(b.jobs);
+    if (waiting.length) {
+      const callout = h('div', 'callout');
+      callout.appendChild(h('span', 'callout-text', waiting.length === 1
+        ? '1 job needs you. Open it to finish, then press Submit yourself.'
+        : waiting.length + ' jobs need you. Open each one to finish, then press Submit yourself.'));
+      const nextJob = waiting.find(j => !st.opened.has(String(j.jobId))) || waiting[0];
+      const nextBtn = button('btn btn-sm open-next', waiting.length === 1 ? 'Open it' : 'Open next', () => { focusJob(nextJob.jobId); });
+      callout.appendChild(keyed(nextBtn, 'open-next'));
+      ui.body.appendChild(callout);
+    }
 
     const list = h('div', 'list');
     b.jobs.forEach(job => list.appendChild(batchRow(job)));
     ui.body.appendChild(list);
 
     if (st.actionError) ui.foot.appendChild(h('p', 'error action-error', st.actionError));
+    if (running) {
+      ui.foot.appendChild(h('p', 'stop-hint', 'Stop opens nothing new and submits nothing more. Tabs that need you stay open.'));
+    }
     const actions = h('div', 'actions');
-    if (running) actions.appendChild(keyed(button('btn stop', 'Stop', () => { stopBatch(); }), 'stop'));
-    else actions.appendChild(keyed(button('btn clear', 'Clear', () => { clearBatch(); }), 'clear'));
+    if (running) actions.appendChild(keyed(button('btn stop', 'Stop batch', () => { stopBatch(); }), 'stop'));
+    else actions.appendChild(keyed(button('btn clear', 'Back to job list', () => { clearBatch(); }), 'clear'));
     ui.foot.appendChild(actions);
   }
 
@@ -1333,14 +1497,17 @@
     main.appendChild(title);
     const meta = [clean(job.company, TITLE_MAX), shortHost(job.host)].filter(Boolean).join(' · ');
     if (meta) main.appendChild(h('div', 'job-meta', meta));
-    const reason = clean(job.reason, ERROR_MAX);
+    const reason = reasonText(job);
     if (reason) main.appendChild(h('div', 'reason', reason));
+    const missing = missingText(job);
+    if (missing) main.appendChild(h('div', 'missing', missing));
     row.appendChild(main);
     const side = h('div', 'side');
     side.appendChild(h('span', 'pill pill-' + job.status, STATUS_LABEL[job.status] || clean(job.status)));
-    if (OPENABLE.has(job.status)) {
-      const openBtn = button('btn btn-sm open-job', 'Open', () => { focusJob(job.jobId); });
-      openBtn.setAttribute('aria-label', 'Open ' + titleText);
+    if (canOpen(job)) {
+      const openBtn = button('btn btn-sm open-job', OPEN_LABEL[job.status], () => { focusJob(job.jobId); });
+      openBtn.setAttribute('aria-label', 'Open the tab for ' + titleText);
+      openBtn.setAttribute('data-nav', '');
       keyed(openBtn, 'open-' + job.jobId);
       side.appendChild(openBtn);
     }
@@ -1357,6 +1524,8 @@
     if (st.open) return st.loading || Promise.resolve();
     st.open = true;
     render();
+    // Into the sheet, so the keyboard starts where the jobs are.
+    focusEl(ui.panel);
     return Promise.all([reloadIfPicking(), loadCaps()]).then(() => undefined);
   }
 

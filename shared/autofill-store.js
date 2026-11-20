@@ -101,6 +101,8 @@ const AutofillStore = (() => {
     return !!value && typeof value === 'object' && !Array.isArray(value);
   }
 
+  const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
   function getArea() {
     if (typeof chrome === 'undefined' || !chrome || !chrome.storage || !chrome.storage.local) {
       throw new Error('AutofillStore: chrome.storage.local is not available');
@@ -117,13 +119,16 @@ const AutofillStore = (() => {
     }
   }
 
-  function areaGet(keys) {
+  // chrome.storage.local[method](arg, callback) as a promise that rejects on
+  // runtime.lastError. get resolves the items read ({} for none); set and
+  // remove resolve nothing.
+  function areaCall(method, arg) {
     return new Promise((resolve, reject) => {
       try {
-        getArea().get(keys, result => {
+        getArea()[method](arg, result => {
           const msg = lastErrorMessage();
           if (msg) reject(new Error(msg));
-          else resolve(result || {});
+          else resolve(method === 'get' ? (result || {}) : undefined);
         });
       } catch (e) {
         reject(e);
@@ -131,33 +136,9 @@ const AutofillStore = (() => {
     });
   }
 
-  function areaSet(items) {
-    return new Promise((resolve, reject) => {
-      try {
-        getArea().set(items, () => {
-          const msg = lastErrorMessage();
-          if (msg) reject(new Error(msg));
-          else resolve();
-        });
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
-  function areaRemove(keys) {
-    return new Promise((resolve, reject) => {
-      try {
-        getArea().remove(keys, () => {
-          const msg = lastErrorMessage();
-          if (msg) reject(new Error(msg));
-          else resolve();
-        });
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
+  const areaGet = keys => areaCall('get', keys);
+  const areaSet = items => areaCall('set', items);
+  const areaRemove = keys => areaCall('remove', keys);
 
   async function readKey(key) {
     const result = await areaGet([key]);
@@ -195,7 +176,7 @@ const AutofillStore = (() => {
     const src = isPlainObject(base) ? base : {};
     const patch = isPlainObject(input) ? input : {};
     PROFILE_FIELDS.forEach(k => {
-      let v = Object.prototype.hasOwnProperty.call(patch, k) ? patch[k] : src[k];
+      let v = has(patch, k) ? patch[k] : src[k];
       v = str(v).trim();
       if (YES_NO_FIELDS.includes(k)) v = cleanYesNo(v);
       out[k] = v;
@@ -203,7 +184,7 @@ const AutofillStore = (() => {
     const baseEeo = isPlainObject(src.eeo) ? src.eeo : {};
     const patchEeo = isPlainObject(patch.eeo) ? patch.eeo : {};
     EEO_FIELDS.forEach(k => {
-      const v = Object.prototype.hasOwnProperty.call(patchEeo, k) ? patchEeo[k] : baseEeo[k];
+      const v = has(patchEeo, k) ? patchEeo[k] : baseEeo[k];
       out.eeo[k] = str(v).trim();
     });
     return out;
@@ -341,17 +322,15 @@ const AutofillStore = (() => {
     return mergeProfile(await readKey(KEYS.PROFILE), null);
   }
 
-  async function readRules() {
-    const raw = await readKey(KEYS.RULES);
+  // A stored list, each entry re-sanitized; [] when the key holds no list.
+  async function readList(key, clean) {
+    const raw = await readKey(key);
     if (!Array.isArray(raw)) return [];
-    return raw.map(cleanRule).filter(Boolean);
+    return raw.map(clean).filter(Boolean);
   }
 
-  async function readAnswers() {
-    const raw = await readKey(KEYS.ANSWERS);
-    if (!Array.isArray(raw)) return [];
-    return raw.map(cleanAnswer).filter(Boolean);
-  }
+  const readRules = () => readList(KEYS.RULES, cleanRule);
+  const readAnswers = () => readList(KEYS.ANSWERS, cleanAnswer);
 
   async function readSettings() {
     return cleanSettings(await readKey(KEYS.SETTINGS), null);
@@ -365,6 +344,17 @@ const AutofillStore = (() => {
     } catch (e) {
       return null;
     }
+  }
+
+  // Removes the entry with this id from a stored list. False when none had it.
+  function deleteById(key, read, id) {
+    return enqueue(async () => {
+      const list = await read();
+      const next = list.filter(item => item.id !== id);
+      if (next.length === list.length) return false;
+      await areaSet({ [key]: next });
+      return true;
+    });
   }
 
   function upsertAnswerInto(list, entry, id) {
@@ -444,13 +434,7 @@ const AutofillStore = (() => {
     },
 
     async deleteRule(id) {
-      return enqueue(async () => {
-        const rules = await readRules();
-        const next = rules.filter(r => r.id !== id);
-        if (next.length === rules.length) return false;
-        await areaSet({ [KEYS.RULES]: next });
-        return true;
-      });
+      return deleteById(KEYS.RULES, readRules, id);
     },
 
     async getAnswers() {
@@ -475,13 +459,7 @@ const AutofillStore = (() => {
     },
 
     async deleteAnswer(id) {
-      return enqueue(async () => {
-        const answers = await readAnswers();
-        const next = answers.filter(a => a.id !== id);
-        if (next.length === answers.length) return false;
-        await areaSet({ [KEYS.ANSWERS]: next });
-        return true;
-      });
+      return deleteById(KEYS.ANSWERS, readAnswers, id);
     },
 
     // Best saved answer by Jaccard similarity of labelKey tokens, or null when
@@ -608,7 +586,7 @@ const AutofillStore = (() => {
         items[KEYS.ANSWERS] = cleanUnique(parsed.answers, cleanAnswer, a => a.labelKey).slice(0, MAX_ANSWERS);
         counts.answers = items[KEYS.ANSWERS].length;
       }
-      if (Object.prototype.hasOwnProperty.call(parsed, 'resume')) {
+      if (has(parsed, 'resume')) {
         if (parsed.resume === null) removals.push(KEYS.RESUME);
         else {
           items[KEYS.RESUME] = cleanResume(parsed.resume);

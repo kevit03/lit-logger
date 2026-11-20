@@ -104,17 +104,53 @@ test('matches: hosts mirror content/adapters/ats', () => {
   assert.strictEqual(by.greenhouse.matches(undefined), false);
 });
 
-test('helpers: the shared widget block is identical in all three files', () => {
-  const block = site => {
+test('helpers: adapters use AutofillCore.siteKit, not private copies', () => {
+  for (const site of SITES) {
     const src = fs.readFileSync(path.join(SITE_DIR, site + '.js'), 'utf8');
-    const a = src.indexOf('// --- widget helpers');
-    const b = src.indexOf('// --- end widget helpers');
-    assert.ok(a > 0 && b > a, site + ': helper block markers missing');
-    return src.slice(a, b);
-  };
-  const gh = block('greenhouse');
-  assert.strictEqual(block('ashby'), gh, 'ashby.js helper block drifted from greenhouse.js');
-  assert.strictEqual(block('workday'), gh, 'workday.js helper block drifted from greenhouse.js');
+    assert.ok(/AutofillCore\.siteKit/.test(src), site + ' should use the shared kit');
+    for (const name of ['norm', 'canon', 'scoreOption', 'bestOption', 'fire', 'press', 'typeInto', 'key', 'waitFor']) {
+      assert.ok(!new RegExp('function ' + name + '\\s*\\(').test(src), site + ' defines its own ' + name + '()');
+    }
+  }
+  // An adapter loaded against a core without the kit stays out of the way.
+  global.AutofillCore = { adapters: [], registerSiteAdapter(a) { this.adapters.push(a); } };
+  SITES.forEach(loadSite);
+  assert.strictEqual(global.AutofillCore.adapters.length, 0);
+  af.unstubAutofillCore();
+});
+
+test('siteKit: option scoring, best node, host matching', () => {
+  const kit = require(path.join(ROOT, 'shared', 'autofill-core.js')).siteKit;
+  assert.strictEqual(kit.scoreText('Yes', 'yes'), 1);
+  assert.strictEqual(kit.scoreText('USA', 'United States'), 0.95, 'country alias');
+  assert.strictEqual(kit.scoreText('Yes, I am authorized', 'yes'), 0.9, 'yes/no prefix');
+  assert.strictEqual(kit.scoreText('No, I am not', 'yes'), 0);
+  assert.strictEqual(kit.scoreText('Plainview, Texas, United States', 'Plainview, NY'), 0, 'same town, other state');
+  assert.ok(kit.scoreText('Plainview, New York, United States', 'Plainview, NY') >= 0.9);
+  assert.ok(kit.scoreText('Austin', 'Austin, Texas, United States') > 0.6, 'containment');
+  const nodes = ['Canada', 'USA', 'Mexico'].map(t => ({ textContent: t }));
+  assert.strictEqual(kit.bestNode(nodes, 'United States').textContent, 'USA');
+  assert.strictEqual(kit.bestNode(nodes, 'Narnia'), null);
+  const m = kit.hostMatcher(/^jobs\.example\.com$/);
+  assert.strictEqual(m('https://jobs.example.com/x'), true);
+  assert.strictEqual(m(new URL('https://jobs.example.com/x')), true);
+  assert.strictEqual(m('https://example.com/'), false);
+  assert.strictEqual(m('not a url'), false);
+  assert.strictEqual(m(undefined), false);
+});
+
+test('siteKit: waitFor resolves on a mutation, times out with null, never leaks an observer', async () => {
+  const kit = require(path.join(ROOT, 'shared', 'autofill-core.js')).siteKit;
+  const doc = af.loadFixture('greenhouse.html');
+  const t0 = Date.now();
+  assert.strictEqual(await kit.waitFor('#never-there', doc.documentElement, 80), null);
+  assert.ok(Date.now() - t0 < 1000, 'gave up at the timeout');
+  assert.strictEqual(await kit.waitFor(() => [], doc.documentElement, 50), null, 'an empty list does not count');
+  const later = kit.waitFor('#late', doc.documentElement, 1000);
+  setTimeout(() => af.mount(doc.body, af.html(doc, '<div id="late"></div>')), 20);
+  const found = await later;
+  assert.ok(found && found.getAttribute('id') === 'late');
+  assertNoObservers('siteKit.waitFor');
 });
 
 // --- Greenhouse --------------------------------------------------------------

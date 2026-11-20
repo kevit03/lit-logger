@@ -358,13 +358,26 @@ async function testOpenAndPreselect() {
     assert.strictEqual(q(doc, '.start').textContent, 'Apply to 7');
     assert.strictEqual(q(doc, '.sub').textContent, '7 of 8 selected');
 
-    assert.strictEqual(q(doc, '.select-all').textContent, 'Clear selection');
-    await click(q(doc, '.select-all'));
+    // Select all and None, side by side; each is off when it would do nothing.
+    assert.strictEqual(q(doc, '.select-all').textContent, 'Select all');
+    assert.strictEqual(q(doc, '.select-all').disabled, true, 'everything LIT can do is already picked');
+    assert.strictEqual(q(doc, '.select-none').textContent, 'None');
+    await click(q(doc, '.select-none'));
     assert.strictEqual(api.state().selected.length, 0);
     assert.strictEqual(q(doc, '.start').disabled, true, 'Start disabled with nothing selected');
-    assert.strictEqual(q(doc, '.select-all').textContent, 'Select all');
+    assert.strictEqual(q(doc, '.select-none').disabled, true);
+    assert.strictEqual(q(doc, '.select-all').disabled, false);
     await click(q(doc, '.select-all'));
     assert.deepStrictEqual(api.state().selected.sort(), open7);
+    // From a partial pick, None clears in one click.
+    await toggle(row(doc, IDS.gh).querySelector('.check'), false);
+    assert.strictEqual(q(doc, '.select-all').disabled, false);
+    await click(q(doc, '.select-none'));
+    assert.strictEqual(api.state().selected.length, 0);
+    await click(q(doc, '.select-all'));
+    assert.deepStrictEqual(api.state().selected.sort(), open7);
+    assert.strictEqual(row(doc, IDS.workday).querySelector('.tag').getAttribute('title'),
+      'This site needs you to sign in, so it is not picked for you.', 'each tag says what it means');
 
     // A job finishing elsewhere drops out of the list.
     await chromeSet({ lit_batch_done: { [IDS.applied]: 1, [IDS.lever]: 2 } });
@@ -826,10 +839,10 @@ async function testLiveView() {
     await api.open();
     const jobs = [
       batchJob(hex(41), 'submitted'),
-      batchJob(hex(42), 'ready', { reason: 'Filled. Review and submit.' }),
-      batchJob(hex(43), 'needs-you', { reason: '3 required fields need you', missing: ['Why us?'] }),
-      batchJob(hex(44), 'needs-you', { reason: 'CAPTCHA' }),
-      batchJob(hex(45), 'failed', { reason: 'Unexpected error' }),
+      batchJob(hex(42), 'ready', { reason: 'Filled. Review and submit.', tabId: 42 }),
+      batchJob(hex(43), 'needs-you', { reason: '3 required fields need you', missing: ['Why us?'], tabId: 43 }),
+      batchJob(hex(44), 'needs-you', { reason: 'CAPTCHA', tabId: 44 }),
+      batchJob(hex(45), 'failed', { reason: 'Unexpected error', tabId: 45 }),
       batchJob(hex(46), 'skipped', { reason: 'Tab closed' }),
       batchJob(hex(47), 'filling'),
       batchJob(hex(48), 'submitting'),
@@ -850,16 +863,37 @@ async function testLiveView() {
     assert.strictEqual(pill(hex(47)), 'Filling');
     assert.strictEqual(pill(hex(48)), 'Submitting');
     assert.strictEqual(pill(hex(49)), 'Queued');
-    assert.strictEqual(row(doc, hex(43)).querySelector('.reason').textContent, '3 required fields need you');
+    // Reasons in plain words, with the questions still to answer.
+    assert.strictEqual(row(doc, hex(43)).querySelector('.reason').textContent, '3 questions need your answer.');
+    assert.strictEqual(row(doc, hex(43)).querySelector('.missing').textContent, 'Still to answer: Why us?');
+    assert.strictEqual(row(doc, hex(44)).querySelector('.reason').textContent, 'The site wants to check you are not a robot.');
+    assert.strictEqual(row(doc, hex(44)).querySelector('.missing'), null, 'no list when the driver sent none');
+    assert.strictEqual(row(doc, hex(45)).querySelector('.reason').textContent, 'Unexpected error', 'an unknown reason is shown as it is');
+    assert.strictEqual(row(doc, hex(46)).querySelector('.reason').textContent, 'The tab was closed.');
     assert.strictEqual(row(doc, hex(41)).querySelector('.reason'), null, 'no reason line when empty');
     const openIds = qa(doc, '.open-job').map(b => b.closest('.job').getAttribute('data-job-id')).sort();
     assert.deepStrictEqual(openIds, [hex(42), hex(43), hex(44), hex(45)], 'Open only on ready / needs-you / failed');
-    assert.ok(q(doc, '.stop'));
+    assert.strictEqual(row(doc, hex(42)).querySelector('.open-job').textContent, 'Review');
+    assert.strictEqual(row(doc, hex(43)).querySelector('.open-job').textContent, 'Open tab');
+    assert.strictEqual(row(doc, hex(43)).querySelector('.open-job').getAttribute('aria-label'), 'Open the tab for Role 2b');
+    // One line up top for the jobs waiting on you, with the next a click away.
+    assert.strictEqual(q(doc, '.callout-text').textContent, '3 jobs need you. Open each one to finish, then press Submit yourself.');
+    assert.strictEqual(q(doc, '.open-next').textContent, 'Open next');
+    // An obvious Stop, saying what it does.
+    assert.strictEqual(q(doc, '.stop').textContent, 'Stop batch');
+    assert.ok(/submits nothing more/.test(q(doc, '.stop-hint').textContent));
+    assert.strictEqual(q(doc, '.bar').getAttribute('aria-valuenow'), '6');
+    assert.ok(!q(doc, '.bar-fill').classList.contains('done'));
     assert.strictEqual(q(doc, '.clear'), null, 'no Clear while running');
     assert.strictEqual(q(doc, '.start'), null, 'picker hidden while a batch exists');
 
     await click(row(doc, hex(43)).querySelector('.open-job'));
     assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_FOCUS', jobId: hex(43) });
+    // "Open next" skips what you already opened from here.
+    await click(q(doc, '.open-next'));
+    assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_FOCUS', jobId: hex(42) });
+    await click(q(doc, '.open-next'));
+    assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_FOCUS', jobId: hex(44) });
 
     await click(q(doc, '.stop'));
     assert.deepStrictEqual(received[received.length - 1], { type: 'LIT_BATCH_STOP' });
@@ -872,6 +906,10 @@ async function testLiveView() {
     assert.strictEqual(q(doc, '.summary-text').textContent, '2 submitted, 1 ready, 3 need you, 1 failed, 2 skipped');
     assert.ok(q(doc, '.sub').textContent.startsWith('Stopped'));
     assert.strictEqual(q(doc, '.stop'), null);
+    assert.strictEqual(q(doc, '.stop-hint'), null);
+    assert.ok(q(doc, '.bar-fill').classList.contains('done'));
+    assert.strictEqual(row(doc, hex(49)).querySelector('.reason').textContent, 'Stopped before it started.');
+    assert.strictEqual(q(doc, '.clear').textContent, 'Back to job list');
     assert.ok(isHidden(q(doc, '.badge')), 'no progress badge once finished');
 
     await click(q(doc, '.clear'));
@@ -997,6 +1035,78 @@ async function testNoEmoji() {
   console.log('[PASS] no emoji in the source or anything rendered');
 }
 
+// Keyboard: opening puts focus in the sheet, Up / Down / Home / End walk the
+// rows, Left / Right change "Jobs at a time" (and it is remembered), Esc
+// closes back to the launcher. The fake DOM has no focus, so it gets one
+// here: the focused element is recorded on its root (the shadow root).
+async function testKeyboard() {
+  const proto = dom.FakeElement.prototype;
+  const hadFocus = Object.prototype.hasOwnProperty.call(proto, 'focus');
+  proto.focus = function () {
+    let n = this;
+    while (n.parentElement) n = n.parentElement;
+    n.activeElement = this;
+  };
+  const key = (doc, k) => {
+    const sh = shadow(doc);
+    const target = sh.activeElement || q(doc, '.panel');
+    const ev = dom.makeEvent('keydown', target, { key: k });
+    target.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  };
+  try {
+    await withPage({}, async ({ doc, chrome, api }) => {
+      await api.open();
+      await settle();
+      const sh = shadow(doc);
+      assert.strictEqual(sh.activeElement, q(doc, '.panel'), 'opening puts focus in the sheet');
+      assert.strictEqual(q(doc, '.panel').getAttribute('tabindex'), '-1');
+      const rows = () => qa(doc, '[data-nav]');
+      assert.strictEqual(rows().length, 9, 'one stop per job');
+      assert.ok(key(doc, 'ArrowDown'));
+      assert.strictEqual(sh.activeElement, rows()[0], 'Down from the sheet goes to the first job');
+      key(doc, 'ArrowDown');
+      assert.strictEqual(sh.activeElement, rows()[1]);
+      key(doc, 'End');
+      assert.strictEqual(sh.activeElement, rows()[8]);
+      key(doc, 'ArrowDown');
+      assert.strictEqual(sh.activeElement, rows()[8], 'stays on the last job');
+      key(doc, 'Home');
+      assert.strictEqual(sh.activeElement, rows()[0]);
+      key(doc, 'ArrowUp');
+      assert.strictEqual(sh.activeElement, rows()[0]);
+
+      // Up / Down elsewhere (the Start button) keep their usual job.
+      q(doc, '.start').focus();
+      assert.ok(!key(doc, 'ArrowDown'));
+      assert.strictEqual(sh.activeElement, q(doc, '.start'));
+
+      // Left / Right on "Jobs at a time" move the choice and keep it.
+      q(doc, '[data-count="5"]').focus();
+      assert.ok(key(doc, 'ArrowRight'));
+      await settle();
+      assert.deepStrictEqual(chrome.storage.local.store.lit_batch_prefs, { concurrency: 6, mode: 'submit' });
+      assert.strictEqual(sh.activeElement, q(doc, '[data-count="6"]'), 'focus follows the choice');
+      key(doc, 'ArrowLeft');
+      key(doc, 'ArrowLeft');
+      await settle();
+      assert.strictEqual(chrome.storage.local.store.lit_batch_prefs.concurrency, 5, 'never below 5');
+
+      key(doc, 'Escape');
+      assert.ok(isHidden(q(doc, '.panel')));
+      assert.strictEqual(sh.activeElement, q(doc, '.launcher'), 'Esc returns to the launcher');
+    });
+    // The remembered count comes back on the next visit.
+    await withPage({ store: { lit_batch_prefs: { concurrency: 6, mode: 'submit' } } }, async ({ doc, api }) => {
+      await api.open();
+      assert.strictEqual(q(doc, '[data-count="6"]').getAttribute('aria-pressed'), 'true');
+    });
+  } finally {
+    if (!hadFocus) delete proto.focus;
+  }
+  console.log('[PASS] keyboard: focus into the sheet, arrows walk jobs and the count, Esc closes');
+}
+
 async function run() {
   console.log('--- Running test/jobright-panel.test.js ---');
   await testClassifier();
@@ -1014,6 +1124,7 @@ async function run() {
   await testStart();
   await testFetchErrors();
   await testLiveView();
+  await testKeyboard();
   await testRoutes();
   await testShadowIsolation();
   await testInvalidated();
