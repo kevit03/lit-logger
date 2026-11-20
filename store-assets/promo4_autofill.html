@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    background: #FBF8F3;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Nunito", "Segoe UI", Roboto, sans-serif;
+    color: #2A2622;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 38px 60px 32px 60px;
+    background-image: 
+      radial-gradient(circle at 12% 18%, rgba(224, 103, 75, 0.12) 0%, transparent 48%),
+      radial-gradient(circle at 88% 85%, rgba(107, 158, 122, 0.10) 0%, transparent 50%),
+      linear-gradient(180deg, #FDFBF7 0%, #F6F0E6 100%);
+  }
+
+  .ambient-glow {
+    position: absolute;
+    top: -80px;
+    left: -40px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(224, 103, 75, 0.12) 0%, rgba(224, 103, 75, 0) 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .header {
+    position: relative;
+    z-index: 2;
+  }
+
+  .badge-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #A9543F;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(42, 38, 34, 0.04);
+  }
+
+  .badge-row svg {
+    width: 15px;
+    height: 15px;
+    fill: #E0674B;
+  }
+
+  .title {
+    font-size: 42px;
+    line-height: 1.15;
+    font-weight: 850;
+    color: #2A2622;
+    letter-spacing: -0.9px;
+    margin-bottom: 8px;
+  }
+
+  .title span.highlight {
+    color: #E0674B;
+    background: linear-gradient(120deg, #E0674B, #C84E32);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 19px;
+    line-height: 1.4;
+    color: #6F665E;
+    font-weight: 500;
+    max-width: 740px;
+  }
+
+  .main-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 36px;
+    flex: 1;
+    margin-top: 14px;
+  }
+
+  /* Left column: feature cards */
+  .features-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 390px;
+    flex-shrink: 0;
+  }
+
+  .feature-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+    box-shadow: 0 4px 16px rgba(42, 38, 34, 0.04), 0 1px 3px rgba(42, 38, 34, 0.03);
+  }
+
+  .feature-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .icon-coral {
+    background: #FDF1ED;
+    color: #E0674B;
+    border: 1px solid rgba(224, 103, 75, 0.25);
+  }
+  .icon-green {
+    background: #EDF7F0;
+    color: #528A63;
+    border: 1px solid rgba(107, 158, 122, 0.25);
+  }
+  .icon-blue {
+    background: #EFF6FC;
+    color: #3B7EA1;
+    border: 1px solid rgba(59, 126, 161, 0.25);
+  }
+
+  .feature-text h3 {
+    font-size: 16px;
+    font-weight: 750;
+    color: #2A2622;
+    margin-bottom: 4px;
+  }
+
+  .feature-text p {
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  /* Right column: Autofill Showcase comparison / flow */
+  .mockup-container {
+    position: relative;
+    flex: 1;
+    display: flex;
+    gap: 20px;
+    align-items: stretch;
+    height: 480px;
+  }
+
+  /* Left subcard: Profile card */
+  .sub-mockup {
+    flex: 1;
+    background: #FFFFFF;
+    border-radius: 18px;
+    border: 1px solid #ECE5DA;
+    box-shadow: 
+      0 18px 45px rgba(42, 38, 34, 0.09),
+      0 4px 12px rgba(42, 38, 34, 0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sub-mockup-head {
+    background: #F4EFE7;
+    padding: 12px 18px;
+    border-bottom: 1px solid #ECE5DA;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .head-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 750;
+    color: #2A2622;
+  }
+
+  .sub-tabs {
+    display: flex;
+    gap: 6px;
+  }
+
+  .sub-tab {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: #6F665E;
+  }
+
+  .sub-tab.active {
+    background: #FFFFFF;
+    color: #E0674B;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .sub-body {
+    padding: 18px 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: #FFFFFF;
+  }
+
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .input-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #6F665E;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .input-field {
+    background: #FBF8F3;
+    border: 1px solid #ECE5DA;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #2A2622;
+  }
+
+  .resume-box {
+    background: #FDF1ED;
+    border: 1.5px dashed #E0674B;
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .resume-icon {
+    font-size: 20px;
+  }
+
+  .resume-meta h5 {
+    font-size: 12px;
+    font-weight: 750;
+    color: #2A2622;
+  }
+
+  .resume-meta span {
+    font-size: 10.5px;
+    color: #A9543F;
+    font-weight: 600;
+  }
+
+  /* Right subcard: Live Form being filled */
+  .sub-mockup.live-form {
+    border-color: rgba(107, 158, 122, 0.4);
+    box-shadow: 
+      0 22px 55px rgba(107, 158, 122, 0.14),
+      0 4px 12px rgba(42, 38, 34, 0.04);
+  }
+
+  .live-badge {
+    background: #EDF7F0;
+    color: #4A6650;
+    border: 1px solid rgba(107, 158, 122, 0.3);
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 750;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .input-field.filled {
+    background: #F6FBF7;
+    border: 1px solid #6B9E7A;
+    color: #2A2622;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .check-green {
+    color: #6B9E7A;
+    font-weight: 800;
+  }
+
+  /* Floating trigger pill */
+  .autofill-action-card {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #2A2622;
+    color: #FFFFFF;
+    border-radius: 999px;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 16px 36px rgba(42, 38, 34, 0.28);
+    border: 1px solid rgba(224, 103, 75, 0.5);
+    white-space: nowrap;
+    z-index: 20;
+  }
+
+  .action-btn-lit {
+    background: #E0674B;
+    color: white;
+    font-size: 12px;
+    font-weight: 750;
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+
+  .action-text {
+    font-size: 12.5px;
+    font-weight: 650;
+    color: #FBF8F3;
+  }
+
+  /* Footer bar */
+  .footer-bar {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 14px;
+    border-top: 1px solid rgba(236, 229, 218, 0.8);
+    font-size: 13px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .footer-tags {
+    display: flex;
+    gap: 24px;
+  }
+
+  .footer-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footer-tag svg {
+    color: #6B9E7A;
+  }
+
+  .tagline {
+    font-weight: 700;
+    color: #A9543F;
+  }
+
+</style>
+</head>
+<body>
+  <div class="ambient-glow"></div>
+
+  <div class="header">
+    <div class="badge-row">
+      <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      Smart Autofill · 1-Click Profile Fill
+    </div>
+    <h1 class="title">Fly through <span class="highlight">repetitive application forms.</span></h1>
+    <p class="subtitle">Save your profile details and resume once. LIT auto-populates tricky job application forms in seconds with complete privacy.</p>
+  </div>
+
+  <div class="main-content">
+    <div class="features-col">
+      <div class="feature-card">
+        <div class="feature-icon icon-coral">⚡</div>
+        <div class="feature-text">
+          <h3>One-Click Auto-Fill</h3>
+          <p>Types in your personal details, work authorization, links, and pre-saved answers with zero manual typing.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-green">📄</div>
+        <div class="feature-text">
+          <h3>Auto-Attach Resume</h3>
+          <p>Store your PDF resume in LIT. Whenever a career form asks for a file, LIT attaches it automatically.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-blue">🔒</div>
+        <div class="feature-text">
+          <h3>100% Local & Private</h3>
+          <p>Your resume and details never leave your computer. Nothing is ever submitted without your final click.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup-container">
+      <!-- Left: Profile -->
+      <div class="sub-mockup">
+        <div class="sub-mockup-head">
+          <div class="head-left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#E0674B"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm-2 7V6a2 2 0 1 1 4 0v3h-4z"/></svg>
+            LIT Profile
+          </div>
+          <div class="sub-tabs">
+            <span class="sub-tab active">Profile</span>
+            <span class="sub-tab">Resume</span>
+            <span class="sub-tab">Answers</span>
+          </div>
+        </div>
+        <div class="sub-body">
+          <div class="input-group">
+            <span class="input-label">Full Name</span>
+            <div class="input-field">Alex Morgan</div>
+          </div>
+          <div class="input-group">
+            <span class="input-label">Email Address</span>
+            <div class="input-field">alex.morgan@example.com</div>
+          </div>
+          <div class="input-group">
+            <span class="input-label">Phone & LinkedIn</span>
+            <div class="input-field">(555) 234-5678 · in/alexmorgan</div>
+          </div>
+          <div class="resume-box">
+            <div class="resume-icon">📄</div>
+            <div class="resume-meta">
+              <h5>Alex_Morgan_Resume_2026.pdf</h5>
+              <span>Ready to auto-attach</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Target Application Form -->
+      <div class="sub-mockup live-form">
+        <div class="sub-mockup-head">
+          <div class="head-left">
+            Greenhouse Application
+          </div>
+          <div class="live-badge">
+            <span>●</span> Form Detected
+          </div>
+        </div>
+        <div class="sub-body">
+          <div class="input-group">
+            <span class="input-label">First & Last Name</span>
+            <div class="input-field filled">
+              <span>Alex Morgan</span>
+              <span class="check-green">✓</span>
+            </div>
+          </div>
+          <div class="input-group">
+            <span class="input-label">Email</span>
+            <div class="input-field filled">
+              <span>alex.morgan@example.com</span>
+              <span class="check-green">✓</span>
+            </div>
+          </div>
+          <div class="input-group">
+            <span class="input-label">Resume Attachment</span>
+            <div class="input-field filled">
+              <span>Alex_Morgan_Resume_2026.pdf</span>
+              <span class="check-green">✓ Attached</span>
+            </div>
+          </div>
+          <div class="input-group">
+            <span class="input-label">Work Authorization</span>
+            <div class="input-field filled">
+              <span>Authorized to work in US</span>
+              <span class="check-green">✓</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Floating Pill -->
+      <div class="autofill-action-card">
+        <span class="action-btn-lit">⚡ LIT Autofill</span>
+        <span class="action-text">12 fields filled in 0.4s · Ready for review</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <div class="footer-tags">
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Saves 5+ minutes per application
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Smart resume PDF attachment
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Nothing submitted without you
+      </div>
+    </div>
+    <div class="tagline">Strava for getting hired.</div>
+  </div>
+</body>
+</html>

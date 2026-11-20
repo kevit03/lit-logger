@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    background: #FBF8F3;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Nunito", "Segoe UI", Roboto, sans-serif;
+    color: #2A2622;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 38px 60px 32px 60px;
+    background-image: 
+      radial-gradient(circle at 88% 18%, rgba(224, 103, 75, 0.12) 0%, transparent 48%),
+      radial-gradient(circle at 10% 88%, rgba(244, 239, 231, 0.9) 0%, transparent 52%),
+      linear-gradient(180deg, #FDFBF7 0%, #F6F0E6 100%);
+  }
+
+  .ambient-glow {
+    position: absolute;
+    top: -100px;
+    right: -60px;
+    width: 650px;
+    height: 650px;
+    background: radial-gradient(circle, rgba(224, 103, 75, 0.14) 0%, rgba(224, 103, 75, 0) 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .header {
+    position: relative;
+    z-index: 2;
+  }
+
+  .badge-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #A9543F;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(42, 38, 34, 0.04);
+  }
+
+  .badge-row svg {
+    width: 15px;
+    height: 15px;
+    fill: #E0674B;
+  }
+
+  .title {
+    font-size: 42px;
+    line-height: 1.15;
+    font-weight: 850;
+    color: #2A2622;
+    letter-spacing: -0.9px;
+    margin-bottom: 8px;
+  }
+
+  .title span.highlight {
+    color: #E0674B;
+    background: linear-gradient(120deg, #E0674B, #C84E32);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 19px;
+    line-height: 1.4;
+    color: #6F665E;
+    font-weight: 500;
+    max-width: 720px;
+  }
+
+  .main-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 48px;
+    flex: 1;
+    margin-top: 14px;
+  }
+
+  /* Left column */
+  .features-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 440px;
+    flex-shrink: 0;
+  }
+
+  .feature-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+    box-shadow: 0 4px 16px rgba(42, 38, 34, 0.04), 0 1px 3px rgba(42, 38, 34, 0.03);
+  }
+
+  .feature-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .icon-coral {
+    background: #FDF1ED;
+    color: #E0674B;
+    border: 1px solid rgba(224, 103, 75, 0.2);
+  }
+  .icon-flame {
+    background: #FFF5EC;
+    color: #D9772B;
+    border: 1px solid rgba(217, 119, 43, 0.2);
+  }
+  .icon-blue {
+    background: #EFF6FC;
+    color: #3B7EA1;
+    border: 1px solid rgba(59, 126, 161, 0.2);
+  }
+
+  .feature-text h3 {
+    font-size: 16px;
+    font-weight: 750;
+    color: #2A2622;
+    margin-bottom: 4px;
+  }
+
+  .feature-text p {
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  /* Right Mockup Showcase */
+  .mockup-container {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Browser top frame representing Chrome toolbar */
+  .browser-frame {
+    width: 430px;
+    background: #FFFFFF;
+    border-radius: 18px 18px 0 0;
+    border: 1px solid #ECE5DA;
+    border-bottom: none;
+    box-shadow: 0 -4px 20px rgba(42, 38, 34, 0.05);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .browser-dots {
+    display: flex;
+    gap: 6px;
+  }
+  .browser-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .dot-r { background: #FF5F56; }
+  .dot-y { background: #FFBD2E; }
+  .dot-g { background: #27C93F; }
+
+  .browser-omnibox {
+    flex: 1;
+    background: #F4EFE7;
+    border-radius: 8px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 11.5px;
+    color: #6F665E;
+    gap: 6px;
+  }
+
+  .extension-icons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .toolbar-lit-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #FDF1ED;
+    border: 1px solid rgba(224, 103, 75, 0.35);
+    border-radius: 6px;
+    padding: 3px 6px;
+    cursor: default;
+  }
+
+  .toolbar-lit-badge svg {
+    width: 14px;
+    height: 14px;
+    fill: #E0674B;
+  }
+
+  .toolbar-lit-badge span {
+    font-size: 11px;
+    font-weight: 800;
+    color: #A9543F;
+  }
+
+  /* Extension popup card */
+  .popup-frame {
+    width: 360px;
+    height: 490px;
+    background: #FFFFFF;
+    border-radius: 18px;
+    box-shadow: 
+      0 26px 65px rgba(42, 38, 34, 0.16),
+      0 6px 20px rgba(42, 38, 34, 0.08),
+      0 0 0 1px rgba(42, 38, 34, 0.07);
+    overflow: hidden;
+    position: relative;
+    border: 1px solid #ECE5DA;
+    margin-top: -6px;
+  }
+
+  .popup-image-wrapper {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #FBF8F3;
+  }
+
+  .popup-image-wrapper img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* Floating pill badges */
+  .floating-pill {
+    position: absolute;
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    padding: 10px 16px;
+    border-radius: 999px;
+    box-shadow: 0 12px 28px rgba(42, 38, 34, 0.12), 0 2px 6px rgba(42, 38, 34, 0.04);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #2A2622;
+    z-index: 10;
+  }
+
+  .pill-1 {
+    top: 55px;
+    right: 20px;
+  }
+
+  .pill-2 {
+    bottom: 25px;
+    left: 20px;
+  }
+
+  .pill-badge {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .badge-lock {
+    background: #E0674B;
+    color: white;
+  }
+
+  .badge-streak {
+    background: #FFF0E5;
+    color: #D9772B;
+  }
+
+  /* Footer bar */
+  .footer-bar {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 14px;
+    border-top: 1px solid rgba(236, 229, 218, 0.8);
+    font-size: 13px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .footer-tags {
+    display: flex;
+    gap: 24px;
+  }
+
+  .footer-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footer-tag svg {
+    color: #6B9E7A;
+  }
+
+  .tagline {
+    font-weight: 700;
+    color: #A9543F;
+  }
+
+</style>
+</head>
+<body>
+  <div class="ambient-glow"></div>
+
+  <div class="header">
+    <div class="badge-row">
+      <svg viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm-2 7V6a2 2 0 1 1 4 0v3h-4z"/></svg>
+      LIT: Job Search Tracker · Chrome Extension
+    </div>
+    <h1 class="title">Lock in your job search, <span class="highlight">one day at a time.</span></h1>
+    <p class="subtitle">Set your daily target, log applications with one click, and watch the padlock lock shut when today's goal is met.</p>
+  </div>
+
+  <div class="main-content">
+    <div class="features-col">
+      <div class="feature-card">
+        <div class="feature-icon icon-coral">🎯</div>
+        <div class="feature-text">
+          <h3>Daily Target & Progress Ring</h3>
+          <p>Aim for 5 applications a day (or any goal you choose). Watch the terracotta ring close as you apply.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-flame">🔥</div>
+        <div class="feature-text">
+          <h3>Habit Streaks with Rest Days</h3>
+          <p>Build real momentum. Streaks respect rest days and earn automatic freezes so you never burn out.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-blue">🔒</div>
+        <div class="feature-text">
+          <h3>Live Toolbar Padlock</h3>
+          <p>The toolbar icon stays open until today's target is reached, then locks shut in your accent color.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup-container">
+      <div class="browser-frame">
+        <div class="browser-dots">
+          <span class="browser-dot dot-r"></span>
+          <span class="browser-dot dot-y"></span>
+          <span class="browser-dot dot-g"></span>
+        </div>
+        <div class="browser-omnibox">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          chrome://extensions
+        </div>
+        <div class="extension-icons">
+          <div class="toolbar-lit-badge">
+            <svg viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm-2 7V6a2 2 0 1 1 4 0v3h-4z"/></svg>
+            <span>LIT</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="popup-frame">
+        <div class="popup-image-wrapper">
+          <img src="user_screenshot.jpg" alt="LIT Extension Popup">
+        </div>
+      </div>
+
+      <!-- Floating Pills -->
+      <div class="floating-pill pill-1">
+        <span class="pill-badge badge-lock">🔒</span>
+        <span>Locked in for today: 21 of 5!</span>
+      </div>
+
+      <div class="floating-pill pill-2">
+        <span class="pill-badge badge-streak">🔥</span>
+        <span>1-day streak · Momentum building</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <div class="footer-tags">
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Auto-counts 20+ job sites
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Google Calendar scoreboard
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        100% private, runs locally
+      </div>
+    </div>
+    <div class="tagline">Strava for getting hired.</div>
+  </div>
+</body>
+</html>

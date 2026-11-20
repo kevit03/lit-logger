@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    background: #FBF8F3;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Nunito", "Segoe UI", Roboto, sans-serif;
+    color: #2A2622;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 38px 60px 32px 60px;
+    background-image: 
+      radial-gradient(circle at 85% 15%, rgba(59, 126, 161, 0.12) 0%, transparent 48%),
+      radial-gradient(circle at 15% 85%, rgba(224, 103, 75, 0.10) 0%, transparent 50%),
+      linear-gradient(180deg, #FDFBF7 0%, #F6F0E6 100%);
+  }
+
+  .ambient-glow {
+    position: absolute;
+    top: -80px;
+    right: -40px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(59, 126, 161, 0.12) 0%, rgba(59, 126, 161, 0) 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .header {
+    position: relative;
+    z-index: 2;
+  }
+
+  .badge-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #39728F;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(42, 38, 34, 0.04);
+  }
+
+  .badge-row svg {
+    width: 15px;
+    height: 15px;
+    fill: #3B7EA1;
+  }
+
+  .title {
+    font-size: 42px;
+    line-height: 1.15;
+    font-weight: 850;
+    color: #2A2622;
+    letter-spacing: -0.9px;
+    margin-bottom: 8px;
+  }
+
+  .title span.highlight {
+    color: #3B7EA1;
+    background: linear-gradient(120deg, #3B7EA1, #255873);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 19px;
+    line-height: 1.4;
+    color: #6F665E;
+    font-weight: 500;
+    max-width: 740px;
+  }
+
+  .main-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 40px;
+    flex: 1;
+    margin-top: 14px;
+  }
+
+  /* Left column: feature cards */
+  .features-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 390px;
+    flex-shrink: 0;
+  }
+
+  .feature-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+    box-shadow: 0 4px 16px rgba(42, 38, 34, 0.04), 0 1px 3px rgba(42, 38, 34, 0.03);
+  }
+
+  .feature-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .icon-blue {
+    background: #EFF6FC;
+    color: #3B7EA1;
+    border: 1px solid rgba(59, 126, 161, 0.25);
+  }
+  .icon-coral {
+    background: #FDF1ED;
+    color: #E0674B;
+    border: 1px solid rgba(224, 103, 75, 0.25);
+  }
+  .icon-rest {
+    background: #F0F4FA;
+    color: #656C7A;
+    border: 1px solid rgba(140, 155, 181, 0.3);
+  }
+
+  .feature-text h3 {
+    font-size: 16px;
+    font-weight: 750;
+    color: #2A2622;
+    margin-bottom: 4px;
+  }
+
+  .feature-text p {
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  /* Right column: Google Calendar mockup */
+  .mockup-container {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .calendar-window {
+    width: 100%;
+    max-width: 710px;
+    height: 490px;
+    background: #FFFFFF;
+    border-radius: 18px;
+    box-shadow: 
+      0 24px 60px rgba(42, 38, 34, 0.14),
+      0 6px 20px rgba(42, 38, 34, 0.06),
+      0 0 0 1px rgba(42, 38, 34, 0.06);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ECE5DA;
+  }
+
+  .calendar-topbar {
+    background: #FFFFFF;
+    height: 48px;
+    border-bottom: 1px solid #ECE5DA;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px;
+  }
+
+  .cal-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .cal-icon {
+    width: 28px;
+    height: 28px;
+    background: #4285F4;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 800;
+    font-size: 13px;
+  }
+
+  .cal-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #3C4043;
+  }
+
+  .cal-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .today-btn {
+    padding: 5px 12px;
+    border: 1px solid #DADCE0;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #3C4043;
+  }
+
+  .cal-month {
+    font-size: 15px;
+    font-weight: 750;
+    color: #202124;
+  }
+
+  .view-pill {
+    padding: 5px 12px;
+    background: #F1F3F4;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #3C4043;
+  }
+
+  /* Calendar grid view */
+  .cal-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    background: #FFFFFF;
+    position: relative;
+    border-top: 1px solid #ECE5DA;
+  }
+
+  .cal-day-col {
+    border-right: 1px solid #F0EAE1;
+    display: flex;
+    flex-direction: column;
+    padding: 10px 8px;
+    position: relative;
+  }
+
+  .cal-day-col:last-child {
+    border-right: none;
+  }
+
+  .cal-day-col.is-today {
+    background: #FFFDF9;
+  }
+
+  .day-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #F4EFE7;
+  }
+
+  .day-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: #70757A;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+
+  .day-num {
+    font-size: 15px;
+    font-weight: 750;
+    color: #3C4043;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+  }
+
+  .day-num.today-circle {
+    background: #1A73E8;
+    color: white;
+  }
+
+  /* LIT Overlay Pill */
+  .lit-cal-pill {
+    margin-bottom: 12px;
+    padding: 5px 6px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 750;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    box-shadow: 0 2px 6px rgba(42, 38, 34, 0.08);
+    transition: transform 0.2s;
+  }
+
+  .pill-completed {
+    background: #E0674B;
+    color: #FFFFFF;
+    border: 1px solid #C84E32;
+  }
+
+  .pill-completed-gold {
+    background: #E0674B;
+    color: #FFFFFF;
+    border: 1px solid #A9543F;
+    box-shadow: 0 3px 8px rgba(224, 103, 75, 0.35);
+  }
+
+  .pill-rest {
+    background: #EFF2F7;
+    color: #656C7A;
+    border: 1px solid #D1D9E6;
+  }
+
+  .pill-progress {
+    background: #FFFFFF;
+    color: #A9543F;
+    border: 1.5px dashed #E0674B;
+  }
+
+  /* Calendar native events */
+  .cal-events {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .event-card {
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    line-height: 1.3;
+    font-weight: 600;
+  }
+
+  .ev-blue {
+    background: #E8F0FE;
+    color: #1A73E8;
+    border-left: 3px solid #1A73E8;
+  }
+
+  .ev-purple {
+    background: #F3E8FD;
+    color: #9333EA;
+    border-left: 3px solid #9333EA;
+  }
+
+  .ev-green {
+    background: #E6F4EA;
+    color: #137333;
+    border-left: 3px solid #137333;
+  }
+
+  .ev-amber {
+    background: #FEF7E0;
+    color: #B06000;
+    border-left: 3px solid #B06000;
+  }
+
+  /* Floating callout */
+  .calendar-callout {
+    position: absolute;
+    bottom: 24px;
+    right: 24px;
+    background: #2A2622;
+    color: #FFFFFF;
+    border-radius: 12px;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.2);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  .cal-callout-icon {
+    font-size: 16px;
+  }
+
+  /* Footer bar */
+  .footer-bar {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 14px;
+    border-top: 1px solid rgba(236, 229, 218, 0.8);
+    font-size: 13px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .footer-tags {
+    display: flex;
+    gap: 24px;
+  }
+
+  .footer-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footer-tag svg {
+    color: #6B9E7A;
+  }
+
+  .tagline {
+    font-weight: 700;
+    color: #A9543F;
+  }
+
+</style>
+</head>
+<body>
+  <div class="ambient-glow"></div>
+
+  <div class="header">
+    <div class="badge-row">
+      <svg viewBox="0 0 24 24"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm-8 4H7v-2h2v2zm4 4h-2v-2h2v2zm4 0h-2v-2h2v2z"/></svg>
+      Google Calendar Scoreboard · Built-in Overlay
+    </div>
+    <h1 class="title">Your job search progress, <span class="highlight">painted on your calendar.</span></h1>
+    <p class="subtitle">A visual scoreboard you already check every day. Daily progress pills appear directly on Google Calendar without disturbing your schedule or tasks.</p>
+  </div>
+
+  <div class="main-content">
+    <div class="features-col">
+      <div class="feature-card">
+        <div class="feature-icon icon-coral">📊</div>
+        <div class="feature-text">
+          <h3>Daily Goal Badges</h3>
+          <p>Goal days get a filled terracotta pill right above your schedule. See weeks of hard work and momentum at a glance.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-blue">🛡️</div>
+        <div class="feature-text">
+          <h3>Non-Intrusive Overlay Layer</h3>
+          <p>Drawn on an isolated browser layer. Never modifies, deletes, or rearranges your native calendar events or tasks.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-rest">☕</div>
+        <div class="feature-text">
+          <h3>Rest Days & Freezes Built-in</h3>
+          <p>Rest days show gentle soft pills to remind you that recovery is part of the process. Streaks stay 100% protected.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup-container">
+      <div class="calendar-window">
+        <div class="calendar-topbar">
+          <div class="cal-brand">
+            <div class="cal-icon">19</div>
+            <span class="cal-title">Google Calendar</span>
+          </div>
+          <div class="cal-nav">
+            <button class="today-btn">Today</button>
+            <span class="cal-month">November 2026</span>
+          </div>
+          <div class="view-pill">Week View ▾</div>
+        </div>
+
+        <div class="cal-grid">
+          <!-- Mon -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Mon</span>
+              <span class="day-num">16</span>
+            </div>
+            <div class="lit-cal-pill pill-completed">5 apps ✓</div>
+            <div class="cal-events">
+              <div class="event-card ev-blue">9:30 AM<br>Team Standup</div>
+              <div class="event-card ev-purple">1:00 PM<br>Coffee Chat</div>
+            </div>
+          </div>
+
+          <!-- Tue -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Tue</span>
+              <span class="day-num">17</span>
+            </div>
+            <div class="lit-cal-pill pill-completed">6 apps ✓</div>
+            <div class="cal-events">
+              <div class="event-card ev-green">11:00 AM<br>Recruiter Call</div>
+              <div class="event-card ev-amber">3:30 PM<br>Portfolio Review</div>
+            </div>
+          </div>
+
+          <!-- Wed -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Wed</span>
+              <span class="day-num">18</span>
+            </div>
+            <div class="lit-cal-pill pill-completed">7 apps ✓</div>
+            <div class="cal-events">
+              <div class="event-card ev-blue">10:00 AM<br>System Design</div>
+            </div>
+          </div>
+
+          <!-- Thu (Today) -->
+          <div class="cal-day-col is-today">
+            <div class="day-header">
+              <span class="day-name">Thu</span>
+              <span class="day-num today-circle">19</span>
+            </div>
+            <div class="lit-cal-pill pill-completed-gold">21 apps 🔒</div>
+            <div class="cal-events">
+              <div class="event-card ev-purple">2:00 PM<br>Technical Interview</div>
+              <div class="event-card ev-blue">5:00 PM<br>LIT Locked In!</div>
+            </div>
+          </div>
+
+          <!-- Fri -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Fri</span>
+              <span class="day-num">20</span>
+            </div>
+            <div class="lit-cal-pill pill-rest">☕ Rest Day</div>
+            <div class="cal-events">
+              <div class="event-card ev-green">12:30 PM<br>Lunch w/ Mentor</div>
+            </div>
+          </div>
+
+          <!-- Sat -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Sat</span>
+              <span class="day-num">21</span>
+            </div>
+            <div class="lit-cal-pill pill-progress">3 of 5</div>
+            <div class="cal-events">
+              <div class="event-card ev-blue">LeetCode Prep</div>
+            </div>
+          </div>
+
+          <!-- Sun -->
+          <div class="cal-day-col">
+            <div class="day-header">
+              <span class="day-name">Sun</span>
+              <span class="day-num">22</span>
+            </div>
+            <div class="lit-cal-pill pill-completed">5 apps ✓</div>
+            <div class="cal-events">
+              <div class="event-card ev-amber">Weekly Review</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="calendar-callout">
+          <span class="cal-callout-icon">🔥</span>
+          <span>4-Day Active Streak · Calendar Overlay Active</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <div class="footer-tags">
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Supports Day, Week & Month views
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Hover to backfill past days
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Never alters Google events
+      </div>
+    </div>
+    <div class="tagline">Strava for getting hired.</div>
+  </div>
+</body>
+</html>
