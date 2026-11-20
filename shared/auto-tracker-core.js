@@ -738,6 +738,13 @@ const AutoTrackerCore = (() => {
     const id = (metric && metric.id) || metricId;
     if (id === 'jobs') return 'Application';
     const unit = String((metric && metric.unit) || '').trim();
+    const lib = coachLib();
+    if (unit && lib && typeof lib.unitFor === 'function') {
+      try {
+        const one = lib.unitFor(unit, 1);
+        if (typeof one === 'string' && one.trim()) return capitalize(one.trim());
+      } catch (e) { /* fall back to trimming the s */ }
+    }
     if (unit) return capitalize(/[^s]s$/i.test(unit) ? unit.slice(0, -1) : unit);
     const name = String((metric && metric.name) || id || 'Activity').trim();
     return capitalize(/[^s]s$/i.test(name) ? name.slice(0, -1) : name);
@@ -818,9 +825,11 @@ const AutoTrackerCore = (() => {
     let streakLine = '';
     if (firstOfDay) {
       if (lib && typeof lib.streak === 'function') {
-        try { streakLine = String(lib.streak({ days: streak, restToday, freezeUsed }) || ''); } catch (e) { streakLine = ''; }
+        try { streakLine = String(lib.streak({ days: streak, restToday, freezeUsed, voice }) || ''); } catch (e) { streakLine = ''; }
       }
       if (!streakLine) streakLine = fallbackStreak(streak, met, restToday);
+      // LitCopy's goal-met line already carries the streak day.
+      if (/\bDay \d/.test(sub) && /\bDay \d/.test(streakLine)) streakLine = '';
     }
 
     return {

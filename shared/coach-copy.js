@@ -249,7 +249,7 @@ const LitCopy = (() => {
           drill: left + ' left on today\'s goal'
         }),
         body: pick(voice, {
-          gentle: 'Whenever you have a moment, ' + left + ' more finishes today.',
+          gentle: 'Whenever you have a moment, ' + left + ' more will round out today.',
           coach: left === 1 ? 'One more and today is locked in.' : left + ' more and today is locked in.',
           drill: 'Block out a few minutes and close it out.'
         })
@@ -287,6 +287,7 @@ const LitCopy = (() => {
   }
 
   // Never reports a decline. A quieter week gets credit for what was done.
+  // Optional opts.unit ('applications', 'problems', ...) names what was done.
   function weekStory(opts) {
     const o = opts || {};
     const total = int(o.total);
@@ -299,7 +300,11 @@ const LitCopy = (() => {
       return 'A quiet week, and that is allowed. A fresh week starts whenever you do.';
     }
     const parts = [];
-    parts.push('You sent ' + total + ' this week' + (active > 0 ? ' across ' + active + (active === 1 ? ' day.' : ' days.') : '.'));
+    const u = o.unit ? unitFor(o.unit, total) : '';
+    const what = !u || u === 'applications' || u === 'application'
+      ? 'You sent ' + total + (u ? ' ' + u : '')
+      : 'You put in ' + total + ' ' + u;
+    parts.push(what + ' this week' + (active > 0 ? ' across ' + active + (active === 1 ? ' day.' : ' days.') : '.'));
     if (bestName && bestCount > 1) parts.push(bestName + ' was your strongest day with ' + bestCount + '.');
     else if (bestName) parts.push(bestName + ' was your strongest day.');
     if (last > 0 && total > last) parts.push('That is ' + (total - last) + ' more than last week.');
@@ -335,7 +340,7 @@ const LitCopy = (() => {
     'Missed logging a day? Hover over that day in Google Calendar and press + to add it.',
     'Drag any card in LIT to rearrange your board. Put what you check most at the top.',
     'Fill in your autofill profile once in Settings, and LIT can fill most application forms for you.',
-    'LIT logs applications on Greenhouse, Lever, Ashby, and Workday by itself, the moment you submit.',
+    'LIT counts applications on Greenhouse, Lever, Ashby, and Workday by itself, the moment you submit.',
     'Pick rest days in Settings. They never break your streak, so taking a break is guilt-free.',
     'Hit your goal seven days in a row to earn a streak freeze. It covers a day you miss.',
     'Tap the goal number on the counter to change your daily goal. A smaller goal you keep beats a big one you dread.',

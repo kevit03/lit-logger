@@ -203,6 +203,109 @@ async function run() {
     console.log('[PASS] Month view: badge on the date line, empty days keep their quick-add');
   }
 
+  // Hidden trackers get no pills; a rest day with nothing logged shows a
+  // moon pill; a day a streak freeze covered shows a freeze pill.
+  {
+    const { doc, content } = loadContentScript();
+    // 2026-09-12 is a Saturday, 2026-09-13 a Sunday.
+    const cells = [12, 13, 14].map((d, i) => gridcell(doc, dateKeyFor(2026, 9, d), { height: 120, top: 100, left: i * 180, header: String(d) }));
+    cells.forEach(c => doc.body.appendChild(c));
+    const metrics = METRICS.concat([{ id: 'x1', name: 'Cold emails', color: '#8a5a9e', dailyGoal: 3, hidden: true }]);
+    content.__setOverlayState({
+      metrics,
+      prefs: { restDays: [6] },
+      stats: {
+        restDays: [0, 6],
+        dailyMap: { '2026-09-12': { x1: 4 }, '2026-09-13': { jobs: 2 }, '2026-09-14': { x1: 1 } },
+        freezes: { jobs: { available: 0, usedOn: ['2026-09-14'] }, x1: { available: 0, usedOn: ['2026-09-12'] } }
+      }
+    });
+    content.renderBadges();
+    const sat = dayFor(doc, '2026-09-12');
+    assert.deepStrictEqual(pillsOf(sat), ['Rest'], 'a hidden tracker shows nothing, so the rest day reads as rest');
+    assert.ok(sat.querySelector('.pt-rest .pt-icon-moon'), 'the rest pill carries a moon');
+    assert.strictEqual(sat.querySelectorAll('.pt-freeze').length, 0, 'a hidden tracker\'s freeze is not shown');
+    assert.deepStrictEqual(pillsOf(dayFor(doc, '2026-09-13')), ['2 Job Applications'], 'logging on a rest day shows the count, not the moon');
+    const mon = dayFor(doc, '2026-09-14');
+    assert.deepStrictEqual(pillsOf(mon), ['Freeze']);
+    assert.ok(mon.querySelector('.pt-freeze .pt-icon-snow'), 'the freeze pill carries a snowflake');
+    assert.ok(/Job Applications/.test(mon.querySelector('.pt-freeze').title));
+    teardown();
+    console.log('[PASS] Hidden trackers skipped; rest-day moon pill; freeze snowflake pill');
+  }
+
+  // Today's pill shimmers once, at the moment its goal is met, and not on
+  // the first paint of a day that was already met.
+  {
+    const { doc, content } = loadContentScript();
+    const today = '2026-09-15';
+    doc.body.appendChild(gridcell(doc, dateKeyFor(2026, 9, 15), { height: 120, top: 100, header: '15' }));
+    content.__setOverlayState({ metrics: METRICS, stats: { todayStr: today, dailyMap: { [today]: { jobs: 4, leetcode: 2 } } } });
+    content.renderBadges();
+    const node = dayFor(doc, today);
+    assert.ok(node.classList.contains('pt-today'));
+    assert.strictEqual(node.querySelectorAll('.pt-shimmer').length, 0, 'already met on load: no shimmer');
+    content.__setOverlayState({ stats: { todayStr: today, dailyMap: { [today]: { jobs: 5, leetcode: 2 } } } });
+    content.renderBadges();
+    const shimmering = node.querySelectorAll('.pt-shimmer');
+    assert.strictEqual(shimmering.length, 1, 'the pill that just flipped shimmers');
+    assert.ok(shimmering[0].classList.contains('pt-goal-met'));
+    assert.ok(/Job Applications/.test(shimmering[0].title));
+    content.__setOverlayState({ stats: { todayStr: today, dailyMap: { [today]: { jobs: 6, leetcode: 2 } } } });
+    content.renderBadges();
+    assert.strictEqual(node.querySelectorAll('.pt-shimmer').length, 0, 'only once');
+    teardown();
+    console.log('[PASS] Today\'s pill shimmers once when it flips to met');
+  }
+
+  // Month view week chips: one per full row with room, totals for the main
+  // tracker, none for an empty week or a narrow window.
+  {
+    const { doc, content } = loadContentScript();
+    global.window.innerWidth = 1400;
+    // Two rows: Sep 6-12 at top 100 and Sep 13-19 at top 220.
+    const cells = [];
+    for (let i = 0; i < 14; i++) {
+      const d = 6 + i;
+      cells.push(gridcell(doc, dateKeyFor(2026, 9, d), { height: 120, top: i < 7 ? 100 : 220, left: (i % 7) * 180, header: String(d) }));
+    }
+    cells.forEach(c => doc.body.appendChild(c));
+    content.__setOverlayState({ metrics: METRICS, stats: { dailyMap: { '2026-09-07': { jobs: 5, leetcode: 9 }, '2026-09-11': { jobs: 7 } } } });
+    content.renderBadges();
+    let chips = layer(doc).querySelectorAll('.pt-week-chip');
+    assert.strictEqual(chips.length, 1, 'only the week with something logged');
+    assert.strictEqual(chips[0].textContent, '12 this week');
+    assert.strictEqual(chips[0].title, '12 Job Applications this week');
+    assert.strictEqual(chips[0].style.top, (100 + 120 - 22) + 'px', 'bottom of the row');
+    assert.strictEqual(chips[0].style.right, (1400 - 6 * 180 - 180 + 6) + 'px', 'right edge of the last cell');
+
+    global.window.innerWidth = 800;
+    content.renderBadges();
+    assert.strictEqual(layer(doc).querySelectorAll('.pt-week-chip').length, 0, 'skipped on a narrow layout');
+    teardown();
+    console.log('[PASS] Month view: "12 this week" chip per week row, skipped when narrow or empty');
+  }
+
+  // Quick-add wording: friendly dates and per-tracker placeholders.
+  {
+    const { doc, content } = loadContentScript();
+    const year = new Date().getFullYear();
+    const d = new Date(year, 10, 19);
+    const wk = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+    assert.strictEqual(content.formatDateNice(year + '-11-19'), wk + ', Nov 19');
+    assert.strictEqual(content.formatDateNice('2019-03-04'), 'Mon, Mar 4, 2019', 'another year shows the year');
+    assert.deepStrictEqual(content.fieldHints('jobs'), { company: 'Company', role: 'Role', notes: 'Notes or job link (optional)' });
+    assert.strictEqual(content.fieldHints('leetcode').company, 'Problem');
+    assert.strictEqual(content.fieldHints('abc123').company, 'What you did');
+    doc.body.appendChild(gridcell(doc, dateKeyFor(year, 11, 19), { height: 120, top: 100, header: '19' }));
+    content.__setOverlayState({ metrics: METRICS, stats: { dailyMap: {} } });
+    content.renderBadges();
+    const btn = dayFor(doc, year + '-11-19').querySelector('.pt-quick-add-cell');
+    assert.strictEqual(btn.getAttribute('aria-label'), 'Add something you did on ' + wk + ', Nov 19');
+    teardown();
+    console.log('[PASS] Quick add: friendly dates and tracker-specific placeholders');
+  }
+
   console.log('--- test/calendar.test.js COMPLETED SUCCESSFULLY ---\n');
 }
 

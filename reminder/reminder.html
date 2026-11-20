@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-accent="coral">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,37 +7,65 @@
   <link rel="stylesheet" href="reminder.css">
 </head>
 <body>
-  <main class="checkin">
+  <main class="checkin" aria-labelledby="headline">
     <header class="checkin-head">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/></svg></span>
+      <svg class="lock" id="lock" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path class="lock-shackle" d="M8 11.5V7.5a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <path class="lock-body" fill="currentColor" fill-rule="evenodd" d="M7.5 11h9A2.5 2.5 0 0 1 19 13.5v5a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-5A2.5 2.5 0 0 1 7.5 11Zm4.5 2.4a1.6 1.6 0 0 0-.8 2.99l-.3 2.21h2.2l-.3-2.21A1.6 1.6 0 0 0 12 13.4Z"/>
+      </svg>
       <span class="kicker" id="kicker">Daily check-in</span>
     </header>
 
-    <div class="checkin-title">
-      <h1 class="title">Are you just living day to day?</h1>
-      <p class="tally" id="tally" aria-live="polite"></p>
-    </div>
+    <section class="tally" aria-live="polite">
+      <p class="tally-number"><span id="count">0</span><span class="tally-goal" id="goal-text"> of 5</span></p>
+      <p class="tally-unit" id="unit">applications sent today</p>
+      <h1 class="headline" id="headline">Ready when you are</h1>
+    </section>
 
-    <div class="video">
-      <iframe id="player" title="Are you just living day to day?" src="https://www.youtube-nocookie.com/embed/amXl7FG7J4c?autoplay=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
-    </div>
+    <ol class="week" id="week" aria-label="This week"></ol>
 
     <div class="actions">
-      <button type="button" class="btn btn-accent" id="done-btn">Back to it</button>
-      <div class="quiet-actions">
-        <label class="time-field">
-          <span>Every day at</span>
-          <input type="time" id="time-input" value="14:30" />
-        </label>
-        <button type="button" class="btn btn-quiet" id="off-btn">Turn off</button>
-      </div>
+      <button type="button" class="btn btn-primary" id="log-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 6v12M6 12h12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+        <span>Log what I did</span>
+      </button>
+      <button type="button" class="link-btn" id="undo-btn" hidden>Undo</button>
     </div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <details class="push" id="push">
+      <summary>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l10-6.5-10-6.5Z" fill="currentColor"/></svg>
+        <span>Need a push?</span>
+        <span class="push-sub">A two-minute pep talk</span>
+      </summary>
+      <div class="video" id="video-slot"></div>
+    </details>
+
+    <details class="settings" id="settings">
+      <summary>Change the time or turn off</summary>
+      <div class="settings-body">
+        <label class="time-field">
+          <span>Every day at</span>
+          <input type="time" id="time-input" value="14:30">
+        </label>
+        <div class="voice">
+          <span id="voice-label">Coach voice</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="voice-label" id="voice-group">
+            <button type="button" role="radio" data-voice="gentle" aria-checked="false">Gentle</button>
+            <button type="button" role="radio" data-voice="coach" aria-checked="true">Coach</button>
+            <button type="button" role="radio" data-voice="drill" aria-checked="false">Drill</button>
+          </div>
+        </div>
+        <button type="button" class="btn btn-quiet" id="off-btn">Turn off the daily check-in</button>
+      </div>
+    </details>
   </main>
 
   <script src="../shared/auth.js"></script>
   <script src="../shared/db.js"></script>
   <script src="../shared/storage.js"></script>
+  <script src="../shared/coach-copy.js"></script>
   <script src="reminder.js"></script>
 </body>
 </html>

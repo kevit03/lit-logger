@@ -350,7 +350,7 @@ async function run() {
     // A run that throws reports it instead of breaking the button.
     ctx.core.run = async () => { throw new Error('boom'); };
     await ctx.api.fill();
-    assert.strictEqual(toastText(ctx.doc), 'Autofill could not finish: boom');
+    assert.strictEqual(toastText(ctx.doc), "Autofill couldn't finish: boom");
     assert.strictEqual(ctx.api.state().running, false);
     assert.strictEqual(fab(ctx.doc).textContent, 'Fill again');
     cleanup(ctx);
@@ -512,7 +512,7 @@ async function run() {
     cleanup(ctx);
   }
 
-  // 7d. Textarea with 40+ characters: offered to the answer bank on blur.
+  // 7d. Textarea with 40+ characters: offered to Saved answers on blur.
   {
     const ctx = await learningPage();
     await ctx.api.fill();
@@ -524,11 +524,11 @@ async function run() {
     assert.strictEqual(promptEl(ctx.doc), null, 'a long answer waits for blur, no rule prompt on change');
     mock.fire(ctx.doc, ctx.win, essay, 'focusout');
     await settle();
-    assert.strictEqual(promptTitle(ctx.doc), 'Save to answer bank?');
+    assert.strictEqual(promptTitle(ctx.doc), 'Add to your saved answers?');
     clickPrompt(ctx.doc, 'Save answer');
     await settle();
     assert.deepStrictEqual(ctx.store.calls.saveAnswer, [{ question: 'Why do you want to work here?', answer }]);
-    assert.strictEqual(toastText(ctx.doc), 'Saved to your answer bank.');
+    assert.strictEqual(toastText(ctx.doc), 'Added to Saved answers.');
     assert.strictEqual(ctx.store.calls.learnRule.length, 0, 'answers are not rules');
     // Blurring again without a change does not re-offer.
     mock.fire(ctx.doc, ctx.win, essay, 'focusout');
@@ -977,6 +977,12 @@ async function run() {
     assert.strictEqual(toastText(ctx.doc), 'Nothing to fill here.');
     cleanup(ctx);
     console.log('[PASS] Widget: drag by grip or button, per-site position restored, dodges the focused field, hide per page, cards hold on hover');
+  }
+
+  {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'content', 'autofill', 'autofill-ui.js'), 'utf8');
+    assert.ok(!/answer bank/i.test(src), '"Answer bank" is now "Saved answers" everywhere');
+    assert.ok(/--accent/.test(src) && /prefers-color-scheme: dark/.test(src), 'the widget uses the accent and follows the OS scheme');
   }
 
   console.log('[PASS] autofill-ui: button visibility, shadow DOM, run, learning, sensitive fields, idempotence, teardown');

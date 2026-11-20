@@ -212,6 +212,32 @@ async function run() {
     assert.ok(!manifest.host_permissions.includes(pattern), `host_permissions must not include ${pattern}`);
   });
 
+  // 5b. Warm Coach shell: a general job-search name, a store-legal
+  //     description, coach copy loaded after storage everywhere storage
+  //     loads, the onboarding and check-in pages present, and no oauth2 block
+  //     with a placeholder client (getAuthToken fails harder with one).
+  assert.ok(!/^LIT:\s*Job\s*&\s*LeetCode/i.test(manifest.name) && !/leetcode/i.test(manifest.name), 'the name speaks to every job seeker');
+  assert.strictEqual(manifest.short_name, 'LIT');
+  assert.strictEqual(manifest.action.default_title, 'LIT');
+  assert.ok(manifest.description.length <= 132, 'Chrome caps the description at 132 characters');
+  manifest.content_scripts.forEach((entry, idx) => {
+    const js = entry.js || [];
+    const s = js.indexOf('shared/storage.js');
+    if (s >= 0) assert.strictEqual(js[s + 1], 'shared/coach-copy.js', `content_scripts[${idx}] loads coach copy right after storage`);
+  });
+  assert.ok(/importScripts\('\.\.\/shared\/coach-copy\.js'\)/.test(swSource), 'the worker loads coach copy once');
+  ['onboarding/onboarding.html', 'onboarding/onboarding.css', 'onboarding/onboarding.js', 'reminder/reminder.html', 'reminder/reminder.js', 'reminder/reminder.css']
+    .forEach(rel => assert.ok(fs.existsSync(path.join(rootDir, rel)), `page must exist: ${rel}`));
+  ['onboarding/onboarding.html', 'reminder/reminder.html'].forEach(rel => {
+    const html = fs.readFileSync(path.join(rootDir, rel), 'utf8');
+    const order = ['../shared/storage.js', '../shared/coach-copy.js'].map(f => html.indexOf(f));
+    assert.ok(order[0] > 0 && order[1] > order[0], `${rel} loads coach copy after storage`);
+    assert.ok(!/autoplay=1/.test(html), `${rel} never autoplays video`);
+  });
+  if (manifest.oauth2) {
+    assert.ok(/^\d+-[a-z0-9]+\.apps\.googleusercontent\.com$/.test(manifest.oauth2.client_id || ''), 'an oauth2 block must carry a real client id');
+  }
+
   // 6. Icons
   if (manifest.icons) {
     Object.entries(manifest.icons).forEach(([size, iconRelPath]) => {

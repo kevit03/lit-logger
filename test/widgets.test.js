@@ -292,6 +292,29 @@ async function run() {
     console.log('[PASS] Existing saved layouts are left alone; only new installs get the lean default');
   }
 
+  // The popup page and its script agree: every element popup.js looks up
+  // by id exists in popup.html, and the shared copy and share-card scripts
+  // load once each, after storage.js and before popup.js.
+  {
+    const fs = require('fs');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'popup', 'popup.html'), 'utf8');
+    const js = fs.readFileSync(path.join(__dirname, '..', 'popup', 'popup.js'), 'utf8');
+    const ids = new Set((html.match(/\sid="([^"]+)"/g) || []).map(m => m.slice(5, -1)));
+    const used = new Set((js.match(/\bel\('([a-zA-Z0-9-]+)'\)/g) || []).map(m => m.slice(4, -2)));
+    const missing = Array.from(used).filter(id => !ids.has(id));
+    assert.deepStrictEqual(missing, [], 'popup.js looks up ids that popup.html does not have');
+    const order = ['../shared/storage.js', '../shared/coach-copy.js', '../shared/share-card.js', '../shared/widgets.js', 'popup.js'].map(src => html.indexOf('<script src="' + src + '"'));
+    assert.ok(order.every(i => i >= 0), 'every popup script is included');
+    assert.ok(order.every((i, n) => n === 0 || i > order[n - 1]), 'scripts load in order: storage, coach copy, share card, cards, popup');
+    assert.strictEqual(html.split('coach-copy.js').length - 1, 1, 'coach-copy.js declares a top-level const and must load once');
+    for (const keep of ['reminder-switch', 'reminder-time-row', 'reminder-time', 'quick-add-btn', 'undo-btn', 'metric-count', 'widgets-host', 'status-line']) {
+      assert.ok(ids.has(keep), keep + ' is kept for other code and tests');
+    }
+    assert.ok(/aria-label="Undo last/.test(html), 'the old -1 button reads as Undo last');
+    assert.ok(/Company names are never included/.test(html), 'the share sheet states its privacy rule');
+    console.log('[PASS] Popup markup and script agree on ids and script order');
+  }
+
   console.log('--- test/widgets.test.js COMPLETED SUCCESSFULLY ---\n');
 }
 

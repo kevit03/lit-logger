@@ -32,13 +32,68 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Today's count per tracker as last rendered, to notice a goal being hit.
   const lastToday = {};
 
-  const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Motion is off when the OS asks for reduced motion or the user turned it
+  // off in LIT (prefs.reduceMotion, when present). Recomputed on every
+  // prefs load by applyAppearance().
+  const osReducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let reduceMotion = osReducedMotion;
   const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
   const STATUSES = TrackerStorage.STATUSES;
   const UNIVERSAL_ORIGINS = ['*://*/*'];
 
   function errMsg(err) {
     return err && err.message ? err.message : 'unknown error';
+  }
+
+  // Friendly error copy. The raw error goes to the console for debugging;
+  // the person sees what happened in plain words and what to do next.
+  function oops(message, err) {
+    if (err) console.warn('[LIT]', message, err);
+    showStatus(message, 'error');
+  }
+
+  // ----- Coach copy (shared/coach-copy.js), with local fallbacks so the
+  // popup never breaks if that file is missing or a function changes. -----
+  const Coach = typeof LitCopy !== 'undefined' ? LitCopy : null;
+  function coach(fn, args, fallback) {
+    try {
+      if (Coach && typeof Coach[fn] === 'function') {
+        const value = Coach[fn].apply(Coach, args || []);
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+    } catch (e) {
+      console.warn('[LIT] coach copy failed:', fn, e);
+    }
+    return typeof fallback === 'function' ? fallback() : fallback;
+  }
+  function voice() {
+    return (prefs && prefs.coachVoice) || 'coach';
+  }
+  const has = (obj, fn) => !!obj && typeof obj[fn] === 'function';
+
+  // Popup-only UI memory (celebrations already played today, the setup
+  // checklist, the tip dismissed today). Kept in chrome.storage.local under
+  // a key this file owns, never in synced prefs.
+  const UI_KEY = 'lit_popup_ui';
+  let ui = {};
+  function loadUiState() {
+    return new Promise(resolve => {
+      try {
+        chrome.storage.local.get([UI_KEY], r => {
+          ui = (r && r[UI_KEY] && typeof r[UI_KEY] === 'object') ? r[UI_KEY] : {};
+          resolve(ui);
+        });
+      } catch (e) {
+        resolve(ui);
+      }
+    });
+  }
+  function saveUiState(patch) {
+    ui = Object.assign({}, ui, patch);
+    try { chrome.storage.local.set({ [UI_KEY]: ui }); } catch (e) { /* best effort */ }
+  }
+  function todayStr() {
+    return TrackerStorage.getLocalDateStr();
   }
 
   // Single transient status / error line, announced via aria-live. An
@@ -128,7 +183,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function unitSingular(metric) {
-    return (metric.unit || 'items').replace(/s$/, '');
+    return displayUnit(metric, 1);
+  }
+
+  // What a goal counts, for display: the built-in jobs goal stores 'jobs'
+  // but reads as "applications".
+  function displayUnit(metric, n) {
+    const raw = metric ? (metric.id === 'jobs' && (!metric.unit || metric.unit === 'jobs' || metric.unit === 'items') ? 'applications' : (metric.unit || 'items')) : 'items';
+    return coach('unitFor', [raw, n], () => (n === 1 ? raw.replace(/s$/, '') : raw));
+  }
+
+  // Goals the person chose to show. Starter goals they did not pick carry
+  // hidden: true and stay out of the tabs (nothing is deleted).
+  function visibleMetrics() {
+    const list = metrics.filter(m => !m.hidden);
+    return list.length ? list : metrics.slice(0, 1);
   }
 
   function goalFor(metric) {
@@ -196,7 +265,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Clicking the dimmed backdrop dismisses any modal
-  ['new-metric-modal', 'metric-settings-modal', 'email-signin-modal', 'add-widget-modal', 'widget-settings-modal', 'settings-modal'].forEach(id => {
+  ['new-metric-modal', 'metric-settings-modal', 'email-signin-modal', 'add-widget-modal', 'widget-settings-modal', 'settings-modal', 'share-modal'].forEach(id => {
     const modal = el(id);
     if (modal) {
       modal.addEventListener('click', (e) => {
@@ -217,6 +286,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('theme-segmented').querySelectorAll('[data-theme-value]').forEach(btn => {
       btn.setAttribute('aria-checked', btn.dataset.themeValue === (isDark ? 'dark' : 'light') ? 'true' : 'false');
     });
+  }
+
+  // Accent, comfort mode, and motion live on <html> so every token and rule
+  // can key off them. Called after every prefs load or change.
+  const ACCENTS = ['coral', 'sage', 'ocean', 'plum', 'amber', 'slate'];
+  const ACCENT_HEX = {
+    coral: ['#E0674B', '#F07A5E'], sage: ['#5E9270', '#7FB291'], ocean: ['#3B7EA1', '#5FA3C7'],
+    plum: ['#8A5A9E', '#B285C6'], amber: ['#C9821F', '#E3A54A'], slate: ['#3D4A5C', '#A9B6C8']
+  };
+  function accentId() {
+    return ACCENTS.includes(prefs.accent) ? prefs.accent : 'coral';
+  }
+  function applyAppearance() {
+    const root = document.documentElement;
+    root.dataset.accent = accentId();
+    root.dataset.comfort = prefs.comfortMode ? 'on' : 'off';
+    reduceMotion = osReducedMotion || prefs.reduceMotion === true;
+    if (reduceMotion) root.dataset.motion = 'reduce';
+    else delete root.dataset.motion;
   }
 
   async function setTheme(theme) {
@@ -655,10 +743,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       prefs = await TrackerStorage.setPrefs(patch);
     } catch (err) {
-      showStatus('Could not save that setting: ' + errMsg(err), 'error');
+      oops('That setting did not save. Please try again.', err);
       return;
     }
     renderAlertToggles();
+    applyAppearance();
+    renderCoachSettings();
+    if (metrics.length && stats) renderUI();
     if (message) showStatus(message, 'ok');
   }
 
@@ -666,7 +757,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('timer-desktop-btn').addEventListener('click', () => setPref({ timerDesktop: !prefs.timerDesktop }, prefs.timerDesktop ? 'Desktop alerts off.' : 'Desktop alerts on.'));
   el('sound-switch').addEventListener('click', () => setPref({ timerSound: !prefs.timerSound }));
   el('desktop-switch').addEventListener('click', () => setPref({ timerDesktop: !prefs.timerDesktop }));
-  el('reminder-switch').addEventListener('click', () => setPref({ reminderEnabled: !prefs.reminderEnabled }, prefs.reminderEnabled ? 'Daily check-in off.' : 'Daily check-in on.'));
+  el('reminder-switch').addEventListener('click', () => {
+    if (!prefs.reminderEnabled) markSetup('checkin');
+    setPref({ reminderEnabled: !prefs.reminderEnabled }, prefs.reminderEnabled ? 'Check-in reminder off.' : 'Check-in reminder on. LIT will nudge you once a day.');
+  });
   el('reminder-time').addEventListener('change', (e) => {
     const value = e.target.value;
     if (/^\d{2}:\d{2}$/.test(value)) setPref({ reminderTime: value }, 'Check-in moved to ' + value + '.');
@@ -675,15 +769,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // Account chip and menu
   // ---------------------------------------------------------------------------
+  // Plain "Saved" states instead of system status words.
   const SYNC_TEXT = {
-    active: 'Synced & Active',
-    offline: 'Offline, stored locally',
-    expired: 'Session expired, sign in again',
-    out: 'Logged out, entries stay on this device'
+    active: 'Saved to your account',
+    offline: 'Saved on this computer for now',
+    expired: 'Sign in again to keep saving to your account',
+    out: 'Saved on this computer',
+    local: 'Profile on this computer'
   };
+
+  // 'google' when this build has real Google sign-in, otherwise 'local':
+  // a named profile kept on this computer only.
+  function signInMode() {
+    try {
+      if (has(TrackerAuth, 'signInMode')) return TrackerAuth.signInMode() === 'local' ? 'local' : 'google';
+    } catch (e) { /* fall through */ }
+    return 'google';
+  }
+  function isLocalUser(user) {
+    return !!(user && user.email && (user.provider === 'local' || /@local$/.test(user.email)));
+  }
+  function accountName(user) {
+    if (!user || !user.email) return '';
+    return isLocalUser(user) ? (user.name || user.email.replace(/@local$/, '')) : user.email;
+  }
 
   function syncState() {
     if (!currentUser || !currentUser.email) return 'out';
+    if (isLocalUser(currentUser)) return 'local';
     if (currentUser.sessionExpired) return 'expired';
     return navigator.onLine === false ? 'offline' : 'active';
   }
@@ -719,14 +832,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     const state = syncState();
     const chip = el('profile-chip');
     chip.classList.toggle('signed-in', signedIn);
-    chip.setAttribute('aria-label', signedIn ? 'Account ' + currentUser.email + ', ' + SYNC_TEXT[state] : 'Sign in, currently logged out');
-    chip.title = signedIn ? currentUser.email + ' · ' + SYNC_TEXT[state] : SYNC_TEXT.out;
-    el('chip-label').textContent = signedIn ? '' : 'Sign in';
+    const local = signInMode() === 'local';
+    const outHint = local ? 'Use a profile on this computer' : 'Sign in to keep your streak on every computer';
+    const who = accountName(currentUser);
+    chip.setAttribute('aria-label', signedIn ? (isLocalUser(currentUser) ? 'Profile ' : 'Account ') + who + ', ' + SYNC_TEXT[state] : outHint);
+    chip.title = signedIn ? who + ' · ' + SYNC_TEXT[state] : outHint;
+    el('chip-label').textContent = signedIn ? '' : (local ? 'Profile' : 'Sign in');
+    const signinText = el('menu-signin').querySelector('.menu-item-text');
+    if (signinText) {
+      signinText.firstElementChild.textContent = local ? 'Use a profile on this computer' : 'Sign in with Google';
+      signinText.lastElementChild.textContent = local ? 'Keeps your entries apart from anyone else here' : 'Keep your streak on every computer';
+    }
+    el('menu-switch').querySelector('span').textContent = isLocalUser(currentUser) ? 'Switch profile' : 'Switch account';
     el('sync-dot').dataset.state = state;
     el('menu-sync-dot').dataset.state = state;
     renderAvatar(el('account-badge'), currentUser);
     renderAvatar(el('menu-avatar'), currentUser);
-    el('account-email').textContent = signedIn ? currentUser.email : 'Not signed in';
+    el('account-email').textContent = signedIn ? who : 'Not signed in';
     el('account-sub').textContent = SYNC_TEXT[state];
     el('menu-signin').classList.toggle('hidden', signedIn);
     el('menu-switch').classList.toggle('hidden', !signedIn);
@@ -806,34 +928,118 @@ document.addEventListener('DOMContentLoaded', async () => {
     else if (action === 'copy-md') exportData('md');
   });
 
+  // Entries logged while signed out stay under the signed-out account. Note
+  // how many there were before signing in, so the popup can offer to bring
+  // them into the account afterwards.
+  function rememberSignedOutEntries() {
+    if (currentUser && currentUser.email) return;
+    const n = (stats && stats.totalLogs) || 0;
+    if (n > 0) saveUiState({ signedOutCount: n });
+  }
+
+  async function afterSignIn() {
+    const user = await TrackerAuth.getCurrentUser().catch(() => null);
+    if (user && user.email && ui.signedOutCount > 0 && has(TrackerStorage, 'mergeSignedOutEntries')) {
+      saveUiState({ mergeOfferFor: user.email });
+    }
+    showStatus(isLocalUser(user)
+      ? 'Profile ready. What you log now is kept under ' + accountName(user) + '.'
+      : 'Signed in. Your streak now follows you to every computer.', 'ok');
+    await loadData();
+  }
+
+  // The sign-in dialog doubles as "Use a profile on this computer" when the
+  // build has no Google sign-in: it then takes a plain name.
+  function openProfileDialog(mode) {
+    const local = mode === 'local';
+    el('email-signin-title').textContent = local ? 'Use a profile on this computer' : 'Sign in with your Google email';
+    el('email-signin-hint').textContent = local
+      ? 'LIT keeps a separate set of entries for each profile on this computer. Nothing is sent anywhere.'
+      : 'Signing in keeps your streak on every computer where you use Chrome.';
+    el('email-signin-label').textContent = local ? 'Your name' : 'Your Google email';
+    const input = el('email-signin-input');
+    input.type = local ? 'text' : 'email';
+    input.placeholder = local ? 'e.g. Sam' : 'you@gmail.com';
+    input.autocomplete = local ? 'given-name' : 'email';
+    input.value = '';
+    el('email-signin-form').dataset.mode = local ? 'local' : 'google';
+    openModal(el('email-signin-modal'), 'email-signin-input');
+  }
+
   async function signIn() {
+    rememberSignedOutEntries();
+    if (signInMode() === 'local') {
+      openProfileDialog('local');
+      return;
+    }
     try {
       // Never let auth.js fall back to window.prompt: an MV3 popup can close
       // under that dialog. Unpaired builds get our own dialog instead.
       await TrackerAuth.signInWithGoogle(undefined, { allowPrompt: false });
-      showStatus('Signed in. You are now seeing this account\'s data.', 'ok');
-      await loadData();
     } catch (err) {
       if (err && err.code === 'EMAIL_REQUIRED') {
-        el('email-signin-input').value = '';
-        openModal(el('email-signin-modal'), 'email-signin-input');
+        openProfileDialog(err.mode === 'local' ? 'local' : 'google');
         return;
       }
-      showStatus('Sign-in did not complete: ' + errMsg(err), 'error');
+      oops('Sign-in did not finish. Please try again.', err);
+      return;
     }
+    await afterSignIn();
   }
 
   async function signOut(quiet) {
     try {
       await TrackerAuth.signOut();
     } catch (err) {
-      showStatus('Sign-out failed: ' + errMsg(err), 'error');
+      oops('Sign-out did not finish. Please try again.', err);
       return false;
     }
-    if (!quiet) showStatus('Signed out. Showing entries saved while signed out.', 'ok');
+    if (!quiet) showStatus('Signed out. You are seeing what was saved on this computer.', 'ok');
     await loadData();
     return true;
   }
+
+  // "Your earlier entries are safe": shown once after signing in when there
+  // were entries from signed-out use, until merged or put off.
+  function renderMergeCard() {
+    const card = el('merge-card');
+    const email = currentUser && currentUser.email;
+    const show = !!email && ui.mergeOfferFor === email && has(TrackerStorage, 'mergeSignedOutEntries');
+    card.classList.toggle('hidden', !show);
+    if (show) {
+      const n = ui.signedOutCount || 0;
+      el('merge-body').textContent = 'You logged ' + (n === 1 ? 'one' : n) + ' before signing in. ' + (n === 1 ? 'It is' : 'They are') + ' still saved on this computer.';
+    }
+  }
+
+  el('merge-btn').addEventListener('click', async () => {
+    const email = currentUser && currentUser.email;
+    if (!email || !has(TrackerStorage, 'mergeSignedOutEntries')) return;
+    const btn = el('merge-btn');
+    btn.disabled = true;
+    let result;
+    try {
+      result = await TrackerStorage.mergeSignedOutEntries(email);
+    } catch (err) {
+      btn.disabled = false;
+      oops('Those entries could not be moved just now. They are still safe. Please try again.', err);
+      return;
+    }
+    btn.disabled = false;
+    saveUiState({ mergeOfferFor: null, signedOutCount: 0 });
+    const moved = (result && result.moved) || 0;
+    showStatus(moved > 0
+      ? 'Done. ' + moved + (moved === 1 ? ' entry is' : ' entries are') + ' now part of this account.'
+      : 'All set. Everything was already in this account.', 'ok');
+    notifyCalendarTabs();
+    await loadData();
+  });
+
+  el('merge-later-btn').addEventListener('click', () => {
+    saveUiState({ mergeOfferFor: null });
+    renderMergeCard();
+    showStatus('No problem. Your earlier entries stay safe on this computer.', 'ok');
+  });
 
   async function switchAccount() {
     if (await signOut(true)) signIn();
@@ -842,16 +1048,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Direct email sign-in dialog (unpacked builds with no GCP client paired)
   el('email-signin-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const local = el('email-signin-form').dataset.mode === 'local';
+    const value = el('email-signin-input').value;
     try {
-      await TrackerAuth.signInWithEmail(el('email-signin-input').value);
+      if (local && has(TrackerAuth, 'signInLocal')) await TrackerAuth.signInLocal(value);
+      else await TrackerAuth.signInWithEmail(value);
     } catch (err) {
-      showStatus('Sign-in did not complete: ' + errMsg(err), 'error');
+      oops(local ? 'Type a name for this profile, like your first name.' : 'That email did not work. Check it and try again.', err);
       el('email-signin-input').focus();
       return;
     }
     closeModal(el('email-signin-modal'));
-    showStatus('Signed in. You are now seeing this account\'s data.', 'ok');
-    await loadData();
+    await afterSignIn();
   });
 
   el('close-email-signin-modal').addEventListener('click', () => closeModal(el('email-signin-modal')));
@@ -881,7 +1089,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return loadPromise;
     }
     loadPromise = doLoad().catch(err => {
-      showStatus('Could not load your data: ' + errMsg(err), 'error');
+      oops('LIT could not load your progress just now. Close and reopen the popup to try again.', err);
     }).finally(() => {
       loadPromise = null;
       if (loadQueued) {
@@ -905,10 +1113,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     widgetItems = w;
     prefs = p;
     jobsCache = null;
+    applyAppearance();
     renderAuth();
     renderAlertToggles();
     renderUI();
     renderDigest();
+    renderMergeCard();
+    checkMilestones();
   }
 
   function getJobs() {
@@ -940,32 +1151,123 @@ document.addEventListener('DOMContentLoaded', async () => {
     cache.promise.then(logs => {
       if (asyncTokens[key] !== token || !body.isConnected) return;
       fn(logs);
-    }).catch(err => showStatus('Could not load applications: ' + errMsg(err), 'error'));
+    }).catch(err => oops('Your applications could not load just now. Reopen the popup to try again.', err));
   }
 
   function renderUI() {
-    const current = metricById(activeMetricId) || metrics[0];
+    const shown = visibleMetrics();
+    const current = (metricById(activeMetricId) && !metricById(activeMetricId).hidden ? metricById(activeMetricId) : null) || shown[0] || metrics[0];
     if (!current) return;
     activeMetricId = current.id;
     setTrackerColor(el('counter-card'), current.color);
     renderTabs();
     renderCounter(current);
-
-    const streak = (stats.streaks && stats.streaks[current.id]) || 0;
-    el('streak-count').textContent = streak;
-    el('streak-pill').classList.toggle('cold', streak === 0);
-    el('streak-pill').title = streak > 0
-      ? streak + ' consecutive day(s) hitting the ' + current.name + ' daily goal'
-      : 'No active ' + current.name + ' streak. Hit today\'s daily goal to start one.';
-
-    const hasAnyData = stats.totalLogs > 0;
-    el('first-run-card').classList.toggle('hidden', hasAnyData);
-    if (!hasAnyData) {
-      el('first-run-tips').textContent = 'Press "' + el('quick-add-label').textContent + '" to log one. '
-        + 'Job sites and LeetCode log themselves.';
-    }
-
+    renderHeadline(current);
+    renderStreak(current);
+    renderWeekStrip(current);
+    renderLock(current);
+    renderSetup();
+    renderTip();
     renderWidgets();
+  }
+
+  function todayFor(metric) {
+    if (stats.todayCount && stats.todayCount[metric.id] !== undefined) return stats.todayCount[metric.id] || 0;
+    return (stats.today && stats.today[metric.id]) || 0;
+  }
+
+  function goalMetFor(metric) {
+    if (stats.goalMet && typeof stats.goalMet[metric.id] === 'boolean') return stats.goalMet[metric.id];
+    return todayFor(metric) >= goalFor(metric);
+  }
+
+  function streakFor(metric) {
+    return (stats.streaks && stats.streaks[metric.id]) || 0;
+  }
+
+  // Daily-state headline under the date, in the chosen coach voice.
+  function renderHeadline(current) {
+    const count = todayFor(current);
+    const goal = goalFor(current);
+    el('day-headline').textContent = coach('headline', [{ count, goal, voice: voice() }], () => {
+      if (count >= goal) return 'Locked in for today.';
+      if (count === 0) return 'Ready when you are';
+      const left = goal - count;
+      return 'Nice, that\'s ' + count + '. ' + left + ' more locks it in.';
+    });
+    const goingFor = (prefs.goingFor || '').trim();
+    el('going-for').classList.toggle('hidden', !goingFor);
+    el('going-for-text').textContent = goingFor;
+    el('going-for').title = goingFor ? 'Going for ' + goingFor : '';
+  }
+
+  // Streak pill: flame in three sizes, a grey ember at zero, freezes, rest.
+  let flameFlickered = false;
+  function renderStreak(current) {
+    const days = streakFor(current);
+    const restToday = !!stats.restToday && !goalMetFor(current);
+    const freeze = stats.freezes && stats.freezes[current.id];
+    const available = freeze ? Math.max(0, parseInt(freeze.available, 10) || 0) : 0;
+    const usedOn = freeze && Array.isArray(freeze.usedOn) ? freeze.usedOn : [];
+    const weekAgo = TrackerStorage.addDays ? TrackerStorage.addDays(todayStr(), -7) : '';
+    const freezeUsed = usedOn.some(d => d >= weekAgo);
+    const pill = el('streak-pill');
+    const size = days <= 0 ? 0 : (days < 7 ? 1 : (days < 30 ? 2 : 3));
+    pill.dataset.size = String(size);
+    pill.classList.toggle('resting', restToday);
+    let label;
+    if (restToday) label = days > 0 ? days + (days === 1 ? ' day' : ' days') + ' · rest day' : 'Rest day';
+    else if (days <= 0) label = coach('streak', [{ days: 0, restToday: false, voice: voice() }], 'Fresh start today');
+    else label = days + (days === 1 ? '-day streak' : '-day streak');
+    // The pill is short; drill voice adds a line that belongs in the title.
+    if (days <= 0 && label.length > 22) label = 'Fresh start today';
+    el('streak-text').textContent = label;
+    const sentence = coach('streak', [{ days, restToday, freezeUsed, voice: voice() }], days > 0 ? 'Day ' + days + '. Keep it rolling.' : 'Fresh start today');
+    const freezeText = available > 0 ? ' ' + available + (available === 1 ? ' streak freeze' : ' streak freezes') + ' saved up: a missed day gets covered automatically.' : '';
+    pill.title = sentence + freezeText;
+    pill.setAttribute('aria-label', sentence + freezeText);
+    el('freeze-chip').classList.toggle('hidden', available <= 0);
+    el('freeze-count').textContent = available;
+    if (!flameFlickered && !reduceMotion && size > 0) {
+      flameFlickered = true;
+      const flame = el('streak-flame');
+      flame.classList.add('flicker');
+      setTimeout(() => flame.classList.remove('flicker'), 1000);
+    }
+  }
+
+  // Padlock brand mark. The shackle snaps shut once per goal per day; the
+  // date is remembered so reopening the popup does not replay it.
+  function lockStateFor(current) {
+    if (goalMetFor(current)) return streakFor(current) >= 7 ? 'locked-glow' : 'locked';
+    if (stats.restToday) return 'resting';
+    return 'open';
+  }
+  const LOCK_LABELS = { open: 'open', locked: 'locked for today', 'locked-glow': 'locked, on a streak', resting: 'resting today' };
+
+  function renderLock(current) {
+    const mark = el('brand-mark');
+    const state = lockStateFor(current);
+    mark.setAttribute('aria-label', 'LIT padlock, ' + LOCK_LABELS[state]);
+    const today = todayStr();
+    const played = ui.lockShut && ui.lockShut[current.id] === today;
+    const isLocked = state === 'locked' || state === 'locked-glow';
+    if (isLocked && !played) {
+      saveUiState({ lockShut: Object.assign({}, ui.lockShut, { [current.id]: today }) });
+      if (!reduceMotion) {
+        mark.classList.add('no-anim');
+        mark.dataset.state = 'open';
+        void mark.offsetWidth;
+        mark.classList.remove('no-anim');
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          mark.dataset.state = state;
+          mark.classList.add('snap');
+          setTimeout(() => mark.classList.remove('snap'), 500);
+        }));
+        return;
+      }
+    }
+    mark.dataset.state = state;
   }
 
   // ---------------------------------------------------------------------------
@@ -988,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderTabs() {
     const container = el('metric-tabs');
     container.querySelectorAll('.tab-item').forEach(n => n.remove());
-    metrics.forEach(m => {
+    visibleMetrics().forEach(m => {
       const active = m.id === activeMetricId;
       const tab = make('button', 'tab-item' + (active ? ' active' : ''));
       tab.type = 'button';
@@ -1002,7 +1304,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       icon.innerHTML = iconFor(m);
       tab.appendChild(icon);
       tab.appendChild(make('span', '', m.name));
-      const count = (stats.today && stats.today[m.id]) || 0;
+      const count = todayFor(m);
       if (count > 0) tab.appendChild(make('span', 'tab-count', count));
       container.appendChild(tab);
     });
@@ -1051,14 +1353,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('metric-tabs').addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
     e.preventDefault();
-    const i = metrics.findIndex(m => m.id === activeMetricId);
+    const list = visibleMetrics();
+    const i = list.findIndex(m => m.id === activeMetricId);
     let next = i;
-    if (e.key === 'ArrowRight') next = (i + 1) % metrics.length;
-    if (e.key === 'ArrowLeft') next = (i - 1 + metrics.length) % metrics.length;
+    if (e.key === 'ArrowRight') next = (i + 1) % list.length;
+    if (e.key === 'ArrowLeft') next = (i - 1 + list.length) % list.length;
     if (e.key === 'Home') next = 0;
-    if (e.key === 'End') next = metrics.length - 1;
-    selectTracker(metrics[next].id);
-    const tab = tabNode(metrics[next].id);
+    if (e.key === 'End') next = list.length - 1;
+    selectTracker(list[next].id);
+    const tab = tabNode(list[next].id);
     if (tab) tab.focus();
   });
 
@@ -1071,13 +1374,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   let countersRendered = false;
 
   // Each digit is a vertical strip of 0-9 that slides to its value, so +1 and
-  // -1 roll the way a mechanical counter does.
+  // -1 roll the way a mechanical counter does. Going up the roll overshoots a
+  // touch; going down it settles flat.
   function renderTicker(node, value, animate) {
     const str = String(Math.max(0, parseInt(value, 10) || 0));
     const prev = node.dataset.value;
     if (prev === str && node.querySelector('.digit')) return;
     node.dataset.value = str;
     node.setAttribute('aria-label', str);
+    const up = prev !== undefined && Number(str) > Number(prev);
+    node.classList.toggle('roll-up', up);
+    node.classList.toggle('roll-down', !up);
     const build = len => {
       node.textContent = '';
       for (let d = 0; d < len; d++) {
@@ -1133,12 +1440,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function celebrate(node) {
+  // Restarts a one-shot CSS animation class.
+  function replay(node, cls, ms) {
     if (!node || reduceMotion) return;
-    node.classList.remove('celebrate');
-    void node.offsetWidth;
-    node.classList.add('celebrate');
-    setTimeout(() => node.classList.remove('celebrate'), 1300);
+    node.classList.remove(cls);
+    void (node.getBBox ? node.getBoundingClientRect() : node.offsetWidth);
+    node.classList.add(cls);
+    setTimeout(() => node.classList.remove(cls), ms);
   }
 
   function quickAddLabel(metric) {
@@ -1147,31 +1455,94 @@ document.addEventListener('DOMContentLoaded', async () => {
     return 'Log ' + unitSingular(metric);
   }
 
+  function counterLabel(metric, n) {
+    if (metric.id === 'jobs') return (n === 1 ? 'application' : 'applications') + ' sent today';
+    if (metric.id === 'leetcode') return (n === 1 ? 'problem' : 'problems') + ' solved today';
+    return displayUnit(metric, n) + ' today';
+  }
+
+  // The newly added arc glows for a moment.
+  function flashNewArc(fromPct, toPct) {
+    const arc = el('ring-new');
+    if (!arc || reduceMotion || toPct <= fromPct) return;
+    const start = RING_C * fromPct;
+    const len = RING_C * (toPct - fromPct);
+    arc.style.strokeDasharray = len + ' ' + RING_C;
+    arc.style.strokeDashoffset = String(-start);
+    replay(arc, 'flash', 820);
+  }
+
+  // Twelve accent dots burst from the ring, once per goal per day.
+  function burstRing() {
+    const wrap = el('ring-wrap');
+    if (!wrap || reduceMotion) return;
+    const burst = make('div', 'burst');
+    burst.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 12; i++) {
+      const dot = make('i');
+      dot.style.setProperty('--a', (i * 30) + 'deg');
+      dot.style.setProperty('--d', (i % 3) * 25 + 'ms');
+      burst.appendChild(dot);
+    }
+    wrap.appendChild(burst);
+    setTimeout(() => burst.remove(), 1000);
+  }
+
+  function floatPlusChip() {
+    const wrap = el('ring-wrap');
+    if (!wrap || reduceMotion) return;
+    const chip = make('span', 'plus-chip', '+1');
+    chip.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(chip);
+    setTimeout(() => chip.remove(), 950);
+  }
+
+  // The goal-complete burst plays once per goal per day, whether the goal
+  // was hit here or by an auto-logged application while the popup was shut.
+  function maybeCelebrateGoal(current, met) {
+    if (!met) return;
+    const today = todayStr();
+    if (ui.burst && ui.burst[current.id] === today) return;
+    saveUiState({ burst: Object.assign({}, ui.burst, { [current.id]: today }) });
+    burstRing();
+    replay(el('ring-wrap'), 'celebrate', 1300);
+    requestAnimationFrame(() => widgetsHost.querySelectorAll('.widget-goal').forEach(n => replay(n, 'celebrate', 1300)));
+  }
+
   function renderCounter(current) {
-    const today = (stats.today && stats.today[current.id]) || 0;
+    const today = todayFor(current);
     const goal = goalFor(current);
     const met = today >= goal;
-    renderTicker(el('metric-count'), today, countersRendered);
+    const prevRendered = el('metric-count').dataset.value;
+    const prevSameMetric = el('counter-card').dataset.metricId === current.id;
+    renderTicker(el('metric-count'), today, countersRendered && prevSameMetric);
     countersRendered = true;
+    el('counter-card').dataset.metricId = current.id;
     el('ring-goal').textContent = 'of ' + goal;
 
     buildRingTicks();
     const pct = Math.min(1, today / goal);
+    const prevCount = prevSameMetric && prevRendered !== undefined ? Number(prevRendered) : null;
+    const prevPct = prevCount === null ? pct : Math.min(1, prevCount / goal);
     const fill = el('ring-fill');
     fill.style.strokeDasharray = String(RING_C);
     fill.style.strokeDashoffset = String(RING_C * (1 - pct));
+    if (prevCount !== null && pct > prevPct) flashNewArc(prevPct, pct);
     el('ring-ticks').querySelectorAll('.ring-tick').forEach(t => {
-      t.classList.toggle('reached', pct >= Number(t.dataset.pct));
+      const at = Number(t.dataset.pct);
+      const reached = pct >= at;
+      if (reached && prevCount !== null && prevPct < at) replay(t, 'pulse', 720);
+      t.classList.toggle('reached', reached);
     });
     el('ring-wrap').classList.toggle('met', met);
 
-    el('metric-unit-label').textContent = (current.unit || 'items') + ' logged today';
-    el('ring-wrap').title = met ? 'Daily goal reached' : (goal - today) + ' to go for today\'s goal';
+    el('metric-unit-label').textContent = counterLabel(current, today);
+    el('ring-wrap').title = met ? 'Today\'s goal is done' : (goal - today) + ' to go for today\'s goal';
 
     const weekly = current.weeklyGoal || 0;
     const weekCount = (stats.weekToDate && stats.weekToDate[current.id]) || 0;
     el('week-line').classList.toggle('hidden', weekly <= 0);
-    el('week-set-btn').classList.toggle('hidden', weekly > 0);
+    el('week-set-btn').classList.toggle('hidden', true);
     if (weekly > 0) {
       el('week-count').textContent = weekCount + ' / ' + weekly;
       el('week-fill').style.width = Math.min(100, Math.round((weekCount / weekly) * 100)) + '%';
@@ -1179,16 +1550,77 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     el('quick-add-label').textContent = quickAddLabel(current);
-    el('undo-btn').setAttribute('aria-label', 'Remove the most recent ' + current.name + ' entry logged today');
+    el('undo-btn').setAttribute('aria-label', 'Undo last: take back the most recent ' + unitSingular(current) + ' logged today');
 
-    if (lastToday[current.id] !== undefined && lastToday[current.id] < goal && met) {
-      celebrate(el('ring-wrap'));
-      requestAnimationFrame(() => widgetsHost.querySelectorAll('.widget-goal').forEach(celebrate));
-    }
-    metrics.forEach(m => { lastToday[m.id] = (stats.today && stats.today[m.id]) || 0; });
+    maybeCelebrateGoal(current, met);
+    metrics.forEach(m => { lastToday[m.id] = todayFor(m); });
   }
 
   el('week-set-btn').addEventListener('click', () => openMetricSettings(activeMetricId, 'metric-settings-weekly'));
+
+  // Week strip: Monday to Sunday dots under the counter.
+  const DAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const DOT_WORDS = { met: 'goal met', some: 'some done', none: 'nothing logged', rest: 'rest day', frozen: 'covered by a streak freeze', future: 'still ahead' };
+  const SNOW_SVG = '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M6 1v10M1.7 3.5l8.6 5M1.7 8.5l8.6-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  let lastWeekDots = [];
+
+  async function weekDotsFor(metric) {
+    if (has(TrackerStorage, 'getWeekDots')) return TrackerStorage.getWeekDots(metric.id);
+    // Fallback: build the strip from two weeks of history.
+    const history = await TrackerStorage.getActivityHistory(14, metric.id);
+    const today = todayStr();
+    const goal = goalFor(metric);
+    const d = TrackerStorage.parseLocalDateToNoon(today);
+    const back = (d.getDay() + 6) % 7;
+    const start = TrackerStorage.addDays(today, -back);
+    const byDate = {};
+    history.days.forEach(x => { byDate[x.date] = x.count; });
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const date = TrackerStorage.addDays(start, i);
+      const count = byDate[date] || 0;
+      const state = date > today ? 'future' : (count >= goal ? 'met' : (count > 0 ? 'some' : 'none'));
+      out.push({ date, count, goal, state, isToday: date === today });
+    }
+    return out;
+  }
+
+  async function renderWeekStrip(metric) {
+    const list = el('week-dots');
+    const token = bumpToken('weekdots');
+    let dots;
+    try {
+      dots = await weekDotsFor(metric);
+    } catch (err) {
+      console.warn('[LIT] week strip unavailable', err);
+      el('week-strip').classList.add('hidden');
+      return;
+    }
+    if (asyncTokens.weekdots !== token || !Array.isArray(dots) || dots.length !== 7) return;
+    el('week-strip').classList.remove('hidden');
+    lastWeekDots = dots;
+    list.textContent = '';
+    dots.forEach(dot => {
+      const day = TrackerStorage.parseLocalDateToNoon(dot.date).getDay();
+      const li = make('li', 'week-dot state-' + dot.state + (dot.isToday ? ' is-today' : ''));
+      const b = make('b');
+      if (dot.state === 'met') b.innerHTML = CHECK_SVG;
+      else if (dot.state === 'frozen') b.innerHTML = SNOW_SVG;
+      li.appendChild(b);
+      li.appendChild(make('em', null, DAY_LONG[day][0]));
+      const words = DAY_LONG[day] + (dot.isToday ? ' (today)' : '') + ': ' + (dot.state === 'future' ? DOT_WORDS.future : dot.count + ' of ' + dot.goal + ', ' + DOT_WORDS[dot.state]);
+      li.setAttribute('aria-label', words);
+      li.title = words;
+      list.appendChild(li);
+    });
+  }
+
+  function openCalendar() {
+    markSetup('calendar');
+    if (typeof chrome !== 'undefined' && chrome.tabs) chrome.tabs.create({ url: 'https://calendar.google.com' });
+    else window.open('https://calendar.google.com', '_blank');
+  }
+  el('week-calendar-link').addEventListener('click', openCalendar);
 
   // +1
   el('quick-add-btn').addEventListener('click', async () => {
@@ -1196,6 +1628,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     btn.classList.remove('pressed');
     void btn.offsetWidth;
     btn.classList.add('pressed');
+    setTimeout(() => btn.classList.remove('pressed'), 160);
+    floatPlusChip();
 
     let notes;
     let solveTimeSeconds = 0;
@@ -1211,7 +1645,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       await TrackerStorage.addLog({ metricId: activeMetricId, count: 1, notes, solveTimeSeconds });
     } catch (err) {
-      showStatus('Could not save that entry: ' + errMsg(err), 'error');
+      oops('That one did not save. Please try again.', err);
       return;
     }
     if (solveTimeSeconds > 0) {
@@ -1221,21 +1655,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadData();
   });
 
-  // -1
+  // Undo last (the old -1): no celebration, and a toast to bring it back.
   el('undo-btn').addEventListener('click', async () => {
+    const current = metricById(activeMetricId);
+    const today = todayStr();
+    let latest = null;
+    try {
+      const logs = await TrackerStorage.getLogs({ metricId: activeMetricId });
+      latest = logs.find(l => l.date === today) || null;
+    } catch (e) {
+      latest = null;
+    }
     let removed = false;
     try {
       removed = await TrackerStorage.undoLastLog(activeMetricId);
     } catch (err) {
-      showStatus('Could not remove that entry: ' + errMsg(err), 'error');
+      oops('That could not be undone just now. Please try again.', err);
       return;
     }
     if (!removed) {
-      const current = metricById(activeMetricId);
-      showStatus('Nothing logged today for ' + (current ? current.name : 'this tracker') + ', so there is nothing to remove.', 'error');
+      showStatus('Nothing logged today' + (current ? ' for ' + current.name : '') + ' yet, so there is nothing to undo.');
       return;
     }
-    showStatus('Removed the most recent entry logged today. Use the plus button to log it again.', 'ok');
+    showStatus('Took back the last one from today.', 'ok', latest ? {
+      label: 'Undo',
+      run: () => restoreEntry(latest)
+    } : null);
     notifyCalendarTabs();
     await loadData();
   });
@@ -1252,6 +1697,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   const WEEK_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
   const CHECK_SVG = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
+  // A 1-3 sentence story about a week, never reporting a decline.
+  function weekStoryFor(m, lastWeekTotal) {
+    const unit = m ? displayUnit(m, 2) : 'applications';
+    const args = { total: m ? m.total : 0, bestDay: m ? m.bestDay : null, activeDays: m ? m.activeDays : 0, lastWeekTotal: lastWeekTotal || 0, unit };
+    return coach('weekStory', [args], () => {
+      if (!args.total) return 'A quiet week, and that is allowed. A fresh week starts whenever you do.';
+      return args.total + ' ' + unit + ' across ' + args.activeDays + (args.activeDays === 1 ? ' day' : ' days') + '. Steady work adds up.';
+    });
+  }
+
+  // Last week's recap: shown at the start of a new week until dismissed.
+  let digestShare = null;
   async function renderDigest() {
     const card = el('digest-card');
     const weekStart = stats && stats.weekStartStr;
@@ -1261,8 +1718,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     const token = bumpToken('digest');
     let summary;
+    let before = null;
     try {
       summary = await TrackerStorage.getWeekSummary();
+      before = await TrackerStorage.getWeekSummary(TrackerStorage.addDays(summary.weekStart, -7)).catch(() => null);
     } catch (err) {
       card.classList.add('hidden');
       return;
@@ -1272,65 +1731,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       card.classList.add('hidden');
       return;
     }
-    el('digest-title').textContent = shortDate(summary.weekStart) + ' – ' + shortDate(summary.weekEnd);
-    const rows = el('digest-rows');
-    rows.textContent = '';
-    summary.metrics.filter(m => m.total > 0 || m.weeklyGoal > 0).forEach(m => {
-      const row = make('div', 'digest-row');
-      row.style.setProperty('--c', m.color);
-
-      const name = make('span', 'digest-name');
-      name.appendChild(make('i'));
-      name.appendChild(make('span', 'digest-name-text', m.name));
-      name.title = m.name;
-      row.appendChild(name);
-
-      const total = make('span', 'digest-total', String(m.total));
-      if (m.weeklyGoal > 0) {
-        total.appendChild(make('small', null, ' / ' + m.weeklyGoal));
-        const met = m.total >= m.weeklyGoal;
-        row.classList.toggle('met', met);
-        // A check mark as well as the color, so "met" never rests on color.
-        if (met) {
-          const check = make('span', 'digest-check');
-          check.innerHTML = CHECK_SVG;
-          total.appendChild(check);
-          total.title = 'Weekly goal met';
-          total.setAttribute('aria-label', m.total + ' of ' + m.weeklyGoal + ', weekly goal met');
-        }
-      }
-      row.appendChild(total);
-
-      // Seven bars, Monday to Sunday, scaled to the week's busiest day.
-      const days = m.days || [];
-      const peak = Math.max(1, ...days);
-      const chart = make('div', 'digest-week');
-      chart.setAttribute('aria-hidden', 'true');
-      WEEK_LETTERS.forEach((letter, i) => {
-        const n = days[i] || 0;
-        const col = make('span', 'digest-day' + (n > 0 ? '' : ' is-zero'));
-        const bar = make('b');
-        bar.style.height = (n > 0 ? Math.max(3, Math.round((n / peak) * 16)) : 2) + 'px';
-        col.appendChild(bar);
-        col.appendChild(make('em', null, letter));
-        col.title = n + (n === 1 ? ' entry' : ' entries');
-        chart.appendChild(col);
-      });
-      row.appendChild(chart);
-
-      const bits = [m.activeDays + '/7 days'];
-      if (m.goalDays > 0) bits.push('goal met ' + m.goalDays + '×');
-      if (m.bestDay) bits.push('best ' + WEEKDAYS[TrackerStorage.parseLocalDateToNoon(m.bestDay.date).getDay()]);
-      const detail = make('span', 'digest-detail', bits.join(' · '));
-      detail.title = bits.join(' · ');
-      row.appendChild(detail);
-      rows.appendChild(row);
-    });
-    card.title = summary.responses > 0
-      ? summary.responses + (summary.responses === 1 ? ' application heard back' : ' applications heard back')
-      : '';
+    // The story follows the goal on screen, or the busiest one last week.
+    const pick = summary.metrics.find(m => m.id === activeMetricId && m.total > 0)
+      || summary.metrics.slice().sort((x, y) => y.total - x.total)[0];
+    const prior = before && before.metrics ? before.metrics.find(m => m.id === pick.id) : null;
+    el('digest-title').textContent = shortDate(summary.weekStart) + ' to ' + shortDate(summary.weekEnd);
+    el('digest-story').textContent = weekStoryFor(pick, prior ? prior.total : 0);
+    const metric = metricById(pick.id);
+    digestShare = {
+      bigNumber: pick.total,
+      bigLabel: (metric ? displayUnit(metric, pick.total) : 'done') + ' last week',
+      metricId: pick.id
+    };
     card.classList.remove('hidden');
   }
+
+  el('digest-share-btn').addEventListener('click', () => {
+    if (digestShare) openShare(digestShare);
+  });
 
   el('digest-dismiss-btn').addEventListener('click', async () => {
     el('digest-card').classList.add('hidden');
@@ -1341,6 +1759,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Widgets
   // ---------------------------------------------------------------------------
   const widgetsHost = el('widgets-host');
+  // Customize mode: cards wiggle and show drag handles and remove buttons.
+  let customizing = false;
   const widgetParts = el('widget-parts');
   const PART_IDS = { timer: 'leetcode-timer-widget', timeStats: 'leetcode-time-block', details: 'details-section' };
 
@@ -1349,7 +1769,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const CHEV_SVG = '<svg class="chev" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const X_SVG = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 
-  // One glyph per widget type for the add-widget list.
+  const TROPHY_PATH = '<path d="M4.3 2.2h5.4v2.7a2.7 2.7 0 0 1-5.4 0z" fill="currentColor"/><path d="M4.3 3H3a1.4 1.4 0 0 0 1.5 1.9M9.7 3H11a1.4 1.4 0 0 1-1.5 1.9M7 7.7v2M5 11.8h4M5.6 9.7h2.8v2.1H5.6z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>';
+  const TROPHY_SVG = '<svg viewBox="0 0 14 14" fill="none" aria-hidden="true" focusable="false">' + TROPHY_PATH + '</svg>';
+
+  // One glyph per card type for the add-a-card list.
   const WIDGET_TYPE_ICON = {
     goal: '<circle cx="7" cy="7" r="5.3" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="2.8" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="0.9" fill="currentColor"/>',
     summary: '<rect x="2" y="2.8" width="5.5" height="2" rx="1" fill="currentColor"/><rect x="2" y="6" width="8" height="2" rx="1" fill="currentColor"/><rect x="2" y="9.2" width="10" height="2" rx="1" fill="currentColor"/>',
@@ -1360,7 +1783,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     details: '<rect x="2.5" y="1.8" width="9" height="10.4" rx="1.4" stroke="currentColor" stroke-width="1.2"/><path d="M4.8 5h4.4M4.8 7.3h4.4M4.8 9.6h2.8" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>',
     pipeline: '<path d="M1.8 2.5h10.4L8.4 7v4.2l-2.8 1.3V7z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>',
     recentList: '<circle cx="2.8" cy="3.5" r="1" fill="currentColor"/><circle cx="2.8" cy="7" r="1" fill="currentColor"/><circle cx="2.8" cy="10.5" r="1" fill="currentColor"/><path d="M5.3 3.5h6.4M5.3 7h6.4M5.3 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>',
-    responseStats: '<path d="M2 11.5 5 8l2.2 2L12 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.2 4.5H12v2.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+    responseStats: '<path d="M2 11.5 5 8l2.2 2L12 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.2 4.5H12v2.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+    trophies: TROPHY_PATH,
+    recap: '<path d="M3 3.5h8M3 6.5h8M3 9.5h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M9.5 11.5 11 10l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
   };
 
   function metricFor(item) {
@@ -1394,16 +1819,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     tools.appendChild(make('div', 'widget-extra'));
     const grip = make('button', 'tool-btn widget-drag-handle');
     grip.type = 'button';
-    grip.title = 'Drag to reorder';
+    grip.title = 'Drag to move';
     grip.innerHTML = GRIP_SVG;
     tools.appendChild(grip);
     const edit = make('button', 'tool-btn widget-edit-btn');
     edit.type = 'button';
-    edit.title = 'Customize widget';
+    edit.title = 'Card settings';
     edit.innerHTML = GEAR_SVG;
     tools.appendChild(edit);
     head.appendChild(tools);
     wrap.appendChild(head);
+    // Customize mode: a phone-style remove button on the corner.
+    const remove = make('button', 'widget-remove-btn');
+    remove.type = 'button';
+    remove.innerHTML = X_SVG;
+    wrap.appendChild(remove);
     wrap.appendChild(make('div', 'widget-body'));
     return wrap;
   }
@@ -1414,15 +1844,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     wrap.classList.toggle('size-expanded', item.options.size !== 'compact');
     wrap.classList.toggle('solo', solo);
     wrap.classList.toggle('collapsed', !!item.options.collapsed);
-    setTrackerColor(wrap, metric.color);
+    // Cards that follow the tab wear the accent; a card pinned to another
+    // goal keeps that goal's color so two side by side read apart.
+    if (pinLabel(item, metric)) setTrackerColor(wrap, metric.color);
+    else {
+      wrap.style.setProperty('--tracker', 'var(--accent)');
+      wrap.style.setProperty('--on-tracker', 'var(--on-accent)');
+    }
     const toggle = wrap.querySelector('.widget-collapse');
     toggle.setAttribute('aria-expanded', item.options.collapsed ? 'false' : 'true');
     toggle.setAttribute('aria-label', (item.options.collapsed ? 'Expand ' : 'Collapse ') + name);
     wrap.querySelector('.widget-title').textContent = widgetTitle(item);
     const pin = pinLabel(item, metric);
     wrap.querySelector('.widget-pin').textContent = pin ? '· ' + pin : '';
-    wrap.querySelector('.widget-drag-handle').setAttribute('aria-label', 'Reorder the ' + name + ' widget. Use the arrow keys to move it.');
-    wrap.querySelector('.widget-edit-btn').setAttribute('aria-label', 'Customize the ' + name + ' widget');
+    wrap.querySelector('.widget-drag-handle').setAttribute('aria-label', 'Move the ' + name + ' card. Use the arrow keys to move it.');
+    wrap.querySelector('.widget-edit-btn').setAttribute('aria-label', 'Settings for the ' + name + ' card');
+    const remove = wrap.querySelector('.widget-remove-btn');
+    remove.setAttribute('aria-label', 'Remove the ' + name + ' card');
+    remove.title = 'Remove card';
+    remove.tabIndex = customizing ? 0 : -1;
   }
 
   // Singleton parts are moved, not cloned, so the timer's input state and
@@ -1562,7 +2002,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (r.count !== r.requested) short.push(statusMeta(r.status).label + ' is ' + r.count);
       }
     } catch (err) {
-      showStatus('Could not update the counts: ' + errMsg(err), 'error');
+      oops('The stage counts did not save. Please try again.', err);
     }
     pipelineEditing = null;
     jobsCache = null;
@@ -1782,8 +2222,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             all.dataset.clearFilter = '1';
             empty.appendChild(all);
           } else {
-            empty.appendChild(make('p', '', 'No applications yet. Apply on a job site and LIT logs it for you, or add one by hand.'));
-            const add = make('button', 'btn btn-accent btn-sm', 'Add an application');
+            empty.appendChild(make('p', '', coach('empty', ['applications'], 'No applications sent yet. Your first one will appear here, ready to track.')));
+            const add = make('button', 'btn btn-accent btn-sm', 'Add one with details');
             add.type = 'button';
             add.addEventListener('click', focusDetailsForm);
             empty.appendChild(add);
@@ -1805,8 +2245,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         body.textContent = '';
         const wrap = make('div', 'response');
         const big = make('div', 'big-stat');
-        big.appendChild(make('span', 'num', s.responseRate === null ? '--' : s.responseRate + '%'));
-        big.appendChild(make('span', 'of', 'response rate'));
+        // Never a stinging 0%: until someone replies, frame it as early days.
+        const noReplies = !s.responded;
+        const num = make('span', 'num' + (noReplies ? ' is-words' : ''), noReplies ? (s.total ? 'Early days' : 'Nothing yet') : s.responseRate + '%');
+        big.appendChild(num);
+        if (!noReplies) big.appendChild(make('span', 'of', 'heard back'));
         wrap.appendChild(big);
         const bar = make('div', 'response-bar');
         bar.setAttribute('aria-hidden', 'true');
@@ -1826,13 +2269,97 @@ document.addEventListener('DOMContentLoaded', async () => {
           legend.appendChild(key);
         });
         if (legend.firstChild) wrap.appendChild(legend);
-        const meta = s.total === 0
-          ? 'No applications yet.'
-          : s.responded + ' of ' + s.total + ' heard back' + (s.avgTurnaroundDays !== null
-            ? '. Replies take ' + s.avgTurnaroundDays + (s.avgTurnaroundDays === 1 ? ' day' : ' days') + ' on average.'
-            : '.');
+        let meta;
+        if (s.total === 0) meta = 'Replies show up here once you start applying.';
+        else if (noReplies) meta = 'Replies often take a week or three. Each application you send keeps a door open.';
+        else meta = s.responded + ' of ' + s.total + ' heard back' + (s.avgTurnaroundDays !== null
+          ? '. Replies take about ' + s.avgTurnaroundDays + (s.avgTurnaroundDays === 1 ? ' day' : ' days') + '.'
+          : '. Keep them coming.');
         wrap.appendChild(make('div', 'response-meta', meta));
         body.appendChild(wrap);
+      });
+    },
+
+    // Trophy shelf: milestones reached, the next one to go for.
+    trophies(body, item, metric) {
+      if (!has(TrackerStorage, 'getMilestones')) {
+        body.textContent = '';
+        body.appendChild(make('div', 'empty', 'Trophies arrive with your first entries.'));
+        return;
+      }
+      const key = 'trophies:' + item.id;
+      const token = bumpToken(key);
+      TrackerStorage.getMilestones(metric.id).then(ms => {
+        if (asyncTokens[key] !== token || !body.isConnected) return;
+        body.textContent = '';
+        const reached = (ms && ms.reached) || [];
+        const shelf = make('div', 'trophy-shelf');
+        reached.forEach(r => {
+          const t = make('div', 'trophy' + (ms.unseen && ms.unseen.includes(r.id) ? ' is-new' : ''));
+          t.innerHTML = TROPHY_SVG;
+          t.appendChild(make('b', null, r.count === null || r.count === undefined ? 'Interview' : r.count));
+          t.title = (r.title || '') + (r.date ? ' · ' + shortDate(r.date, true) : '');
+          t.setAttribute('aria-label', (r.title || 'Milestone') + (r.date ? ', reached ' + shortDate(r.date, true) : ''));
+          shelf.appendChild(t);
+        });
+        if (ms && ms.next) {
+          const ghost = make('div', 'trophy locked');
+          ghost.innerHTML = TROPHY_SVG;
+          ghost.appendChild(make('b', null, ms.next.count));
+          ghost.setAttribute('aria-label', 'Next trophy at ' + ms.next.count);
+          shelf.appendChild(ghost);
+        }
+        body.appendChild(shelf);
+        if (!reached.length) body.appendChild(make('div', 'trophy-next', 'Your first trophy comes with your first ' + displayUnit(metric, 1) + '.'));
+        else if (ms.next) {
+          const next = make('div', 'trophy-next');
+          next.appendChild(document.createTextNode(ms.next.remaining + ' more to reach ' + ms.next.count + '.'));
+          const bar = make('div', 'week-bar');
+          const fill = make('span');
+          const prevAt = reached.filter(r => typeof r.count === 'number').reduce((n, r) => Math.max(n, r.count), 0);
+          const span = Math.max(1, ms.next.count - prevAt);
+          fill.style.width = Math.round(Math.max(0, Math.min(1, (span - ms.next.remaining) / span)) * 100) + '%';
+          bar.appendChild(fill);
+          next.appendChild(bar);
+          body.appendChild(next);
+        }
+      }).catch(err => {
+        console.warn('[LIT] trophies unavailable', err);
+      });
+    },
+
+    // Weekly recap: this week so far, as a short story, ready to share.
+    recap(body, item, metric) {
+      const key = 'recap:' + item.id;
+      const token = bumpToken(key);
+      const thisWeek = stats.weekStartStr;
+      Promise.all([
+        TrackerStorage.getWeekSummary(thisWeek),
+        TrackerStorage.getWeekSummary().catch(() => null)
+      ]).then(([now, last]) => {
+        if (asyncTokens[key] !== token || !body.isConnected) return;
+        const m = now && now.metrics ? now.metrics.find(x => x.id === metric.id) : null;
+        const prior = last && last.metrics ? last.metrics.find(x => x.id === metric.id) : null;
+        body.textContent = '';
+        const total = m ? m.total : 0;
+        body.appendChild(make('p', 'story', total > 0
+          ? weekStoryFor(m, prior ? prior.total : 0)
+          : 'Your week starts with the first one. ' + (prior && prior.total ? 'Last week you sent ' + prior.total + '; that rhythm is still yours.' : 'One is all it takes to get going.')));
+        const foot = make('div', 'story-foot');
+        foot.appendChild(make('span', 'story-meta', total + ' ' + displayUnit(metric, total) + ' this week' + (m && m.activeDays ? ' · ' + m.activeDays + (m.activeDays === 1 ? ' day' : ' days') + ' active' : '')));
+        if (total > 0) {
+          const share = make('button', 'btn btn-ghost btn-sm', 'Share');
+          share.type = 'button';
+          share.dataset.shareWeek = String(total);
+          share.setAttribute('aria-label', 'Share this week');
+          foot.appendChild(share);
+        }
+        body.appendChild(foot);
+      }).catch(err => {
+        console.warn('[LIT] weekly recap unavailable', err);
+        if (asyncTokens[key] !== token || !body.isConnected) return;
+        body.textContent = '';
+        body.appendChild(make('div', 'empty', coach('empty', ['chart'], 'Your week will show up here.')));
       });
     }
   };
@@ -1858,7 +2385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     li.style.setProperty('--c', options.color || (metric ? metric.color : '#1a73e8'));
     if (options.delay) li.style.animationDelay = Math.min(options.delay, 10) * 18 + 'ms';
     const main = make('div', 'entry-main');
-    const titleText = log.company || log.role || log.notes || (metric ? metric.name : 'Entry');
+    const titleText = log.company || log.role || log.notes || (log.metricId === 'jobs' ? 'Application' : (metric ? metric.name : 'Entry'));
     // A one-tracker list gets a company monogram; mixed lists keep the
     // tracker-colored dot, since there the color tells entries apart.
     if (options.monogram) {
@@ -1919,7 +2446,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       history = await TrackerStorage.getActivityHistory(item.options.days, metric.id);
     } catch (err) {
-      showStatus('Could not load activity: ' + errMsg(err), 'error');
+      console.warn('[LIT] activity unavailable', err);
       return;
     }
     if (asyncTokens[key] !== token || !body.isConnected) return;
@@ -1931,7 +2458,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const emptyNote = body.querySelector('.activity-empty');
     if (emptyNote) {
-      emptyNote.textContent = item.options.days === WidgetLayout.ALL_DAYS ? 'Nothing logged yet.' : 'Nothing logged in the last ' + item.options.days + ' days.';
+      emptyNote.textContent = history.totalCount === 0 && (stats.totalLogs || 0) === 0
+        ? coach('empty', ['chart'], 'Your chart fills in as you go.')
+        : (item.options.days === WidgetLayout.ALL_DAYS ? 'Nothing here yet.' : 'Nothing in the last ' + item.options.days + ' days. A fresh start is one tap away.');
       emptyNote.classList.toggle('hidden', history.totalCount > 0);
     }
 
@@ -2041,7 +2570,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       s = await TrackerStorage.getLeetcodeTimeStats();
     } catch (err) {
-      showStatus('Could not load solve-time stats: ' + errMsg(err), 'error');
+      console.warn('[LIT] solve times unavailable', err);
       return;
     }
     if (asyncTokens.lcstats !== token || !block.closest('.widget')) return;
@@ -2159,12 +2688,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // points rather than a blank area.
   function widgetsEmptyState() {
     const box = make('div', 'empty empty-actions widgets-empty');
-    box.appendChild(make('p', '', 'No widgets on this tab. Add the ones you want, or start from the recommended set.'));
+    box.appendChild(make('p', '', 'No cards on this tab. Add the ones you want, or start from the recommended set.'));
     const row = make('div', 'empty-buttons');
-    const add = make('button', 'btn btn-accent btn-sm', 'Add widget');
+    const add = make('button', 'btn btn-accent btn-sm', 'Add a card');
     add.type = 'button';
     add.addEventListener('click', () => el('add-widget-btn').click());
-    const reset = make('button', 'btn btn-ghost btn-sm', 'Use recommended layout');
+    const reset = make('button', 'btn btn-ghost btn-sm', 'Use the recommended cards');
     reset.type = 'button';
     reset.addEventListener('click', () => resetLayout(null));
     row.appendChild(add);
@@ -2203,7 +2732,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       widgetItems = await promise;
     } catch (err) {
-      showStatus('Could not update widgets: ' + errMsg(err), 'error');
+      oops('Your cards could not be updated just now. Please try again.', err);
       return false;
     }
     renderWidgets();
@@ -2230,6 +2759,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wrap) return;
     const item = widgetById(wrap.dataset.widgetId);
     if (!item) return;
+    if (e.target.closest('.widget-remove-btn')) {
+      removeCard(item.id);
+      return;
+    }
+    const shareWeek = e.target.closest('[data-share-week]');
+    if (shareWeek) {
+      const metric = metricFor(item);
+      const n = parseInt(shareWeek.dataset.shareWeek, 10) || 0;
+      openShare({ bigNumber: n, bigLabel: displayUnit(metric, n) + ' this week', metricId: metric.id });
+      return;
+    }
     const step = e.target.closest('[data-step]');
     if (step) {
       e.preventDefault();
@@ -2425,7 +2965,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  /* Add widget picker */
+  /* Customize mode: like a phone home screen. Cards wiggle, drag handles and
+     remove buttons appear, and "Add a card" sits next to Done. */
+  function setCustomizing(on) {
+    customizing = !!on;
+    widgetsHost.classList.toggle('customizing', customizing);
+    el('customize-btn').setAttribute('aria-pressed', customizing ? 'true' : 'false');
+    el('customize-label').textContent = customizing ? 'Done' : 'Customize cards';
+    el('add-widget-btn').classList.toggle('hidden', !customizing);
+    widgetsHost.querySelectorAll('.widget-remove-btn').forEach(b => { b.tabIndex = customizing ? 0 : -1; });
+    if (customizing) showStatus('Drag cards to move them, or tap the corner button to remove one. Press Done when you are finished.');
+  }
+  el('customize-btn').addEventListener('click', () => setCustomizing(!customizing));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && customizing && !openModalEl && !drag && !popoverState) {
+      setCustomizing(false);
+      el('customize-btn').focus();
+    }
+  });
+
+  // Remove straight from customize mode, with Undo in the toast.
+  async function removeCard(id) {
+    const removedItem = widgetById(id);
+    if (!removedItem) return;
+    const index = widgetItems.findIndex(i => i.id === id);
+    const nextId = index >= 0 && widgetItems[index + 1] ? widgetItems[index + 1].id : null;
+    const ok = await applyLayout(WidgetLayout.remove(id));
+    if (!ok) return;
+    showStatus(WidgetLayout.TYPES[removedItem.type].name + ' card removed. Nothing you logged changed.', 'ok', {
+      label: 'Undo',
+      run: () => restoreWidget(removedItem, nextId)
+    });
+  }
+
+  /* Add a card picker */
   function renderWidgetPicker() {
     const list = el('add-widget-list');
     list.textContent = '';
@@ -2439,12 +3012,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (t.isNew) name.appendChild(make('span', 'new-tag', 'New'));
       text.appendChild(name);
       row.title = t.description;
+      text.appendChild(make('div', 'widget-picker-desc', t.description));
       const btn = make('button', 'widget-add-btn' + (t.added ? ' added' : ''), t.added ? 'Added' : 'Add');
       btn.type = 'button';
       btn.setAttribute('aria-label', (t.added ? 'Already added: ' : 'Add ') + t.name);
       btn.disabled = t.added;
       btn.addEventListener('click', async () => {
-        const ok = await applyLayout(WidgetLayout.add(t.type, { metricId: WidgetLayout.ACTIVE }), t.name + ' widget added.');
+        const ok = await applyLayout(WidgetLayout.add(t.type, { metricId: WidgetLayout.ACTIVE }), t.name + ' card added.');
         if (ok) closeModal(el('add-widget-modal'));
       });
       row.appendChild(icon);
@@ -2461,7 +3035,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('close-add-widget-modal').addEventListener('click', () => closeModal(el('add-widget-modal')));
 
   async function resetLayout(modal) {
-    const ok = await applyLayout(WidgetLayout.reset(), 'Widgets reset to the recommended layout.');
+    const ok = await applyLayout(WidgetLayout.reset(), 'Back to the recommended cards.');
     if (ok && modal) closeModal(modal);
   }
   el('reset-layout-btn').addEventListener('click', () => resetLayout(el('add-widget-modal')));
@@ -2594,11 +3168,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         updated = await TrackerStorage.setLogStatus(logId, value);
       } catch (err) {
-        showStatus('Could not change the stage: ' + errMsg(err), 'error');
+        oops('The stage did not change. Please try again.', err);
         return;
       }
       if (!updated) {
-        showStatus('That entry could not be updated.', 'error');
+        showStatus('That one could not be found. It may have been removed on another computer.', 'error');
         return;
       }
       // Patch the local copies so the pill, funnel, and rate update now.
@@ -2608,7 +3182,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       document.querySelectorAll('.status-pill[data-log-id="' + CSS.escape(logId) + '"]').forEach(p => p.replaceWith(statusPill(updated)));
       renderWidgets();
-      showStatus('Moved ' + (updated.company || updated.role || 'that application') + ' to ' + statusMeta(value).label + '.', 'ok');
+      if (value === 'rejected') {
+        showStatus(coach('rejection', [voice()], 'Every no is a rep. You\'re still in it.'), 'ok');
+      } else if ((value === 'interviewing' || value === 'offer') && current !== 'interviewing' && current !== 'offer') {
+        showStatus('Moved to ' + statusMeta(value).label + '. That is the work paying off.', 'ok');
+        checkMilestones(true);
+      } else {
+        showStatus('Moved ' + (updated.company || updated.role || 'that application') + ' to ' + statusMeta(value).label + '.', 'ok');
+      }
     });
   }
 
@@ -2618,9 +3199,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let widgetDraft = null; // { metricId, days, showStats, size, chart }
 
   function metricLabelFor(metricId) {
-    if (metricId === WidgetLayout.ACTIVE) return 'Follow the selected tab';
+    if (metricId === WidgetLayout.ACTIVE) return 'Whichever tab I\'m on';
     const m = metricById(metricId);
-    return m ? 'Always ' + m.name : 'Follow the selected tab';
+    return m ? 'This goal: ' + m.name : 'Whichever tab I\'m on';
   }
 
   function renderWidgetTokens() {
@@ -2632,7 +3213,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     el('widget-token-metric').classList.toggle('hidden', !bindable);
     el('widget-metric-btn').textContent = metricLabelFor(widgetDraft.metricId);
-    el('widget-size-btn').textContent = widgetDraft.size === 'compact' ? 'Compact (half width)' : 'Expanded (full width)';
+    el('widget-size-btn').textContent = widgetDraft.size === 'compact' ? 'Half width' : 'Full width';
 
     ['widget-token-chart', 'widget-token-days', 'widget-token-stats'].forEach(id => el(id).classList.toggle('hidden', !isActivity));
     if (isActivity) {
@@ -2673,18 +3254,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('widget-settings-title').textContent = spec.name;
     renderWidgetTokens();
     const remove = el('remove-widget-btn');
-    remove.querySelector('span').textContent = 'Remove widget';
+    remove.querySelector('span').textContent = 'Remove card';
     remove.classList.remove('armed');
-    remove.title = spec.singleton
-      ? 'Hides this widget. Add it back any time with Add widget.'
-      : 'Removing a widget never deletes logged data.';
+    remove.title = 'Removing a card never deletes anything you logged. Add it back any time.';
     openModal(el('widget-settings-modal'), 'metricId' in spec.defaults ? 'widget-metric-btn' : 'widget-size-btn');
   }
 
   el('widget-metric-btn').addEventListener('click', () => {
     if (!widgetDraft) return;
-    const items = [{ value: WidgetLayout.ACTIVE, label: 'Follow the selected tab', selected: widgetDraft.metricId === WidgetLayout.ACTIVE }]
-      .concat(metrics.map(m => ({ value: m.id, label: 'Always ' + m.name, selected: widgetDraft.metricId === m.id })));
+    const items = [{ value: WidgetLayout.ACTIVE, label: 'Whichever tab I\'m on', selected: widgetDraft.metricId === WidgetLayout.ACTIVE }]
+      .concat(visibleMetrics().map(m => ({ value: m.id, label: 'This goal: ' + m.name, selected: widgetDraft.metricId === m.id })));
     openTokenPopover(el('widget-metric-btn'), items, (value) => {
       if (value === widgetDraft.metricId) return;
       widgetDraft.metricId = value;
@@ -2696,8 +3275,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('widget-size-btn').addEventListener('click', () => {
     if (!widgetDraft) return;
     const items = [
-      { value: 'compact', label: 'Compact (half width)', selected: widgetDraft.size === 'compact' },
-      { value: 'expanded', label: 'Expanded (full width)', selected: widgetDraft.size !== 'compact' }
+      { value: 'compact', label: 'Half width', selected: widgetDraft.size === 'compact' },
+      { value: 'expanded', label: 'Full width', selected: widgetDraft.size !== 'compact' }
     ];
     openTokenPopover(el('widget-size-btn'), items, (value) => {
       if (value === widgetDraft.size) return;
@@ -2775,7 +3354,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       patch.showStats = widgetDraft.showStats;
       patch.chart = widgetDraft.chart;
     }
-    const ok = await applyLayout(WidgetLayout.update(item.id, patch), 'Widget updated.');
+    const ok = await applyLayout(WidgetLayout.update(item.id, patch), 'Card updated.');
     if (ok) closeModal(el('widget-settings-modal'));
   });
 
@@ -2786,7 +3365,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = el('remove-widget-btn');
     if (!widgetRemoveArmed) {
       widgetRemoveArmed = true;
-      btn.querySelector('span').textContent = 'Confirm: remove widget';
+      btn.querySelector('span').textContent = 'Yes, remove card';
       btn.classList.add('armed');
       return;
     }
@@ -2799,8 +3378,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ok = await applyLayout(WidgetLayout.remove(target));
     if (!ok) return;
     closeModal(el('widget-settings-modal'));
-    const name = removedItem ? WidgetLayout.TYPES[removedItem.type].name : 'Widget';
-    showStatus(name + ' removed. Your logged entries are unchanged.', 'ok', removedItem ? {
+    const name = removedItem ? WidgetLayout.TYPES[removedItem.type].name : 'Card';
+    showStatus(name + ' card removed. Nothing you logged changed.', 'ok', removedItem ? {
       label: 'Undo',
       run: () => restoreWidget(removedItem, nextId)
     } : null);
@@ -2814,10 +3393,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const added = items.find(i => i.type === item.type && !widgetItems.some(w => w.id === i.id));
       if (added && beforeId && items.some(i => i.id === beforeId)) items = await WidgetLayout.reorder(added.id, beforeId);
     } catch (err) {
-      showStatus('Could not restore that widget: ' + errMsg(err), 'error');
+      oops('That card could not come back just now. Add it again from Add a card.', err);
       return;
     }
-    await applyLayout(Promise.resolve(items), WidgetLayout.TYPES[item.type].name + ' restored.', before);
+    await applyLayout(Promise.resolve(items), WidgetLayout.TYPES[item.type].name + ' card is back.', before);
   }
 
   el('close-widget-settings-modal').addEventListener('click', () => closeModal(el('widget-settings-modal')));
@@ -2833,7 +3412,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('close-metric-modal').addEventListener('click', () => closeModal(el('new-metric-modal')));
   el('cancel-metric-btn').addEventListener('click', () => closeModal(el('new-metric-modal')));
 
-  let selectedColor = '#1a73e8';
+  let selectedColor = '#E0674B';
+
+  // "What are you counting?" suggestions fill the field in one tap.
+  el('unit-chips').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-unit]');
+    if (!chip) return;
+    el('new-metric-unit').value = chip.dataset.unit;
+    el('unit-chips').querySelectorAll('[data-unit]').forEach(b => b.classList.toggle('is-active', b === chip));
+  });
+  el('new-metric-unit').addEventListener('input', () => {
+    const v = el('new-metric-unit').value.trim();
+    el('unit-chips').querySelectorAll('[data-unit]').forEach(b => b.classList.toggle('is-active', b.dataset.unit === v));
+  });
   el('color-palette').addEventListener('click', (e) => {
     const btn = e.target.closest('.color-option');
     if (!btn) return;
@@ -2854,10 +3445,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('new-metric-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = el('new-metric-name').value.trim();
-    const unit = el('new-metric-unit').value.trim() || 'items';
-    const dailyGoal = parseInt(el('new-metric-goal').value, 10) || 5;
+    const unit = el('new-metric-unit').value.trim() || 'times';
+    const dailyGoal = parseInt(el('new-metric-goal').value, 10) || 3;
     if (!name) {
-      showStatus('Give the tracker a name before adding it.', 'error');
+      showStatus('Give the goal a name first, like "Networking chats".', 'error');
       el('new-metric-name').focus();
       return;
     }
@@ -2865,15 +3456,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       created = await TrackerStorage.addMetric({ name, color: selectedColor, unit, dailyGoal, icon: 'target' });
     } catch (err) {
-      showStatus('Could not create that tracker: ' + errMsg(err), 'error');
+      oops('That goal could not be added just now. Please try again.', err);
       return;
     }
     activeMetricId = created.id;
     TrackerStorage.setActiveMetricId(created.id);
     el('new-metric-name').value = '';
-    el('new-metric-goal').value = '5';
+    el('new-metric-unit').value = '';
+    el('new-metric-goal').value = '3';
     closeModal(el('new-metric-modal'));
-    showStatus('Tracker "' + created.name + '" added.', 'ok');
+    markSetup('goal');
+    showStatus('Goal "' + created.name + '" added. Tap + whenever you do one.', 'ok');
     notifyCalendarTabs();
     await loadData();
   });
@@ -2888,7 +3481,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('metric-settings-weekly').value = current.weeklyGoal > 0 ? current.weeklyGoal : '';
     const isBuiltIn = !!current.isDefault || current.id === 'jobs' || current.id === 'leetcode';
     const deleteBtn = el('delete-metric-btn');
-    deleteBtn.textContent = 'Delete tracker';
+    deleteBtn.textContent = 'Remove this goal';
     deleteBtn.classList.remove('armed');
     deleteBtn.classList.toggle('hidden', isBuiltIn);
     openModal(el('metric-settings-modal'), focusId || 'metric-settings-goal');
@@ -2899,7 +3492,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const goal = parseInt(el('metric-settings-goal').value, 10);
     const weekly = parseInt(el('metric-settings-weekly').value, 10) || 0;
     if (!goal || goal < 1) {
-      showStatus('Enter a daily goal of 1 or more.', 'error');
+      showStatus('Pick a daily number of 1 or more.', 'error');
       el('metric-settings-goal').focus();
       return;
     }
@@ -2907,11 +3500,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       await TrackerStorage.setMetricGoal(settingsMetricId, goal);
       await TrackerStorage.setMetricWeeklyGoal(settingsMetricId, Math.max(0, weekly));
     } catch (err) {
-      showStatus('Could not save those goals: ' + errMsg(err), 'error');
+      oops('Your goal did not save. Please try again.', err);
       return;
     }
     closeModal(el('metric-settings-modal'));
-    showStatus('Daily goal ' + goal + (weekly > 0 ? ', weekly goal ' + weekly : ', weekly goal off') + '.', 'ok');
+    markSetup('goal');
+    showStatus('Goal set: ' + goal + ' a day' + (weekly > 0 ? ' and ' + weekly + ' a week' : '') + '.', 'ok');
     notifyCalendarTabs();
     await loadData();
   });
@@ -2920,7 +3514,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = el('delete-metric-btn');
     if (!metricDeleteArmed) {
       metricDeleteArmed = true;
-      btn.textContent = 'Confirm: delete tracker';
+      btn.textContent = 'Yes, remove this goal';
       btn.classList.add('armed');
       return;
     }
@@ -2928,12 +3522,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       removed = await TrackerStorage.deleteMetric(settingsMetricId);
     } catch (err) {
-      showStatus('Could not delete that tracker: ' + errMsg(err), 'error');
+      oops('That goal could not be removed just now. Please try again.', err);
       return;
     }
     metricDeleteArmed = false;
     if (!removed) {
-      showStatus('That tracker could not be deleted.', 'error');
+      showStatus('That goal could not be removed. It may already be gone.', 'error');
       return;
     }
     if (activeMetricId === settingsMetricId) {
@@ -2942,7 +3536,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     settingsMetricId = null;
     closeModal(el('metric-settings-modal'));
-    showStatus('Tracker deleted. Its past entries are still in your export.', 'ok');
+    showStatus('Goal removed. What you logged for it is still in your backups.', 'ok');
     notifyCalendarTabs();
     await loadData();
   });
@@ -2995,7 +3589,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         solveTimeSeconds
       });
     } catch (err) {
-      showStatus('Could not save that entry: ' + errMsg(err), 'error');
+      oops('That one did not save. Please try again.', err);
       return;
     }
     notifyCalendarTabs();
@@ -3004,7 +3598,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('detail-notes').value = '';
     resetDuplicateNote();
     const savedTo = metricById(metricId);
-    showStatus('Entry saved' + (savedTo ? ' to ' + savedTo.name : '') + '. The form is cleared for the next one.', 'ok');
+    showStatus('Saved' + (savedTo ? ' to ' + savedTo.name : '') + '. The form is ready for the next one.', 'ok');
     await loadData();
   });
 
@@ -3076,7 +3670,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const token = ++searchToken;
     if (!q) {
       results.textContent = '';
-      meta.textContent = 'Search all ' + ((stats && stats.totalLogs) || 0) + ' entries by company, role, notes, stage, or tracker.';
+      const total = (stats && stats.totalLogs) || 0;
+      meta.textContent = total ? 'Search all ' + total + ' by company, role, notes, stage, or goal.' : coach('empty', ['logs'], 'Nothing here yet.');
       results.appendChild(searchSuggestions('Try a stage'));
       return;
     }
@@ -3084,13 +3679,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       res = await TrackerStorage.searchLogs(q, { limit: 60 });
     } catch (err) {
-      meta.textContent = 'Search failed: ' + errMsg(err);
+      console.warn('[LIT] search failed', err);
+      meta.textContent = 'Search is not working just now. Close it and try again.';
       return;
     }
     if (token !== searchToken || !searchOpen) return;
     const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
     meta.textContent = res.total === 0
-      ? 'No entries match "' + q + '".'
+      ? coach('empty', ['search'], 'Nothing matches "' + q + '".')
       : res.total + (res.total === 1 ? ' match' : ' matches') + (res.total > res.results.length ? ', showing the newest ' + res.results.length : '');
     results.textContent = '';
     searchLogsById.clear();
@@ -3154,8 +3750,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!deleteArms.has(id)) {
       del.classList.add('armed');
       del.textContent = 'Delete entry';
-      del.title = 'Select again to delete this entry';
-      del.setAttribute('aria-label', 'Confirm: delete this entry');
+      del.title = 'Tap again to delete';
+      del.setAttribute('aria-label', 'Yes, delete this entry');
       deleteArms.set(id, setTimeout(() => {
         deleteArms.delete(id);
         del.classList.remove('armed');
@@ -3171,7 +3767,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       removed = await TrackerStorage.deleteLog(id);
     } catch (err) {
-      showStatus('Could not delete that entry: ' + errMsg(err), 'error');
+      oops('That could not be deleted just now. Please try again.', err);
       return;
     }
     if (!removed) {
@@ -3181,7 +3777,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const row = del.closest('.entry');
     if (row) row.remove();
     const deleted = searchLogsById.get(id);
-    showStatus('Entry deleted. Counts, stats, and the calendar no longer include it.', 'ok', deleted ? {
+    showStatus('Deleted. Your counts and calendar are updated.', 'ok', deleted ? {
       label: 'Undo',
       run: () => restoreEntry(deleted)
     } : null);
@@ -3207,10 +3803,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         sourceId: log.sourceId
       });
     } catch (err) {
-      showStatus('Could not restore that entry: ' + errMsg(err), 'error');
+      oops('That could not be brought back just now. Please add it again.', err);
       return;
     }
-    showStatus('Entry restored.', 'ok');
+    showStatus('Brought back.', 'ok');
     notifyCalendarTabs();
     if (searchOpen) runSearch();
     loadData();
@@ -3275,12 +3871,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const info = el('storage-info');
     try {
       const s = await TrackerStorage.getStorageInfo();
-      const where = s.backend === 'indexeddb' ? 'IndexedDB' : 'chrome.storage.local';
       info.textContent = s.logCount.toLocaleString() + (s.logCount === 1 ? ' entry' : ' entries');
-      info.title = 'Stored in ' + where;
+      info.title = 'Everything you have logged, on this computer';
     } catch (err) {
-      info.textContent = 'Unavailable';
-      info.title = 'Could not read storage: ' + errMsg(err);
+      console.warn('[LIT] storage info unavailable', err);
+      info.textContent = 'Not available right now';
+      info.title = '';
     }
   }
 
@@ -3291,25 +3887,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       snaps = await TrackerStorage.listSnapshots();
     } catch (err) {
       list.textContent = '';
-      list.appendChild(make('li', '', 'Could not list snapshots: ' + errMsg(err)));
+      console.warn('[LIT] backups unavailable', err);
+      list.appendChild(make('li', 'snap-empty', 'Your automatic backups could not be listed just now.'));
       return;
     }
     list.textContent = '';
     if (!snaps.length) {
-      list.appendChild(make('li', 'snap-empty', 'No snapshots yet'));
+      list.appendChild(make('li', 'snap-empty', 'No backups yet. LIT makes the first one this week.'));
       return;
     }
     snaps.forEach(s => {
       const li = make('li');
       const text = make('div');
       text.appendChild(make('div', '', formatSnapshotDate(s.createdAt)));
-      text.appendChild(make('div', 'snap-meta', (s.reason === 'weekly' ? 'Weekly' : 'Manual') + ' · ' + s.logCount + (s.logCount === 1 ? ' entry' : ' entries')));
+      text.appendChild(make('div', 'snap-meta', (s.reason === 'weekly' ? 'Automatic' : 'You made this') + ' · ' + s.logCount + (s.logCount === 1 ? ' entry' : ' entries')));
       li.appendChild(text);
       const actions = make('div', 'snap-actions');
       const restore = make('button', 'link-btn', 'Restore');
       restore.type = 'button';
       restore.dataset.restoreSnapshot = s.id;
-      restore.title = 'Adds back entries from this snapshot that are missing. Nothing you have now is removed or overwritten.';
+      restore.title = 'Adds back anything from this backup that is missing. Nothing you have now is removed or changed.';
       const download = make('button', 'link-btn', 'Download');
       download.type = 'button';
       download.dataset.downloadSnapshot = s.id;
@@ -3320,14 +3917,85 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function openSettings() {
+  function openSettings(scrollToId) {
     renderAlertToggles();
+    renderCoachSettings();
     applyTheme(document.body.classList.contains('pt-dark') ? 'dark' : 'light');
+    el('universal-explainer').classList.add('hidden');
     renderUniversalSwitch();
     renderStorageInfo();
     renderSnapshots();
     openModal(el('settings-modal'), 'close-app-settings');
+    if (scrollToId && el(scrollToId)) el(scrollToId).scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
   }
+
+  // Look and feel, coach voice, going-for line, rest days, tips, sharing.
+  function renderCoachSettings() {
+    const accent = accentId();
+    el('accent-swatches').querySelectorAll('[data-accent-value]').forEach(b => {
+      b.setAttribute('aria-checked', b.dataset.accentValue === accent ? 'true' : 'false');
+      b.tabIndex = b.dataset.accentValue === accent ? 0 : -1;
+    });
+    el('comfort-switch').setAttribute('aria-checked', prefs.comfortMode ? 'true' : 'false');
+    el('voice-segmented').querySelectorAll('[data-voice]').forEach(b => {
+      b.setAttribute('aria-checked', b.dataset.voice === voice() ? 'true' : 'false');
+    });
+    const input = el('going-for-input');
+    if (document.activeElement !== input) input.value = prefs.goingFor || '';
+    const rest = Array.isArray(prefs.restDays) ? prefs.restDays : [];
+    el('rest-days').querySelectorAll('[data-day]').forEach(b => {
+      b.setAttribute('aria-pressed', rest.includes(Number(b.dataset.day)) ? 'true' : 'false');
+    });
+    el('tips-switch').setAttribute('aria-checked', prefs.tipsOff ? 'false' : 'true');
+    el('share-privacy-switch').setAttribute('aria-checked', prefs.shareHideCompanies === false ? 'false' : 'true');
+  }
+
+  el('accent-swatches').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-accent-value]');
+    if (b && b.dataset.accentValue !== accentId()) setPref({ accent: b.dataset.accentValue });
+  });
+  // Arrow keys move through the swatches like any radio group.
+  el('accent-swatches').addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = ACCENTS.indexOf(accentId());
+    const next = ACCENTS[(i + step + ACCENTS.length) % ACCENTS.length];
+    setPref({ accent: next }).then(() => {
+      const btn = el('accent-swatches').querySelector('[data-accent-value="' + next + '"]');
+      if (btn) btn.focus();
+    });
+  });
+  el('comfort-switch').addEventListener('click', () => setPref({ comfortMode: !prefs.comfortMode }, prefs.comfortMode ? 'Comfort mode off.' : 'Comfort mode on: bigger text and buttons.'));
+  el('voice-segmented').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-voice]');
+    if (!b || b.dataset.voice === voice()) return;
+    const sample = { gentle: 'Gentle voice: soft and encouraging.', coach: 'Coach voice: warm and direct.', drill: 'Drill voice: short and firm, never rude.' };
+    setPref({ coachVoice: b.dataset.voice }, sample[b.dataset.voice]);
+  });
+  el('going-for-input').addEventListener('change', () => {
+    const value = el('going-for-input').value.trim().slice(0, 80);
+    if (value === (prefs.goingFor || '')) return;
+    setPref({ goingFor: value }, value ? 'Saved. It shows under your count.' : 'Going-for line cleared.');
+  });
+  el('going-for-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+  });
+  el('rest-days').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-day]');
+    if (!b) return;
+    const day = Number(b.dataset.day);
+    const rest = new Set(Array.isArray(prefs.restDays) ? prefs.restDays : []);
+    if (rest.has(day)) rest.delete(day); else rest.add(day);
+    const list = Array.from(rest).sort((x, y) => x - y);
+    setPref({ restDays: list }, list.length ? 'Rest days saved. They never break your streak.' : 'No rest days. Every day counts toward your streak.')
+      .then(() => loadData());
+  });
+  el('tips-switch').addEventListener('click', () => setPref({ tipsOff: !prefs.tipsOff }, prefs.tipsOff ? 'Daily tips on.' : 'Daily tips off.'));
+  el('share-privacy-switch').addEventListener('click', () => {
+    const next = prefs.shareHideCompanies === false;
+    setPref({ shareHideCompanies: next }, next ? 'Share cards leave out your going-for line.' : 'Share cards can include your going-for line. Company names are still never included.');
+  });
 
   el('close-app-settings').addEventListener('click', () => closeModal(el('settings-modal')));
 
@@ -3335,30 +4003,47 @@ document.addEventListener('DOMContentLoaded', async () => {
   // gesture), so nothing is awaited before it. The service worker also turns
   // the setting on when the permission lands, in case Chrome's prompt closes
   // the popup before this resolves.
+  // Turning it on first shows a plain-language explainer: what LIT reads,
+  // what it never does. Only Continue (a fresh click, so still a user
+  // gesture) asks Chrome for the permission.
   el('universal-switch').addEventListener('click', async () => {
     const perms = permissionsApi();
     const turningOn = el('universal-switch').getAttribute('aria-checked') !== 'true';
     if (!perms) {
-      showStatus('This browser does not support optional permissions.', 'error');
+      showStatus('This version of Chrome cannot do this. The big job boards are still noticed.', 'error');
       return;
     }
     if (turningOn) {
-      let granted = false;
-      try {
-        granted = await perms.request({ origins: UNIVERSAL_ORIGINS });
-      } catch (err) {
-        granted = false;
-      }
-      if (!granted) {
-        showStatus('Chrome did not grant access to all sites, so universal detection stays off.', 'error');
-        renderUniversalSwitch();
-        return;
-      }
-      await setPref({ universalTracking: true }, 'Universal detection is on for career pages you open from now on.');
-    } else {
-      await setPref({ universalTracking: false }, 'Universal detection is off. The major job boards are still tracked.');
-      try { await perms.remove({ origins: UNIVERSAL_ORIGINS }); } catch (e) { /* already removed */ }
+      el('universal-explainer').classList.remove('hidden');
+      el('universal-continue-btn').focus();
+      return;
     }
+    await setPref({ universalTracking: false }, 'Turned off. LIT still notices applications on the big job boards.');
+    try { await perms.remove({ origins: UNIVERSAL_ORIGINS }); } catch (e) { /* already removed */ }
+    renderUniversalSwitch();
+  });
+
+  el('universal-notnow-btn').addEventListener('click', () => {
+    el('universal-explainer').classList.add('hidden');
+    el('universal-switch').focus();
+  });
+
+  el('universal-continue-btn').addEventListener('click', async () => {
+    const perms = permissionsApi();
+    if (!perms) return;
+    let granted = false;
+    try {
+      granted = await perms.request({ origins: UNIVERSAL_ORIGINS });
+    } catch (err) {
+      granted = false;
+    }
+    el('universal-explainer').classList.add('hidden');
+    if (!granted) {
+      showStatus('No problem. This stays off, and the big job boards are still noticed.');
+      renderUniversalSwitch();
+      return;
+    }
+    await setPref({ universalTracking: true }, 'On. LIT will notice applications on company careers pages you open from now on.');
     renderUniversalSwitch();
   });
 
@@ -3369,7 +4054,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const parts = ['Restored ' + r.added + (r.added === 1 ? ' entry' : ' entries')];
     if (r.skipped) parts.push(r.skipped + ' already here');
     if (r.invalid) parts.push(r.invalid + ' unreadable');
-    if (r.metricsAdded) parts.push(r.metricsAdded + (r.metricsAdded === 1 ? ' tracker added' : ' trackers added'));
+    if (r.metricsAdded) parts.push(r.metricsAdded + (r.metricsAdded === 1 ? ' goal added' : ' goals added'));
     return parts.join(', ') + '.';
   }
 
@@ -3382,7 +4067,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       result = await TrackerStorage.importBackup(await file.text());
     } catch (err) {
-      showStatus('Restore failed: ' + errMsg(err), 'error');
+      oops('That file could not be restored. Make sure it is a LIT backup file.', err);
       return;
     }
     showStatus(restoreMessage(result), 'ok');
@@ -3403,7 +4088,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         result = await TrackerStorage.restoreSnapshot(restore.dataset.restoreSnapshot);
       } catch (err) {
-        showStatus('Restore failed: ' + errMsg(err), 'error');
+        oops('That backup could not be restored just now. Please try again.', err);
         return;
       }
       showStatus(restoreMessage(result), 'ok');
@@ -3416,7 +4101,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (download) {
       const snap = await TrackerStorage.getSnapshot(download.dataset.downloadSnapshot);
       if (!snap) {
-        showStatus('That snapshot no longer exists.', 'error');
+        showStatus('That backup is no longer on this computer.', 'error');
         renderSnapshots();
         return;
       }
@@ -3429,10 +4114,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       await TrackerStorage.createSnapshot({ reason: 'manual' });
     } catch (err) {
-      showStatus('Could not take a snapshot: ' + errMsg(err), 'error');
+      oops('The backup could not be made just now. Please try again.', err);
       return;
     }
-    showStatus('Snapshot saved. LIT keeps the four newest.', 'ok');
+    showStatus('Backup saved on this computer. LIT keeps the four newest.', 'ok');
     renderSnapshots();
   });
 
@@ -3440,9 +4125,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (chrome.tabs) chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
   });
 
-  el('autofill-profile-btn').addEventListener('click', () => {
+  function openAutofillProfile() {
+    markSetup('autofill');
     if (chrome.tabs) chrome.tabs.create({ url: chrome.runtime.getURL('options/autofill.html') });
-  });
+  }
+  el('autofill-profile-btn').addEventListener('click', openAutofillProfile);
 
   // ---------------------------------------------------------------------------
   // Exports
@@ -3510,41 +4197,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         const logs = await TrackerStorage.getLogs({ metricId: activeMetricId });
         count = logs.length;
         if (!count) {
-          showStatus('Nothing logged for ' + metric.name + ' yet.', 'error');
+          showStatus('Nothing logged for ' + metric.name + ' yet, so there is no summary to copy.');
           return;
         }
         text = LitExport.buildMarkdown(logs, names, { title: metric.name + ' (' + count + ')' });
         const copied = await copyText(text);
         showStatus(copied
-          ? 'Copied ' + count + ' ' + metric.name + ' entries as a Markdown table.'
-          : 'The clipboard is unavailable here, so the Markdown could not be copied.', copied ? 'ok' : 'error');
+          ? 'Copied a summary of ' + count + ' ' + metric.name + ' entries. Paste it anywhere.'
+          : 'Copying is blocked here. Try again from the menu.', copied ? 'ok' : 'error');
         return;
       }
     } catch (err) {
-      showStatus('Export failed: ' + errMsg(err), 'error');
+      oops('That download did not work just now. Please try again.', err);
       return;
     }
     if (!count) {
-      showStatus('Nothing to export yet. Log an entry first.', 'error');
+      showStatus('Nothing to download yet. Log your first one and try again.');
       return;
     }
     if (downloadText(filename, text, format === 'csv' ? 'text/csv' : 'application/json')) {
-      showStatus('Exported ' + count + (count === 1 ? ' entry' : ' entries') + ' to ' + filename + '.', 'ok');
+      showStatus((format === 'json' ? 'Backup saved' : 'Spreadsheet saved') + ' with ' + count + (count === 1 ? ' entry' : ' entries') + ': ' + filename + '.', 'ok');
       return;
     }
     const copied = await copyText(text);
     showStatus(copied
-      ? 'The download was blocked, so the export was copied to your clipboard instead.'
-      : 'Export failed: the browser blocked both the download and the clipboard.', copied ? 'ok' : 'error');
+      ? 'Chrome blocked the download, so it was copied to your clipboard instead.'
+      : 'Chrome blocked the download. Please try again.', copied ? 'ok' : 'error');
   }
 
   // ---------------------------------------------------------------------------
   // Footer
   // ---------------------------------------------------------------------------
-  el('open-calendar-btn').addEventListener('click', () => {
-    if (typeof chrome !== 'undefined' && chrome.tabs) chrome.tabs.create({ url: 'https://calendar.google.com' });
-    else window.open('https://calendar.google.com', '_blank');
-  });
+  el('open-calendar-btn').addEventListener('click', openCalendar);
 
   // Opening the popup grants activeTab, so the worker can read the page in
   // the current tab and show the quick-log card there.
@@ -3552,13 +4236,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       chrome.runtime.sendMessage({ type: 'PT_LOG_FROM_TAB' }, (res) => {
         if (chrome.runtime.lastError || !res || !res.ok) {
-          showStatus('That page cannot be read. Open a job posting or application in the current tab.', 'error');
+          showStatus('LIT could not read this page. Open a job posting or application, then try again.', 'error');
           return;
         }
         window.close();
       });
     } catch (err) {
-      showStatus('Could not reach the LIT background worker: ' + errMsg(err), 'error');
+      oops('LIT could not reach that page. Close the popup and try again.', err);
     }
   });
 
@@ -3568,16 +4252,302 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       chrome.runtime.sendMessage({ type: 'PT_AUTOFILL_TAB' }, (res) => {
         if (chrome.runtime.lastError || !res) {
-          showStatus('That page cannot be autofilled. Open an application form in the current tab.', 'error');
+          showStatus('There is no application form to fill here. Open one, then try again.', 'error');
           return;
         }
         // With no form found, the page itself says so.
         window.close();
       });
     } catch (err) {
-      showStatus('Could not reach the LIT background worker: ' + errMsg(err), 'error');
+      oops('LIT could not reach that page. Close the popup and try again.', err);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // First-run setup checklist (new users only, until done or hidden)
+  // ---------------------------------------------------------------------------
+  const SETUP_STEPS = [
+    { id: 'goal', label: 'Pick your goal', run: () => openMetricSettings('jobs') },
+    { id: 'autofill', label: 'Fill your autofill profile', run: () => openAutofillProfile() },
+    { id: 'calendar', label: 'See your scoreboard on Calendar', run: () => openCalendar() },
+    { id: 'checkin', label: 'Choose a daily check-in', optional: true, run: () => openSettings('checkin-group') }
+  ];
+  const STEP_CHECK = '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const STEP_GO = '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true" focusable="false"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  function setupDone(id) {
+    const done = (ui.setup && ui.setup.done) || {};
+    if (done[id]) return true;
+    if (id === 'goal') return !!prefs.onboardingDone || (Array.isArray(prefs.focusAreas) && prefs.focusAreas.length > 0);
+    if (id === 'checkin') return !!prefs.reminderEnabled;
+    return false;
+  }
+
+  function markSetup(id) {
+    const setup = Object.assign({}, ui.setup);
+    setup.done = Object.assign({}, setup.done, { [id]: true });
+    saveUiState({ setup });
+    if (stats) renderSetup();
+  }
+
+  // Decided once: someone who already has history never sees the checklist.
+  function setupEligible() {
+    if (ui.setup && typeof ui.setup.eligible === 'boolean') return ui.setup.eligible;
+    if (!stats) return false;
+    const eligible = (stats.totalLogs || 0) === 0;
+    saveUiState({ setup: Object.assign({}, ui.setup, { eligible }) });
+    return eligible;
+  }
+
+  function renderSetup() {
+    const card = el('first-run-card');
+    const doneCount = SETUP_STEPS.filter(s => setupDone(s.id)).length;
+    const show = setupEligible() && !(ui.setup && ui.setup.dismissed) && doneCount < SETUP_STEPS.length;
+    card.classList.toggle('hidden', !show);
+    if (!show) return;
+    const list = el('first-run-tips');
+    list.textContent = '';
+    SETUP_STEPS.forEach(step => {
+      const done = setupDone(step.id);
+      const li = make('li');
+      const btn = make('button', 'setup-item' + (done ? ' done' : ''));
+      btn.type = 'button';
+      btn.dataset.step = step.id;
+      const check = make('span', 'setup-check');
+      check.innerHTML = STEP_CHECK;
+      btn.appendChild(check);
+      const label = make('span', 'setup-label', step.label);
+      if (step.optional) label.appendChild(make('span', 'setup-opt', ' (optional)'));
+      btn.appendChild(label);
+      const go = make('span', 'setup-go');
+      go.innerHTML = STEP_GO;
+      btn.appendChild(go);
+      btn.setAttribute('aria-label', step.label + (step.optional ? ', optional' : '') + (done ? ', done' : ''));
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    const C = 2 * Math.PI * 15;
+    const fill = el('setup-fill');
+    fill.style.strokeDasharray = String(C);
+    fill.style.strokeDashoffset = String(C * (1 - doneCount / SETUP_STEPS.length));
+    el('setup-count').textContent = doneCount + '/' + SETUP_STEPS.length;
+    el('setup-title').textContent = doneCount === 0 ? 'Welcome to LIT' : (doneCount === SETUP_STEPS.length - 1 ? 'One step left' : 'Nice progress');
+  }
+
+  el('first-run-tips').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-step]');
+    if (!btn) return;
+    const step = SETUP_STEPS.find(s => s.id === btn.dataset.step);
+    if (step) step.run();
+  });
+
+  el('setup-dismiss-btn').addEventListener('click', () => {
+    saveUiState({ setup: Object.assign({}, ui.setup, { dismissed: true }) });
+    if (!prefs.onboardingDone) setPref({ onboardingDone: true });
+    renderSetup();
+    showStatus('Setup hidden. Everything is in Settings whenever you want it.');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Daily "Did you know?" tip
+  // ---------------------------------------------------------------------------
+  function renderTip() {
+    const card = el('tip-card');
+    const today = todayStr();
+    const setupShowing = !el('first-run-card').classList.contains('hidden');
+    const tip = coach('tipFor', [today], () => {
+      const tips = Coach && Array.isArray(Coach.tips) ? Coach.tips : [];
+      return tips.length ? tips[TrackerStorage.daysBetween('2026-01-01', today) % tips.length] : '';
+    });
+    const show = !prefs.tipsOff && !setupShowing && ui.tipHiddenOn !== today && !!tip;
+    card.classList.toggle('hidden', !show);
+    if (show) el('tip-body').textContent = tip;
+  }
+
+  el('tip-dismiss-btn').addEventListener('click', () => {
+    saveUiState({ tipHiddenOn: todayStr() });
+    el('tip-card').classList.add('hidden');
+  });
+  el('tip-off-btn').addEventListener('click', () => {
+    setPref({ tipsOff: true }, 'Tips are off. Turn them back on in Settings any time.');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Milestones: a one-time card with gentle confetti and a Share button
+  // ---------------------------------------------------------------------------
+  let milestoneShown = null;
+  // Runs after each data load, but only does work when the totals or the
+  // job stages changed since the last look (the popup stays snappy).
+  let milestoneKey = null;
+  async function checkMilestones(force) {
+    if (!has(TrackerStorage, 'getMilestones') || !metrics.length) return;
+    const current = metricById(activeMetricId) || metrics[0];
+    const key = current.id + ':' + ((stats && stats.totalLogs) || 0);
+    if (!force && key === milestoneKey) return;
+    milestoneKey = key;
+    const ids = current.id === 'jobs' ? ['jobs'] : [current.id, 'jobs'];
+    const token = bumpToken('milestones');
+    for (const metricId of ids) {
+      let ms;
+      try {
+        ms = await TrackerStorage.getMilestones(metricId);
+      } catch (err) {
+        console.warn('[LIT] milestones unavailable', err);
+        return;
+      }
+      if (asyncTokens.milestones !== token) return;
+      const unseen = (ms && Array.isArray(ms.unseen)) ? ms.unseen : [];
+      if (!unseen.length) continue;
+      // Long-time users see every past milestone as unseen at first: show
+      // only the biggest one, then mark them all seen so none replays.
+      const reached = (ms.reached || []).filter(r => unseen.includes(r.id));
+      const numeric = reached.filter(r => typeof r.count === 'number').sort((a, b) => b.count - a.count);
+      const interview = reached.find(r => r.id === 'first-interview');
+      const best = interview && (!numeric.length || numeric[0].count < 100) ? interview : (numeric[0] || interview);
+      if (has(TrackerStorage, 'markMilestonesSeen')) {
+        TrackerStorage.markMilestonesSeen(metricId, unseen).catch(err => console.warn('[LIT] could not mark milestones', err));
+      }
+      if (best) showMilestone(best, metricById(metricId) || current);
+      return;
+    }
+  }
+
+  function showMilestone(m, metric) {
+    const unitRaw = metric.id === 'jobs' ? 'applications' : (metric.unit || 'times');
+    const copy = m.id === 'first-interview'
+      ? coach('firstInterview', [], { title: m.title || 'Your first interview', body: m.body || 'Someone wants to talk. The work is paying off.' })
+      : coach('milestone', [m.count, unitRaw], { title: m.title || (m.count + ' ' + displayUnit(metric, m.count)), body: m.body || 'Steady work adds up.' });
+    milestoneShown = { milestone: m, metric, title: copy.title || m.title };
+    el('milestone-title').textContent = copy.title || m.title || '';
+    el('milestone-body').textContent = copy.body || m.body || '';
+    const card = el('milestone-card');
+    card.classList.remove('hidden');
+    rainConfetti(el('milestone-confetti'));
+  }
+
+  function rainConfetti(host) {
+    host.textContent = '';
+    if (reduceMotion) return;
+    const colors = ['var(--accent)', 'var(--flame)', 'var(--success)', 'var(--rest)'];
+    for (let i = 0; i < 22; i++) {
+      const bit = make('i');
+      bit.style.setProperty('--x', Math.round(Math.random() * 100) + '%');
+      bit.style.setProperty('--d', Math.round(Math.random() * 400) + 'ms');
+      bit.style.setProperty('--r', (Math.random() > 0.5 ? 1 : -1) * Math.round(180 + Math.random() * 360) + 'deg');
+      bit.style.setProperty('--c', colors[i % colors.length]);
+      host.appendChild(bit);
+    }
+    setTimeout(() => { host.textContent = ''; }, 2200);
+  }
+
+  el('milestone-dismiss-btn').addEventListener('click', () => {
+    el('milestone-card').classList.add('hidden');
+    milestoneShown = null;
+  });
+  el('milestone-share-btn').addEventListener('click', () => {
+    if (!milestoneShown) return;
+    const { milestone, metric, title } = milestoneShown;
+    const total = (stats.totals && stats.totals[metric.id]) || milestone.count || 0;
+    openShare({
+      bigNumber: milestone.count || total,
+      bigLabel: milestone.count ? displayUnit(metric, milestone.count) + ' sent' : 'first interview',
+      milestoneTitle: title,
+      metricId: metric.id
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Share sheet (shared/share-card.js). Company names are never passed in.
+  // ---------------------------------------------------------------------------
+  const ShareCard = typeof LitShareCard !== 'undefined' ? LitShareCard : null;
+  let shareContext = null;
+  let shareTemplate = 'minimal';
+  let shareBlob = null;
+  let shareUrl = null;
+
+  function openShare(context) {
+    shareContext = context || {};
+    shareBlob = null;
+    openModal(el('share-modal'), 'share-copy-btn');
+    renderSharePreview();
+  }
+
+  function clearSharePreview() {
+    if (shareUrl) URL.revokeObjectURL(shareUrl);
+    shareUrl = null;
+    const img = el('share-preview-img');
+    img.hidden = true;
+    img.removeAttribute('src');
+  }
+
+  async function renderSharePreview() {
+    el('share-templates').querySelectorAll('[data-template]').forEach(b => {
+      b.setAttribute('aria-checked', b.dataset.template === shareTemplate ? 'true' : 'false');
+    });
+    el('share-copy-btn').disabled = true;
+    el('share-save-btn').disabled = true;
+    clearSharePreview();
+    const note = el('share-preview-note');
+    if (!ShareCard || !has(ShareCard, 'render')) {
+      note.textContent = 'Sharing is not available in this version yet.';
+      return;
+    }
+    note.textContent = 'Making your card...';
+    const metric = metricById(shareContext.metricId) || metricById(activeMetricId) || metrics[0];
+    const dark = document.body.classList.contains('pt-dark');
+    const hidePersonal = prefs.shareHideCompanies !== false;
+    const token = bumpToken('share');
+    let blob;
+    try {
+      blob = await ShareCard.render({
+        template: shareTemplate,
+        theme: dark ? 'dark' : 'light',
+        accent: accentId(),
+        bigNumber: shareContext.bigNumber || 0,
+        bigLabel: shareContext.bigLabel || '',
+        streak: metric ? streakFor(metric) : 0,
+        weekDots: lastWeekDots.map(d => ({ date: d.date, state: d.state, count: d.count, goal: d.goal, isToday: d.isToday })),
+        goingFor: hidePersonal ? '' : (prefs.goingFor || ''),
+        milestoneTitle: shareContext.milestoneTitle || ''
+      });
+    } catch (err) {
+      console.warn('[LIT] share card failed', err);
+      if (asyncTokens.share === token) note.textContent = 'The card could not be made just now. Please try again.';
+      return;
+    }
+    if (asyncTokens.share !== token || el('share-modal').classList.contains('hidden')) return;
+    shareBlob = blob;
+    shareUrl = URL.createObjectURL(blob);
+    const img = el('share-preview-img');
+    img.src = shareUrl;
+    img.alt = 'Preview: ' + (shareContext.bigNumber || 0) + ' ' + (shareContext.bigLabel || '') + ', tracked with LIT';
+    img.hidden = false;
+    el('share-copy-btn').disabled = false;
+    el('share-save-btn').disabled = false;
+  }
+
+  el('share-templates').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-template]');
+    if (!b || b.dataset.template === shareTemplate) return;
+    shareTemplate = b.dataset.template;
+    renderSharePreview();
+  });
+
+  el('share-copy-btn').addEventListener('click', async () => {
+    if (!shareBlob || !ShareCard) return;
+    const ok = has(ShareCard, 'copy') ? await ShareCard.copy(shareBlob) : false;
+    showStatus(ok ? 'Image copied. Paste it into a post or a message.' : 'Copying images is blocked here. Use Save instead.', ok ? 'ok' : 'error');
+    if (ok) closeModal(el('share-modal'));
+  });
+
+  el('share-save-btn').addEventListener('click', () => {
+    if (!shareBlob || !ShareCard) return;
+    const ok = has(ShareCard, 'download') ? ShareCard.download(shareBlob, 'lit-progress-' + todayStr() + '.png') : false;
+    showStatus(ok ? 'Saved to your Downloads.' : 'Chrome blocked the download. Try Copy image instead.', ok ? 'ok' : 'error');
+    if (ok) closeModal(el('share-modal'));
+  });
+
+  el('close-share-modal').addEventListener('click', () => closeModal(el('share-modal')));
 
   // ---------------------------------------------------------------------------
   // Live updates and startup
@@ -3605,6 +4575,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (err) {
     prefs = Object.assign({}, TrackerStorage.PREF_DEFAULTS);
   }
+  applyAppearance();
+  await loadUiState();
   renderAlertToggles();
   activeMetricId = await TrackerStorage.getActiveMetricId();
 

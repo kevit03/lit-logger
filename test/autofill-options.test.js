@@ -153,9 +153,10 @@ function parseBody(doc) {
 }
 
 // Loads the page over `stored` (the af_ keys in chrome.storage.local).
-async function openPage(stored = {}, hash = '') {
+async function openPage(stored = {}, hash = '', syncStored = {}) {
   const mock = installMockChrome();
   Object.assign(mock.storage.local.store, JSON.parse(JSON.stringify(stored)));
+  Object.assign(mock.storage.sync.store, JSON.parse(JSON.stringify(syncStored)));
   delete require.cache[require.resolve('../shared/autofill-store')];
   const store = require('../shared/autofill-store');
 
@@ -174,6 +175,7 @@ async function openPage(stored = {}, hash = '') {
     }
   };
   doc.body = new Node('body', doc);
+  doc.documentElement = new Node('html', doc);
   doc.activeElement = doc.body;
   parseBody(doc);
 
@@ -263,14 +265,14 @@ async function testShowsStoredData() {
   store.PROFILE_FIELDS.forEach(k => page.el('pf-' + k));
   store.EEO_FIELDS.forEach(k => page.el('pf-eeo-' + k));
 
-  assert.strictEqual(page.el('progress-text').textContent, '19 of 24 filled');
+  assert.strictEqual(page.el('progress-text').textContent, '19 of 23 filled');
   assert.strictEqual(page.el('count-answers').textContent, '2');
   assert.strictEqual(page.el('count-rules').textContent, '2');
   assert.strictEqual(page.el('resume-name').textContent, 'resume.pdf');
   assert.ok(!page.el('resume-remove-btn').visible, 'the resume tab is not the open one');
   assert.strictEqual(page.el('answers-list').children.length, 2);
   assert.strictEqual(page.el('rules-body').children.length, 2);
-  assert.strictEqual(page.el('rules-body').children[0].children[2].textContent, 'Profile First name');
+  assert.strictEqual(page.el('rules-body').children[0].children[2].textContent, 'Your profile First name');
   uninstallMockChrome();
 }
 
@@ -299,7 +301,7 @@ async function testProfileEdits() {
   await page.type(page.el('pf-github'), '  https://github.com/sam ');
   expected.af_profile.github = 'https://github.com/sam';
   assert.deepStrictEqual(page.stored(), expected, 'one field saved, the rest untouched');
-  assert.strictEqual(page.el('progress-text').textContent, '20 of 24 filled');
+  assert.strictEqual(page.el('progress-text').textContent, '19 of 23 filled', 'GitHub is optional, so it does not count');
 
   const relocate = page.el('pf-willingToRelocate');
   const [yes, no] = relocate.children;
@@ -348,7 +350,7 @@ async function testListEditsAndUndo() {
   assert.deepStrictEqual(page.stored(), before, 'undo puts the deleted answer back in place');
   assert.strictEqual(page.el('answers-list').children.length, 2);
 
-  const ruleDelete = page.el('rules-body').children[1].find(n => n.tagName === 'BUTTON' && n.textContent === 'Delete')[0];
+  const ruleDelete = page.el('rules-body').children[1].find(n => n.tagName === 'BUTTON' && n.textContent === 'Forget')[0];
   await page.confirm(ruleDelete);
   assert.deepStrictEqual(page.stored().af_rules.map(r => r.id), ['afr_1']);
   page.el('undo-btn').click();
@@ -474,7 +476,7 @@ async function testAnswerWriting() {
 async function testEmptyPage() {
   const page = await openPage({}, '#answers');
   assert.deepStrictEqual(page.stored(), {}, 'opening an empty page writes nothing');
-  assert.strictEqual(page.el('progress-text').textContent, '0 of 24 filled');
+  assert.strictEqual(page.el('progress-text').textContent, '0 of 23 filled');
   assert.ok(page.el('answers-empty').visible, 'empty answers offer starting points');
   assert.strictEqual(page.el('count-answers').textContent, '');
   assert.ok(page.el('resume-drop').classList.contains('is-empty'));
@@ -486,8 +488,46 @@ async function testEmptyPage() {
   uninstallMockChrome();
 }
 
+// Plain language for people who are not technical, the AI settings tucked
+// away, and LIT's accent and comfort mode applied to the page.
+async function testPlainLanguageAndLook() {
+  const banned = /\bEEO\b|Maps to|Learned rules|Answer bank|>\s*Label\s*</;
+  assert.ok(!banned.test(HTML), 'no jargon in the page markup');
+  assert.ok(!/title: 'EEO'|Answer bank|answer bank/.test(SCRIPT), 'no jargon in the page script');
+  assert.ok(/When a form asks/.test(HTML) && /LIT fills/.test(HTML) && /What LIT has learned/.test(HTML));
+
+  const page = await openPage(SEED, '', { pt_prefs: { accent: 'sage', comfortMode: true }, pt_theme: 'dark' });
+  assert.strictEqual(page.doc.documentElement.getAttribute('data-accent'), 'sage');
+  assert.strictEqual(page.doc.documentElement.getAttribute('data-comfort'), 'on');
+  assert.ok(page.doc.body.classList.contains('pt-dark'), 'the popup theme still wins');
+
+  // The API key and model live under a collapsed Advanced section.
+  const advanced = page.el('answer-writing');
+  assert.strictEqual(advanced.tagName, 'DETAILS');
+  assert.ok(!('open' in advanced.attrs), 'collapsed by default');
+  assert.ok(advanced.contains(page.el('ai-key')) && advanced.contains(page.el('ai-model')));
+  assert.ok(/Advanced \(AI answers\)/.test(advanced.textContent));
+
+  // GitHub is optional and sits after the links most people have.
+  const order = ['pf-linkedin', 'pf-portfolio', 'pf-website', 'pf-github'].map(id => page.el(id));
+  const fields = page.el('profile-form').find(n => n.tagName === 'INPUT');
+  const idx = order.map(n => fields.indexOf(n));
+  assert.deepStrictEqual(idx.slice().sort((a, b) => a - b), idx, 'LinkedIn, Portfolio, Website, then GitHub');
+  assert.strictEqual(page.el('pf-github-label').textContent, 'GitHuboptional');
+  assert.ok(page.el('profile-form').textContent.includes('Diversity questions (optional)'));
+  assert.strictEqual(page.el('pf-eeo-gender-label').textContent, 'Gender', 'no per-field tag inside an optional group');
+  uninstallMockChrome();
+
+  // An unknown accent falls back to the default.
+  const other = await openPage({}, '', { pt_prefs: { accent: 'neon' } });
+  assert.strictEqual(other.doc.documentElement.getAttribute('data-accent'), 'coral');
+  assert.strictEqual(other.doc.documentElement.getAttribute('data-comfort'), 'off');
+  uninstallMockChrome();
+}
+
 async function run() {
   const tests = [
+    testPlainLanguageAndLook,
     testShowsStoredData,
     testTabs,
     testProfileEdits,

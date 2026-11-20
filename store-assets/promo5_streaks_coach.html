@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    background: #FBF8F3;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Nunito", "Segoe UI", Roboto, sans-serif;
+    color: #2A2622;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 38px 60px 32px 60px;
+    background-image: 
+      radial-gradient(circle at 85% 15%, rgba(217, 119, 43, 0.12) 0%, transparent 48%),
+      radial-gradient(circle at 15% 85%, rgba(138, 90, 158, 0.10) 0%, transparent 50%),
+      linear-gradient(180deg, #FDFBF7 0%, #F6F0E6 100%);
+  }
+
+  .ambient-glow {
+    position: absolute;
+    top: -80px;
+    right: -40px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(217, 119, 43, 0.12) 0%, rgba(217, 119, 43, 0) 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .header {
+    position: relative;
+    z-index: 2;
+  }
+
+  .badge-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #D9772B;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(42, 38, 34, 0.04);
+  }
+
+  .badge-row svg {
+    width: 15px;
+    height: 15px;
+    fill: #D9772B;
+  }
+
+  .title {
+    font-size: 42px;
+    line-height: 1.15;
+    font-weight: 850;
+    color: #2A2622;
+    letter-spacing: -0.9px;
+    margin-bottom: 8px;
+  }
+
+  .title span.highlight {
+    color: #D9772B;
+    background: linear-gradient(120deg, #D9772B, #C0581B);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 19px;
+    line-height: 1.4;
+    color: #6F665E;
+    font-weight: 500;
+    max-width: 740px;
+  }
+
+  .main-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 36px;
+    flex: 1;
+    margin-top: 14px;
+  }
+
+  /* Left column: feature cards */
+  .features-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 390px;
+    flex-shrink: 0;
+  }
+
+  .feature-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+    box-shadow: 0 4px 16px rgba(42, 38, 34, 0.04), 0 1px 3px rgba(42, 38, 34, 0.03);
+  }
+
+  .feature-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .icon-flame {
+    background: #FFF5EC;
+    color: #D9772B;
+    border: 1px solid rgba(217, 119, 43, 0.25);
+  }
+  .icon-freeze {
+    background: #EFF6FC;
+    color: #4F8DB5;
+    border: 1px solid rgba(79, 141, 181, 0.25);
+  }
+  .icon-coach {
+    background: #F8F1FB;
+    color: #8A5A9E;
+    border: 1px solid rgba(138, 90, 158, 0.25);
+  }
+
+  .feature-text h3 {
+    font-size: 16px;
+    font-weight: 750;
+    color: #2A2622;
+    margin-bottom: 4px;
+  }
+
+  .feature-text p {
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  /* Right column: showcase dashboard cards */
+  .mockup-container {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    justify-content: center;
+  }
+
+  /* Card 1: Streak & Freeze Protection Card */
+  .streak-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 18px;
+    padding: 20px 24px;
+    box-shadow: 0 16px 40px rgba(42, 38, 34, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .streak-main {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .streak-flame-circle {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: #FFF5EC;
+    border: 1px solid rgba(217, 119, 43, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+  }
+
+  .streak-info h3 {
+    font-size: 20px;
+    font-weight: 850;
+    color: #2A2622;
+  }
+
+  .streak-info p {
+    font-size: 13px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .streak-badges {
+    display: flex;
+    gap: 8px;
+  }
+
+  .streak-pill {
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .pill-ice {
+    background: #EFF6FC;
+    color: #3B7EA1;
+    border: 1px solid rgba(59, 126, 161, 0.25);
+  }
+
+  .pill-rest {
+    background: #F4EFE7;
+    color: #6F665E;
+    border: 1px solid #ECE5DA;
+  }
+
+  /* Card 2: Coach Notification */
+  .notification-card {
+    background: #FFFFFF;
+    border: 1px solid #ECE5DA;
+    border-radius: 18px;
+    padding: 18px 22px;
+    box-shadow: 0 16px 40px rgba(42, 38, 34, 0.08);
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    position: relative;
+    border-left: 5px solid #E0674B;
+  }
+
+  .notif-icon {
+    width: 36px;
+    height: 36px;
+    background: #E0674B;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    flex-shrink: 0;
+  }
+
+  .notif-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+
+  .notif-body {
+    flex: 1;
+  }
+
+  .notif-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .notif-app-name {
+    font-size: 12px;
+    font-weight: 750;
+    color: #A9543F;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .notif-time {
+    font-size: 11px;
+    color: #8C827A;
+  }
+
+  .notif-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: #2A2622;
+    line-height: 1.4;
+    margin-bottom: 12px;
+  }
+
+  .notif-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-notif-primary {
+    background: #E0674B;
+    color: white;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .btn-notif-secondary {
+    background: #F4EFE7;
+    color: #2A2622;
+    border: 1px solid #ECE5DA;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  /* Card 3: Milestone celebration */
+  .milestone-card {
+    background: linear-gradient(135deg, #FFF9F3 0%, #FFFFFF 100%);
+    border: 1px solid #ECE5DA;
+    border-radius: 18px;
+    padding: 18px 24px;
+    box-shadow: 0 16px 40px rgba(42, 38, 34, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .milestone-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .milestone-medal {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: #FEF7EC;
+    border: 1px solid rgba(201, 130, 31, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+  }
+
+  .milestone-text h4 {
+    font-size: 16px;
+    font-weight: 800;
+    color: #2A2622;
+  }
+
+  .milestone-text p {
+    font-size: 12.5px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .share-pill {
+    background: #2A2622;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 750;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* Footer bar */
+  .footer-bar {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 14px;
+    border-top: 1px solid rgba(236, 229, 218, 0.8);
+    font-size: 13px;
+    color: #6F665E;
+    font-weight: 500;
+  }
+
+  .footer-tags {
+    display: flex;
+    gap: 24px;
+  }
+
+  .footer-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .footer-tag svg {
+    color: #6B9E7A;
+  }
+
+  .tagline {
+    font-weight: 700;
+    color: #A9543F;
+  }
+
+</style>
+</head>
+<body>
+  <div class="ambient-glow"></div>
+
+  <div class="header">
+    <div class="badge-row">
+      <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      Momentum & Habits · Encouraging, Never Shaming
+    </div>
+    <h1 class="title">Stay consistent. <span class="highlight">Never discouraged.</span></h1>
+    <p class="subtitle">Built for the emotional marathon of job searching with rest days, streak freezes, and encouragement when you need a gentle push.</p>
+  </div>
+
+  <div class="main-content">
+    <div class="features-col">
+      <div class="feature-card">
+        <div class="feature-icon icon-flame">🔥</div>
+        <div class="feature-text">
+          <h3>Streaks that Respect Rest Days</h3>
+          <p>Schedule your rest days. Taking weekends off never breaks your streak. Applying on rest days counts as a bonus!</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-freeze">❄️</div>
+        <div class="feature-text">
+          <h3>Automatic Streak Freezes</h3>
+          <p>Earn a freeze for every 7 goal days. When life happens, a freeze kicks in automatically so one hard day doesn't wipe your streak.</p>
+        </div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon icon-coach">💬</div>
+        <div class="feature-text">
+          <h3>Personalized Coach Voice</h3>
+          <p>Choose between Gentle, Coach, or Drill. A daily notification check-in that never guilt-trips and never opens unwanted tabs.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup-container">
+      <!-- Streak & Safety Net Card -->
+      <div class="streak-card">
+        <div class="streak-main">
+          <div class="streak-flame-circle">🔥</div>
+          <div class="streak-info">
+            <h3>14-Day Streak</h3>
+            <p>14 consecutive goal days · Personal record!</p>
+          </div>
+        </div>
+        <div class="streak-badges">
+          <div class="streak-pill pill-ice">❄️ 2 Freezes Banked</div>
+          <div class="streak-pill pill-rest">☕ Wed/Sun Rest</div>
+        </div>
+      </div>
+
+      <!-- Coach Notification -->
+      <div class="notification-card">
+        <div class="notif-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4zm-2 7V6a2 2 0 1 1 4 0v3h-4z"/></svg>
+        </div>
+        <div class="notif-body">
+          <div class="notif-header">
+            <span class="notif-app-name">LIT · Daily Coach Check-In</span>
+            <span class="notif-time">5:00 PM</span>
+          </div>
+          <div class="notif-text">
+            "Locked in for today! 1 down, 4 to go. You've got great momentum this week, let's keep it rolling."
+          </div>
+          <div class="notif-actions">
+            <button class="btn-notif-primary">+ Log application</button>
+            <button class="btn-notif-secondary">Open check-in</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Milestone Celebration -->
+      <div class="milestone-card">
+        <div class="milestone-left">
+          <div class="milestone-medal">🎉</div>
+          <div class="milestone-text">
+            <h4>Milestone Unlocked: 100 Applications!</h4>
+            <p>100 doors knocked on. Keep your head high — your next role is out there.</p>
+          </div>
+        </div>
+        <div class="share-pill">
+          <span>↗ Share Card</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <div class="footer-tags">
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Never leads with a zero
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        Milestones at 10, 50, 100, 250, 500
+      </div>
+      <div class="footer-tag">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        LinkedIn share cards ready
+      </div>
+    </div>
+    <div class="tagline">Strava for getting hired.</div>
+  </div>
+</body>
+</html>
