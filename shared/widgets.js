@@ -33,6 +33,15 @@ const WidgetLayout = (() => {
   const MAX_ACTIVITY_DAYS = 366;
   const CHART_MODES = ['bar', 'area', 'heatmap'];
   const SIZES = ['compact', 'expanded'];
+  // Personal touches every card can carry. Stored sparsely: an option only
+  // lands in storage when it differs from the default, so older layouts and
+  // untouched cards stay byte-for-byte the same.
+  const MAX_TITLE = 40;
+  const CARD_COLORS = ['#E0674B', '#5E9270', '#3B7EA1', '#C9821F', '#8A5A9E', '#3D4A5C', '#C2185B', '#00897B'];
+  const SUMMARY_PERIODS = ['today', 'week', 'month', 'total'];
+  const DEFAULT_PERIODS = ['week', 'month', 'total'];
+  const RECENT_COUNTS = [5, 10, 20];
+  const DEFAULT_RECENT = 10;
 
   // Names and descriptions are user-facing copy: the popup calls these
   // "cards", in plain words.
@@ -125,6 +134,41 @@ const WidgetLayout = (() => {
       singleton: false,
       defaultSize: 'expanded',
       defaults: { metricId: ACTIVE }
+    },
+    countdown: {
+      name: 'Countdown',
+      description: 'Days left until a date you care about, and what your pace adds up to by then.',
+      singleton: false,
+      defaultSize: 'compact',
+      defaults: { metricId: ACTIVE }
+    },
+    compare: {
+      name: 'This week vs last',
+      description: 'This week next to last week, day by day.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: { metricId: ACTIVE }
+    },
+    watchlist: {
+      name: 'Companies I\'m watching',
+      description: 'A short list of places you want to apply, checked off when you do.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: {}
+    },
+    notes: {
+      name: 'Notes',
+      description: 'A scratchpad for today\'s plan, a contact, or a thought. Saves as you type.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: {}
+    },
+    quote: {
+      name: 'Daily boost',
+      description: 'A fresh line of encouragement each day, or words of your own.',
+      singleton: false,
+      defaultSize: 'expanded',
+      defaults: {}
     }
   };
 
@@ -133,7 +177,9 @@ const WidgetLayout = (() => {
   const ADDED_IN_V2 = ['pipeline', 'recentList', 'responseStats'];
   // Newer card types are only offered in the picker (tagged New); saved
   // layouts are never changed to include them.
-  const NEW_TYPES = ['trophies', 'recap'];
+  const NEW_TYPES = ['trophies', 'recap', 'countdown', 'compare', 'watchlist', 'notes', 'quote'];
+  const MAX_QUOTE = 160;
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
   // The recommended layout, kept lean for someone just starting: recent
   // applications and the weekly recap (the counter and week strip above the
@@ -146,6 +192,35 @@ const WidgetLayout = (() => {
     { id: 'recentList-default', type: 'recentList' },
     { id: 'recap-default', type: 'recap' }
   ];
+
+  // Popup modules add card types at load time (before the layout is read).
+  // A type needs a name, a description, defaults, and a size; it may add a
+  // normalize(input, out) for its own options. Built-in types cannot be
+  // replaced. New types are flagged New in the picker.
+  const TYPE_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
+  function registerType(type, spec) {
+    if (typeof type !== 'string' || !TYPE_ID.test(type)) return false;
+    if (Object.prototype.hasOwnProperty.call(TYPES, type)) return false;
+    if (!spec || typeof spec.name !== 'string' || typeof spec.description !== 'string') return false;
+    TYPES[type] = {
+      name: spec.name,
+      description: spec.description,
+      singleton: !!spec.singleton,
+      jobsOnly: !!spec.jobsOnly,
+      leetcodeOnly: false,
+      defaultSize: SIZES.includes(spec.defaultSize) ? spec.defaultSize : 'expanded',
+      defaults: spec.defaults && typeof spec.defaults === 'object' ? Object.assign({}, spec.defaults) : {},
+      normalize: typeof spec.normalize === 'function' ? spec.normalize : null,
+      // SVG markup drawn inside a 14x14 viewBox for the "Add a card" list.
+      icon: typeof spec.icon === 'string' ? spec.icon : '',
+      // When this returns false (the module is switched off) the type leaves
+      // the picker and its cards leave the board; nothing is deleted.
+      enabled: typeof spec.enabled === 'function' ? spec.enabled : null,
+      module: true
+    };
+    if (spec.isNew !== false && !NEW_TYPES.includes(type)) NEW_TYPES.push(type);
+    return true;
+  }
 
   function newId(type) {
     return type + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -223,6 +298,41 @@ const WidgetLayout = (() => {
       out.chart = CHART_MODES.includes(input.chart) ? input.chart : spec.defaults.chart;
       out.showStats = input.showStats === undefined ? spec.defaults.showStats : !!input.showStats;
     }
+    // Per-type display choices (sparse: only non-default values are kept).
+    if (type === 'goal') {
+      if (input.showWeekly === false) out.showWeekly = false;
+      if (input.showCheckpoints === false) out.showCheckpoints = false;
+    }
+    if (type === 'streak' && input.showLongest === false) out.showLongest = false;
+    if (type === 'summary' && Array.isArray(input.periods)) {
+      const periods = SUMMARY_PERIODS.filter(p => input.periods.includes(p));
+      if (periods.length && periods.join() !== DEFAULT_PERIODS.join()) out.periods = periods;
+    }
+    if (type === 'recentList') {
+      const n = parseInt(input.count, 10);
+      if (RECENT_COUNTS.includes(n) && n !== DEFAULT_RECENT) out.count = n;
+    }
+    if (type === 'countdown') {
+      if (typeof input.date === 'string' && ISO_DATE.test(input.date) && !isNaN(new Date(input.date + 'T12:00:00'))) out.date = input.date;
+      if (typeof input.label === 'string') {
+        const label = input.label.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE);
+        if (label) out.label = label;
+      }
+    }
+    if (type === 'quote' && typeof input.quoteText === 'string') {
+      const text = input.quoteText.replace(/\s+/g, ' ').trim().slice(0, MAX_QUOTE);
+      if (text) out.quoteText = text;
+    }
+    // Card types added by popup modules may clean their own options.
+    if (typeof spec.normalize === 'function') {
+      try { spec.normalize(input, out); } catch (e) { /* keep the defaults */ }
+    }
+    // Every card: a custom title and its own color.
+    if (typeof input.title === 'string') {
+      const title = input.title.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE);
+      if (title) out.title = title;
+    }
+    if (typeof input.color === 'string' && CARD_COLORS.includes(input.color.toUpperCase())) out.color = input.color.toUpperCase();
     out.size = SIZES.includes(input.size) ? input.size : spec.defaultSize;
     out.collapsed = !!input.collapsed;
     return out;
@@ -322,6 +432,7 @@ const WidgetLayout = (() => {
   function isVisible(item, resolvedMetricId) {
     const spec = item && Object.prototype.hasOwnProperty.call(TYPES, item.type) ? TYPES[item.type] : null;
     if (!spec) return false;
+    if (!typeEnabled(spec)) return false;
     if (spec.leetcodeOnly) return resolvedMetricId === 'leetcode';
     if (spec.jobsOnly) return resolvedMetricId === 'jobs';
     return true;
@@ -350,15 +461,21 @@ const WidgetLayout = (() => {
     return solo;
   }
 
+  function typeEnabled(spec) {
+    if (!spec || typeof spec.enabled !== 'function') return true;
+    try { return spec.enabled() !== false; } catch (e) { return true; }
+  }
+
   function availableTypes(items) {
     const present = new Set((items || []).map(i => i.type));
-    return Object.keys(TYPES).map(type => ({
+    return Object.keys(TYPES).filter(type => typeEnabled(TYPES[type])).map(type => ({
       type,
       name: TYPES[type].name,
       description: TYPES[type].description,
       singleton: TYPES[type].singleton,
       isNew: NEW_TYPES.includes(type),
-      added: TYPES[type].singleton && present.has(type)
+      added: TYPES[type].singleton && present.has(type),
+      icon: TYPES[type].icon || ''
     }));
   }
 
@@ -372,7 +489,15 @@ const WidgetLayout = (() => {
     normalizeDays,
     CHART_MODES,
     SIZES,
+    MAX_TITLE,
+    MAX_QUOTE,
+    CARD_COLORS,
+    SUMMARY_PERIODS,
+    DEFAULT_PERIODS,
+    RECENT_COUNTS,
+    DEFAULT_RECENT,
     TYPES,
+    registerType,
     normalize,
     normalizeOptions,
     defaultItems,
@@ -407,6 +532,30 @@ const WidgetLayout = (() => {
 
     async remove(id) {
       return mutate(items => items.filter(i => i.id !== id));
+    },
+
+    // A copy of a card, right after the original, with all its settings.
+    // Singleton cards wrap markup that exists once, so they cannot be copied.
+    async duplicate(id) {
+      return mutate(items => {
+        const from = items.findIndex(i => i.id === id);
+        if (from < 0 || TYPES[items[from].type].singleton) return null;
+        const src = items[from];
+        const copy = { id: newId(src.type), type: src.type, options: normalizeOptions(src.type, Object.assign({}, src.options, { collapsed: false })) };
+        const next = items.slice();
+        next.splice(from + 1, 0, copy);
+        return next;
+      });
+    },
+
+    // Patches the same options onto several cards at once (used for "make
+    // every card half width" style bulk edits). Unknown ids are ignored.
+    async updateMany(ids, patch) {
+      const set = new Set(Array.isArray(ids) ? ids : []);
+      return mutate(items => items.map(i => {
+        if (!set.has(i.id)) return i;
+        return { id: i.id, type: i.type, options: normalizeOptions(i.type, Object.assign({}, i.options, patch)) };
+      }));
     },
 
     async update(id, patch) {

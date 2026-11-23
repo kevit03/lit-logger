@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LIT</title>
   <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="modules/buddy-roam.css">
+  <link rel="stylesheet" href="modules/stories.css">
+  <link rel="stylesheet" href="modules/media-cards.css">
+  <link rel="stylesheet" href="modules/shell-fx.css">
 </head>
 <body>
   <div class="app" id="app">
@@ -19,6 +23,8 @@
         </span>
         <span class="brand-title">LIT</span>
       </div>
+      <!-- Module anchor: status pill in the top bar (modules/shell-fx.js) -->
+      <div class="island-host" id="island-host"></div>
       <div class="topbar-actions">
         <button id="search-btn" class="icon-btn" type="button" title="Search everything you've logged (/)" aria-label="Search everything you've logged">
           <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true" focusable="false"><circle cx="8.8" cy="8.8" r="5.6" stroke="currentColor" stroke-width="1.7"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
@@ -108,6 +114,9 @@
         </span>
       </div>
 
+      <!-- Module anchor: story rings (modules/stories.js) -->
+      <div class="stories-host" id="stories-host"></div>
+
       <nav class="tracker-tabs" aria-label="Goals">
         <div id="metric-tabs" class="tabs-scroll" role="tablist" aria-label="Goals">
           <span class="tab-indicator" id="tab-indicator" aria-hidden="true"></span>
@@ -139,6 +148,13 @@
               <div class="week-bar"><span id="week-fill"></span></div>
             </div>
             <button class="week-set hidden" id="week-set-btn" type="button">Set a weekly goal</button>
+            <div class="buddy hidden" id="buddy" data-mood="idle">
+              <button type="button" class="buddy-btn" id="buddy-btn" aria-label="Your buddy. Tap for a tip."></button>
+              <div class="buddy-bubble" id="buddy-bubble" role="status" aria-live="polite">
+                <span class="buddy-text" id="buddy-text"></span>
+                <button type="button" class="buddy-action hidden" id="buddy-action"></button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="split-actions" id="action-buttons">
@@ -326,6 +342,9 @@
         </button>
       </div>
 
+      <!-- Module anchor: docked mini player (modules/shell-fx.js) -->
+      <div class="miniplayer-host" id="miniplayer-host"></div>
+
       <footer class="footer">
         <button id="open-calendar-btn" class="footer-btn" type="button" title="Open Google Calendar to see your days">
           <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="11" height="10" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -340,7 +359,12 @@
           <span>Autofill</span>
         </button>
       </footer>
+      <!-- Module anchor: the roaming buddy's layer over the board (modules/buddy-roam.js) -->
+      <div class="buddy-layer" id="buddy-layer" aria-hidden="false"></div>
     </main>
+
+    <!-- Module anchor: full-popup overlays such as the story viewer (modules/stories.js) -->
+    <div class="overlay-host" id="overlay-host"></div>
 
     <!-- New goal -->
     <div id="new-metric-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="new-metric-title">
@@ -350,6 +374,10 @@
           <button id="close-metric-modal" class="close-btn" type="button" aria-label="Close" title="Close">&times;</button>
         </div>
         <form id="new-metric-form">
+          <div class="form-group">
+            <span class="form-label" id="goal-templates-label">Start from an idea</span>
+            <div class="goal-templates" id="goal-templates" role="group" aria-labelledby="goal-templates-label"></div>
+          </div>
           <div class="form-group">
             <label for="new-metric-name">What's the goal called?</label>
             <input type="text" id="new-metric-name" placeholder="e.g. Networking chats" required />
@@ -378,6 +406,10 @@
             <input type="number" id="new-metric-goal" placeholder="e.g. 3" min="1" value="3" />
           </div>
           <div class="form-group">
+            <span class="form-label" id="new-icon-label">Icon</span>
+            <div class="icon-picker" id="new-metric-icons" role="radiogroup" aria-labelledby="new-icon-label"></div>
+          </div>
+          <div class="form-group">
             <span class="form-label" id="color-label">Color</span>
             <div class="color-palette" id="color-palette" role="group" aria-labelledby="color-label">
               <button type="button" class="color-option selected" data-color="#E0674B" style="background:#E0674B;" aria-label="Coral" title="Coral"></button>
@@ -396,14 +428,25 @@
       </div>
     </div>
 
-    <!-- Goal settings (daily goal, weekly goal, remove goal) -->
+    <!-- Edit a goal: name, what it counts, icon, color, daily and weekly
+         numbers; hide it from the board or delete it (custom goals). -->
     <div id="metric-settings-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="metric-settings-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3 id="metric-settings-title">Goal settings</h3>
+          <h3 id="metric-settings-title">Edit goal</h3>
           <button id="close-settings-modal" class="close-btn" type="button" aria-label="Close" title="Close">&times;</button>
         </div>
         <form id="metric-settings-form">
+          <div class="field-row">
+            <div class="form-group">
+              <label for="metric-settings-name">Name</label>
+              <input type="text" id="metric-settings-name" maxlength="40" required />
+            </div>
+            <div class="form-group">
+              <label for="metric-settings-unit">Counting</label>
+              <input type="text" id="metric-settings-unit" maxlength="40" placeholder="e.g. chats" list="unit-options" />
+            </div>
+          </div>
           <div class="field-row">
             <div class="form-group">
               <label for="metric-settings-goal">How many a day?</label>
@@ -414,9 +457,20 @@
               <input type="number" id="metric-settings-weekly" min="0" step="1" value="0" placeholder="Optional" />
             </div>
           </div>
-          <p class="form-hint">Pick a number you can hit on a normal day. You can change it any time.</p>
+          <div class="form-group">
+            <span class="form-label" id="edit-icon-label">Icon</span>
+            <div class="icon-picker" id="metric-settings-icons" role="radiogroup" aria-labelledby="edit-icon-label"></div>
+          </div>
+          <div class="form-group">
+            <span class="form-label" id="edit-color-label">Color</span>
+            <div class="color-palette" id="metric-settings-colors" role="radiogroup" aria-labelledby="edit-color-label"></div>
+          </div>
+          <p class="form-hint" id="metric-settings-hint">Pick a number you can hit on a normal day. You can change it any time.</p>
+          <div class="goal-danger-row">
+            <button type="button" id="hide-metric-btn" class="btn btn-ghost btn-sm" title="Takes the tab off your board and pauses auto-logging. Nothing you logged is deleted.">Hide from my board</button>
+            <button type="button" id="delete-metric-btn" class="btn btn-danger-ghost btn-sm hidden" title="Removes the goal. You can undo right after.">Delete goal</button>
+          </div>
           <div class="modal-actions">
-            <button type="button" id="delete-metric-btn" class="btn btn-danger-ghost danger-left hidden" title="Hides the tab. What you logged stays in your backups.">Remove this goal</button>
             <button type="button" id="cancel-settings-btn" class="btn btn-ghost">Cancel</button>
             <button type="submit" id="metric-settings-save-btn" class="btn btn-accent">Save</button>
           </div>
@@ -448,6 +502,18 @@
         </div>
         <form id="widget-settings-form">
           <div class="token-bar" role="group" aria-label="Card settings">
+            <div class="token token-wide" id="widget-token-title">
+              <span class="token-field">Name</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <label class="token-cell token-title-cell" for="widget-title-input">
+                <input type="text" class="token-input token-title-input" id="widget-title-input" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Card name. Leave empty for the standard name." />
+              </label>
+            </div>
+            <div class="token" id="widget-token-color">
+              <span class="token-field">Color</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <button type="button" class="token-value" id="widget-color-btn" aria-haspopup="listbox" aria-expanded="false">Match the goal</button>
+            </div>
             <div class="token" id="widget-token-metric">
               <span class="token-field">Show for</span>
               <span class="token-sep" aria-hidden="true"></span>
@@ -478,6 +544,57 @@
               <span class="token-sep" aria-hidden="true"></span>
               <button type="button" class="token-value" id="widget-stats-btn" aria-pressed="true" title="Show or hide the totals under the chart">Shown</button>
             </div>
+            <div class="token token-wide hidden" id="widget-token-cd-label">
+              <span class="token-field">Counting to</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <label class="token-cell token-title-cell" for="widget-cd-label-input">
+                <input type="text" class="token-input token-title-input" id="widget-cd-label-input" maxlength="40" autocomplete="off" placeholder="e.g. Start date, Career fair" aria-label="What you are counting down to" />
+              </label>
+            </div>
+            <div class="token hidden" id="widget-token-cd-date">
+              <span class="token-field">Date</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <label class="token-cell token-date-cell" for="widget-cd-date-input">
+                <input type="date" class="token-input token-date-input" id="widget-cd-date-input" aria-label="Countdown date" />
+              </label>
+            </div>
+            <div class="token token-wide hidden" id="widget-token-quote">
+              <span class="token-field">Your words</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <label class="token-cell token-title-cell" for="widget-quote-input">
+                <input type="text" class="token-input token-title-input" id="widget-quote-input" maxlength="160" autocomplete="off" placeholder="Leave empty for a new line each day" aria-label="Your own words for this card. Leave empty for a new line each day." />
+              </label>
+            </div>
+            <div class="token hidden" id="widget-token-checkpoints">
+              <span class="token-field">Checkpoints</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <button type="button" class="token-value" id="widget-checkpoints-btn" aria-pressed="true" title="The 25, 50, and 75 percent marks on the bar">Shown</button>
+            </div>
+            <div class="token hidden" id="widget-token-weekly">
+              <span class="token-field">Weekly bar</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <button type="button" class="token-value" id="widget-weekly-btn" aria-pressed="true" title="Shows when the goal has a weekly number">Shown</button>
+            </div>
+            <div class="token hidden" id="widget-token-longest">
+              <span class="token-field">Longest run</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <button type="button" class="token-value" id="widget-longest-btn" aria-pressed="true">Shown</button>
+            </div>
+            <div class="token token-wide hidden" id="widget-token-periods">
+              <span class="token-field">Show</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <div class="token-chips" id="widget-periods" role="group" aria-label="Which totals to show">
+                <button type="button" class="token-chip" data-period="today" aria-pressed="false">Today</button>
+                <button type="button" class="token-chip" data-period="week" aria-pressed="true">7 days</button>
+                <button type="button" class="token-chip" data-period="month" aria-pressed="true">Month</button>
+                <button type="button" class="token-chip" data-period="total" aria-pressed="true">All time</button>
+              </div>
+            </div>
+            <div class="token hidden" id="widget-token-count">
+              <span class="token-field">How many</span>
+              <span class="token-sep" aria-hidden="true"></span>
+              <button type="button" class="token-value" id="widget-count-btn" aria-haspopup="listbox" aria-expanded="false">10</button>
+            </div>
             <div class="token" id="widget-token-position">
               <span class="token-field">Position</span>
               <span class="token-sep" aria-hidden="true"></span>
@@ -490,6 +607,7 @@
           </div>
           <div class="modal-actions">
             <button type="button" id="remove-widget-btn" class="btn btn-danger-ghost danger-left" title="Removing a card never deletes anything you logged"><span>Remove card</span></button>
+            <button type="button" id="duplicate-widget-btn" class="btn btn-ghost" title="Add a copy of this card right below it">Duplicate</button>
             <button type="button" id="cancel-widget-settings-btn" class="btn btn-ghost">Cancel</button>
             <button type="submit" class="btn btn-accent" id="save-widget-btn">Save</button>
           </div>
@@ -532,6 +650,16 @@
           <button id="close-app-settings" class="close-btn" type="button" aria-label="Close settings" title="Close settings">&times;</button>
         </div>
 
+        <section class="settings-group" id="goals-group">
+          <h4>Your goals</h4>
+          <ul class="goal-manager" id="goal-manager" aria-label="Your goals"></ul>
+          <div class="goal-manager-foot">
+            <button type="button" class="btn btn-ghost btn-sm" id="settings-add-goal-btn">Add a goal</button>
+            <span class="form-hint">Hidden goals keep everything you logged and stop auto-logging until you show them again.</span>
+          </div>
+          <p class="form-hint goal-manager-note" id="goal-manager-note" aria-live="polite"></p>
+        </section>
+
         <section class="settings-group">
           <h4>Look and feel</h4>
           <div class="settings-list">
@@ -542,7 +670,17 @@
                 <button type="button" role="radio" data-theme-value="dark" aria-checked="false">Dark</button>
               </div>
             </div>
-            <div class="setting-row">
+            <div class="setting-row setting-row-stack">
+              <span class="setting-label" id="style-label">Style</span>
+              <div class="style-picker" role="radiogroup" aria-labelledby="style-label" id="style-picker">
+                <button type="button" role="radio" class="style-option" data-style-value="warm" aria-checked="true"><span class="style-swatch"></span>Warm</button>
+                <button type="button" role="radio" class="style-option" data-style-value="soft" aria-checked="false"><span class="style-swatch"></span>Soft</button>
+                <button type="button" role="radio" class="style-option" data-style-value="contrast" aria-checked="false"><span class="style-swatch"></span>High contrast</button>
+                <button type="button" role="radio" class="style-option" data-style-value="seasonal" aria-checked="false"><span class="style-swatch"></span>Seasonal</button>
+                <button type="button" role="radio" class="style-option" data-style-value="arcade" aria-checked="false"><span class="style-swatch"></span>Arcade</button>
+              </div>
+            </div>
+            <div class="setting-row" id="accent-row">
               <span class="setting-label" id="accent-label">Color</span>
               <div class="swatches" role="radiogroup" aria-labelledby="accent-label" id="accent-swatches">
                 <button type="button" role="radio" class="swatch" data-accent-value="coral" aria-label="Coral" title="Coral" aria-checked="true"></button>
@@ -556,6 +694,35 @@
             <div class="setting-row setting-row-2line">
               <span class="setting-label">Comfort mode<small>Bigger text and easier-to-tap buttons</small></span>
               <button type="button" class="switch" id="comfort-switch" role="switch" aria-checked="false" aria-label="Comfort mode: bigger text and buttons"><span></span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-group" id="buddy-group">
+          <h4>Your buddy</h4>
+          <div class="settings-list">
+            <div class="setting-row setting-row-2line">
+              <span class="setting-label">Show my buddy<small>A little friend in the popup that cheers you on</small></span>
+              <button type="button" class="switch" id="buddy-switch" role="switch" aria-checked="true" aria-label="Show my buddy"><span></span></button>
+            </div>
+            <div class="setting-row">
+              <label class="setting-label" for="buddy-name-input">Name</label>
+              <input type="text" class="text-input setting-input" id="buddy-name-input" maxlength="20" placeholder="Lockie" autocomplete="off" />
+            </div>
+            <div class="setting-row setting-row-2line">
+              <label class="setting-label" for="buddy-break-select">Break reminders<small>After this long of steady applying</small></label>
+              <select class="setting-select" id="buddy-break-select">
+                <option value="0">Off</option>
+                <option value="30">30 min</option>
+                <option value="45">45 min</option>
+                <option value="60">1 hour</option>
+                <option value="90">1.5 hours</option>
+                <option value="120">2 hours</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-2line">
+              <span class="setting-label">Water reminders<small>A gentle nudge to drink some water while you apply</small></span>
+              <button type="button" class="switch" id="water-switch" role="switch" aria-checked="true" aria-label="Water reminders"><span></span></button>
             </div>
           </div>
         </section>
@@ -674,12 +841,24 @@
                 <input type="file" id="restore-input" accept="application/json,.json" hidden />
               </div>
             </div>
-            <div class="setting-row">
-              <span class="setting-label">Share or export</span>
-              <div class="setting-actions">
-                <button type="button" class="btn btn-ghost btn-sm" data-export="csv" title="A spreadsheet file for Excel or Google Sheets">Spreadsheet</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-export="md" title="Copy a summary to share">Copy a summary</button>
+            <div class="export-box" id="export-box">
+              <span class="setting-label">Export to Sheets, Notion, or Excel</span>
+              <div class="export-filters">
+                <select class="setting-select" id="export-goal" aria-label="Which goal to export"></select>
+                <select class="setting-select" id="export-range" aria-label="How far back">
+                  <option value="all">All time</option>
+                  <option value="7">Last 7 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="365">Last year</option>
+                </select>
               </div>
+              <div class="setting-actions export-actions">
+                <button type="button" class="btn btn-accent btn-sm" id="export-sheets-btn" title="Copies a table and opens a new Google Sheet. Paste with Ctrl+V or Cmd+V.">Copy for Google Sheets</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="export-notion-btn" title="Copies a table you can paste into any Notion page">Copy for Notion</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="export-csv-btn" title="A file for Excel, Numbers, or Notion's CSV import">Download CSV</button>
+              </div>
+              <p class="form-hint export-hint" id="export-hint">Google Sheets opens a blank sheet: click cell A1 and paste. In Notion, paste into any page, or use Import, then CSV, for a database.</p>
             </div>
             <div class="setting-row setting-row-2line">
               <span class="setting-label">Automatic backups<small>LIT saves one every week and keeps the last four</small></span>
@@ -703,6 +882,11 @@
               <button type="button" class="btn btn-ghost btn-sm" id="shortcuts-link">Open Chrome</button>
             </div>
           </div>
+        </section>
+
+        <section class="settings-group hidden" id="module-settings-group">
+          <h4>Extras</h4>
+          <div class="settings-list" id="module-settings"></div>
         </section>
 
         <section class="settings-group settings-group-danger">
@@ -748,9 +932,15 @@
   <script src="../shared/db.js"></script>
   <script src="../shared/storage.js"></script>
   <script src="../shared/coach-copy.js"></script>
+  <script src="../shared/buddy.js"></script>
   <script src="../shared/share-card.js"></script>
   <script src="../shared/widgets.js"></script>
   <script src="../shared/exporters.js"></script>
+  <script src="bridge.js"></script>
+  <script src="modules/buddy-roam.js"></script>
+  <script src="modules/stories.js"></script>
+  <script src="modules/media-cards.js"></script>
+  <script src="modules/shell-fx.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

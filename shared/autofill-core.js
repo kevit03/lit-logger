@@ -238,6 +238,15 @@ const AutofillCore = (() => {
 
   const attr = (el, n) => (el && el.getAttribute ? el.getAttribute(n) : null);
   const tagOf = el => String((el && el.tagName) || '').toUpperCase();
+  // The type attribute lowercased, '' when there is none.
+  const typeAttr = el => String(attr(el, 'type') || '').toLowerCase();
+  const isHiddenInput = el => tagOf(el) === 'INPUT' && typeAttr(el) === 'hidden';
+  const opensListbox = el => String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox';
+
+  // el.closest that never throws (an odd selector engine, a foreign node).
+  function closestSafe(el, selector) {
+    try { return el && el.closest ? el.closest(selector) : null; } catch (_) { return null; }
+  }
 
   function hiddenByAttr(el) {
     return !!(el && el.hasAttribute && (el.hasAttribute('hidden') || attr(el, 'aria-hidden') === 'true'));
@@ -266,8 +275,7 @@ const AutofillCore = (() => {
   function isDisabled(el) {
     if (el.disabled === true || (el.hasAttribute && el.hasAttribute('disabled'))) return true;
     if (attr(el, 'aria-disabled') === 'true') return true;
-    try { if (el.closest && el.closest('fieldset[disabled]')) return true; } catch (_) { /* ignore */ }
-    return false;
+    return !!closestSafe(el, 'fieldset[disabled]');
   }
 
   function isReadOnly(el) {
@@ -295,6 +303,21 @@ const AutofillCore = (() => {
     return Array.from(node.children || []);
   }
 
+  // The node before (dir -1) or after (dir 1) this one, text nodes included.
+  // Falls back to the parent's child list for DOMs without sibling links.
+  function siblingOf(node, dir) {
+    const own = dir < 0 ? node.previousSibling : node.nextSibling;
+    if (own !== undefined) return own;
+    const p = node.parentNode;
+    if (!p) return null;
+    const kids = childNodesOf(p);
+    const i = kids.indexOf(node);
+    const j = i + dir;
+    return i >= 0 && j >= 0 && j < kids.length ? kids[j] : null;
+  }
+  const prevSibling = node => siblingOf(node, -1);
+  const nextSibling = node => siblingOf(node, 1);
+
   function textOf(node, isRoot = true, depth = 0) {
     if (!node || depth > 40) return '';
     if (node.nodeType === 3) return node.nodeValue || '';
@@ -314,10 +337,10 @@ const AutofillCore = (() => {
   function isControl(el) {
     if (!el || el.nodeType !== 1) return false;
     const tag = tagOf(el);
-    if (tag === 'INPUT') return !NEVER_INPUT_TYPES.has(String(attr(el, 'type') || 'text').toLowerCase()) || false;
+    if (tag === 'INPUT') return !NEVER_INPUT_TYPES.has(typeAttr(el) || 'text');
     if (tag === 'SELECT' || tag === 'TEXTAREA') return true;
     if (attr(el, 'role') === 'combobox') return true;
-    if (tag === 'BUTTON' && String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return true;
+    if (tag === 'BUTTON' && opensListbox(el)) return true;
     return isChoiceLike(el) && !!choiceGroupOf(el);
   }
 
@@ -409,7 +432,7 @@ const AutofillCore = (() => {
     if (popup && popup !== 'false') return false;
     try {
       if (tagOf(el) === 'BUTTON') {
-        const type = String(attr(el, 'type') || '').toLowerCase();
+        const type = typeAttr(el);
         if (type === 'submit' || type === 'reset') return false;
         if (!type && el.closest('form')) return false;
       }
@@ -430,7 +453,7 @@ const AutofillCore = (() => {
   function hasOtherControl(node) {
     try {
       return Array.from(node.querySelectorAll('input, select, textarea, [role="combobox"], [contenteditable="true"]'))
-        .some(c => tagOf(c) !== 'INPUT' || String(attr(c, 'type') || 'text').toLowerCase() !== 'hidden');
+        .some(c => !isHiddenInput(c));
     } catch (_) { return true; }
   }
 
@@ -438,13 +461,13 @@ const AutofillCore = (() => {
   // buttons, so a group must sit in a form, expose a pressed/selected state,
   // be marked up as a group, or follow a question.
   function looksLikeQuestion(container, members, question) {
-    try { if (container.closest('form, fieldset, [role="group"], [role="radiogroup"]')) return true; } catch (_) { /* ignore */ }
+    if (closestSafe(container, 'form, fieldset, [role="group"], [role="radiogroup"]')) return true;
     if (members.some(hasChoiceState)) return true;
     return /\?\s*\*?\s*$/.test(question);
   }
 
   function isMultiChoice(container, question) {
-    try { if (container.closest('[aria-multiselectable="true"]')) return true; } catch (_) { /* ignore */ }
+    if (closestSafe(container, '[aria-multiselectable="true"]')) return true;
     return MULTI_RE.test(norm([question, attr(container, 'aria-label'), labelledByText(container)].join(' ')));
   }
 
@@ -478,13 +501,23 @@ const AutofillCore = (() => {
     return group ? (group.multi ? 'checkbox' : 'radio') : null;
   }
 
+  // Runs fn with a choice-group cache: the caller's when one is open (a scan
+  // in progress), else a fresh one dropped afterwards.
+  function withChoiceCache(fn) {
+    const outer = choiceCache;
+    if (!outer) choiceCache = new Map();
+    try {
+      return fn();
+    } finally {
+      choiceCache = outer;
+    }
+  }
+
   // Finding a group reads the question text before it, which can ask about a
   // neighbouring group, which reads text that reaches back to this one. A
   // lookup in progress is cached as "no group" so that loop ends at once.
   function choiceGroupOf(el) {
-    const outer = choiceCache;
-    if (!outer) choiceCache = new Map();
-    try {
+    return withChoiceCache(() => {
       if (!choiceCache.has(el)) {
         choiceCache.set(el, null);
         const group = findChoiceGroup(el);
@@ -492,9 +525,7 @@ const AutofillCore = (() => {
         if (group) group.members.forEach(m => choiceCache.set(m, group));
       }
       return choiceCache.get(el);
-    } finally {
-      if (!outer) choiceCache = null;
-    }
+    });
   }
 
   // Attribute and class text that changes when a button is picked, for
@@ -506,30 +537,9 @@ const AutofillCore = (() => {
 
   function containsControl(node, exclude) {
     if (!node || node.nodeType !== 1) return false;
-    if (isControl(node) && !(exclude && exclude.has(node))) return true;
-    let found = false;
-    try {
-      found = Array.from(node.querySelectorAll(CONTROL_SELECTOR)).some(c => isControl(c) && !(exclude && exclude.has(c)));
-    } catch (_) { found = false; }
-    return found;
-  }
-
-  function prevSibling(node) {
-    if (node.previousSibling !== undefined) return node.previousSibling;
-    const p = node.parentNode;
-    if (!p) return null;
-    const kids = childNodesOf(p);
-    const i = kids.indexOf(node);
-    return i > 0 ? kids[i - 1] : null;
-  }
-
-  function nextSibling(node) {
-    if (node.nextSibling !== undefined) return node.nextSibling;
-    const p = node.parentNode;
-    if (!p) return null;
-    const kids = childNodesOf(p);
-    const i = kids.indexOf(node);
-    return i >= 0 && i < kids.length - 1 ? kids[i + 1] : null;
+    const counts = c => isControl(c) && !(exclude && exclude.has(c));
+    if (counts(node)) return true;
+    try { return Array.from(node.querySelectorAll(CONTROL_SELECTOR)).some(counts); } catch (_) { return false; }
   }
 
   // --- label extraction ----------------------------------------------------------
@@ -557,10 +567,13 @@ const AutofillCore = (() => {
   }
 
   function wrappingLabelText(el) {
-    try {
-      const label = el.parentElement && el.parentElement.closest ? el.parentElement.closest('label') : null;
-      return label ? cleanText(textOf(label)) : '';
-    } catch (_) { return ''; }
+    const label = closestSafe(el.parentElement, 'label');
+    return label ? cleanText(textOf(label)) : '';
+  }
+
+  function legendText(fieldset) {
+    const legend = fieldset.querySelector && fieldset.querySelector('legend');
+    return legend ? cleanText(textOf(legend)) : '';
   }
 
   function labelledByText(el) {
@@ -595,9 +608,8 @@ const AutofillCore = (() => {
     for (let depth = 0; depth < 6 && node; depth++) {
       const tag = tagOf(node);
       if (node !== el && tag === 'FIELDSET') {
-        const legend = node.querySelector && node.querySelector('legend');
-        const t = legend ? collapse(textOf(legend)) : '';
-        if (t) return cleanText(t);
+        const t = legendText(node);
+        if (t) return t;
       }
       if (tag === 'FORM' || tag === 'BODY' || node.host) return '';
       let sib = prevSibling(node);
@@ -621,18 +633,9 @@ const AutofillCore = (() => {
     return '';
   }
 
-  function fieldLabel(el, ctx, kind) {
-    const strategies = [
-      () => labelForText(el, ctx),
-      () => wrappingLabelText(el),
-      () => labelledByText(el),
-      () => cleanText(attr(el, 'aria-label') || ''),
-      () => (kind === 'checkbox' ? nextSiblingText(el) : ''),
-      () => precedingText(el, new Set([el])),
-      () => cleanText(attr(el, 'placeholder') || ''),
-      () => cleanText(attr(el, 'title') || ''),
-      () => cleanText(attr(el, 'name') || '')
-    ];
+  // The first non-empty text the strategies give, tried in order. A strategy
+  // that throws (odd markup, a detached node) counts as finding nothing.
+  function firstText(strategies) {
     for (const s of strategies) {
       let t = '';
       try { t = s(); } catch (_) { t = ''; }
@@ -641,22 +644,34 @@ const AutofillCore = (() => {
     return '';
   }
 
+  const attrText = (el, name) => cleanText(attr(el, name) || '');
+
+  // A field's question, best source first.
+  function fieldLabel(el, ctx, kind) {
+    return firstText([
+      () => labelForText(el, ctx),
+      () => wrappingLabelText(el),
+      () => labelledByText(el),
+      () => attrText(el, 'aria-label'),
+      () => (kind === 'checkbox' ? nextSiblingText(el) : ''),
+      () => precedingText(el, new Set([el])),
+      () => attrText(el, 'placeholder'),
+      () => attrText(el, 'title'),
+      () => attrText(el, 'name')
+    ]);
+  }
+
+  // One radio's / checkbox's / choice button's own answer text ("Yes").
   function optionLabel(input, ctx) {
-    const strategies = [
+    return firstText([
       () => labelForText(input, ctx),
       () => wrappingLabelText(input),
       () => labelledByText(input),
-      () => cleanText(attr(input, 'aria-label') || ''),
+      () => attrText(input, 'aria-label'),
       () => (tagOf(input) === 'INPUT' ? '' : cleanText(textOf(input))),
       () => nextSiblingText(input),
-      () => cleanText(attr(input, 'value') || '')
-    ];
-    for (const s of strategies) {
-      let t = '';
-      try { t = s(); } catch (_) { t = ''; }
-      if (t) return t;
-    }
-    return '';
+      () => attrText(input, 'value')
+    ]);
   }
 
   // --- descriptors ---------------------------------------------------------------
@@ -667,29 +682,25 @@ const AutofillCore = (() => {
     if (tag === 'SELECT') return 'select';
     if (tag === 'TEXTAREA') return 'textarea';
     if (tag === 'INPUT') {
-      const type = String(attr(el, 'type') || 'text').toLowerCase();
+      const type = typeAttr(el) || 'text';
       if (NEVER_INPUT_TYPES.has(type)) return null;
       if (type === 'radio' || type === 'checkbox' || type === 'file') return type;
-      if (role === 'combobox') return 'combobox';
-      try { if (el.parentElement && el.parentElement.closest && el.parentElement.closest('[role="combobox"]')) return 'combobox'; } catch (_) { /* ignore */ }
+      if (role === 'combobox' || closestSafe(el.parentElement, '[role="combobox"]')) return 'combobox';
       if (SKIP_INPUT_TYPES.has(type)) return null;
       if (type === 'email' || type === 'tel' || type === 'url') return type;
       return 'text';
     }
     if (tag === 'BUTTON') {
-      const type = String(attr(el, 'type') || '').toLowerCase();
+      const type = typeAttr(el);
       if (type === 'submit' || type === 'reset') return null;
-      if (role === 'combobox' || String(attr(el, 'aria-haspopup') || '').toLowerCase() === 'listbox') return 'combobox';
+      if (role === 'combobox' || opensListbox(el)) return 'combobox';
       return choiceKind(el);
     }
     if (role === 'button' || role === 'option') return choiceKind(el);
     if (role === 'radio' || role === 'checkbox') {
       // Custom radios and checkboxes: only inside a group or form, so page
       // chrome toggles (cookie banners, menus) are not taken for questions.
-      try {
-        const scope = role === 'radio' ? '[role="radiogroup"]' : '[role="group"], form';
-        return el.closest(scope) ? role : null;
-      } catch (_) { return null; }
+      return closestSafe(el, role === 'radio' ? '[role="radiogroup"]' : '[role="group"], form') ? role : null;
     }
     if (role === 'combobox') {
       // ARIA 1.1 wrapper around a text input: the input is the field.
@@ -710,43 +721,54 @@ const AutofillCore = (() => {
     return Array.from(el.options || el.querySelectorAll('option'));
   }
 
+  // The options a select shows as picked (several in a multi-select).
+  function chosenOptions(el) {
+    return selectOptions(el).filter((o, i) => o.selected || i === el.selectedIndex);
+  }
+
   function optionText(o) {
     return collapse(o.text != null ? o.text : o.textContent);
   }
 
+  // Text of a dropdown's [role=option] row.
+  const nodeText = o => collapse(textOf(o));
+
   function comboboxText(el) {
     if (tagOf(el) === 'INPUT') return collapse(el.value);
-    return collapse(textOf(el));
+    return nodeText(el);
+  }
+
+  // A dropdown input is filled when it holds text or a react-select style
+  // chosen value sits beside it; any other dropdown when it shows text that
+  // is not a placeholder.
+  function comboboxFilled(el) {
+    if (tagOf(el) !== 'INPUT') {
+      const t = norm(comboboxText(el));
+      return !!t && !PLACEHOLDER_RE.test(t);
+    }
+    if (collapse(el.value)) return true;
+    let n = el.parentElement;
+    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+      try {
+        const v = n.querySelector('[class*="singleValue"], [class*="single-value"], [class*="multiValue"], [class*="multi-value"]');
+        if (v && nodeText(v)) return true;
+      } catch (_) { break; }
+    }
+    return false;
   }
 
   function isFilled(desc) {
     const el = desc.el;
     switch (desc.kind) {
-      case 'select': {
-        const opts = selectOptions(el);
-        const chosen = opts.filter((o, i) => o.selected || i === el.selectedIndex);
-        return chosen.some(o => !isPlaceholderOption(o));
-      }
+      case 'select':
+        return chosenOptions(el).some(o => !isPlaceholderOption(o));
       case 'radio':
       case 'checkbox':
         return currentValue(desc) !== '';
       case 'file':
         return !!(el.files && el.files.length);
-      case 'combobox': {
-        if (tagOf(el) === 'INPUT') {
-          if (collapse(el.value)) return true;
-          let n = el.parentElement;
-          for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
-            try {
-              const v = n.querySelector('[class*="singleValue"], [class*="single-value"], [class*="multiValue"], [class*="multi-value"]');
-              if (v && collapse(textOf(v))) return true;
-            } catch (_) { break; }
-          }
-          return false;
-        }
-        const t = norm(comboboxText(el));
-        return !!t && !PLACEHOLDER_RE.test(t);
-      }
+      case 'combobox':
+        return comboboxFilled(el);
       default:
         return collapse(el.value) !== '';
     }
@@ -774,15 +796,9 @@ const AutofillCore = (() => {
   function groupLabel(container, inputs, ctx) {
     const exclude = new Set(inputs);
     if (container) {
-      if (tagOf(container) === 'FIELDSET') {
-        const legend = container.querySelector('legend');
-        const t = legend ? cleanText(textOf(legend)) : '';
-        if (t) return t;
-      }
-      const lb = labelledByText(container);
-      if (lb) return lb;
-      const al = cleanText(attr(container, 'aria-label') || '');
-      if (al) return al;
+      const own = (tagOf(container) === 'FIELDSET' && legendText(container)) ||
+        labelledByText(container) || attrText(container, 'aria-label');
+      if (own) return own;
     }
     const t = precedingText(inputs[0], exclude);
     if (t) return t;
@@ -790,7 +806,7 @@ const AutofillCore = (() => {
       const pt = precedingText(container, exclude);
       if (pt) return pt;
     }
-    return cleanText(attr(inputs[0], 'name') || '');
+    return attrText(inputs[0], 'name');
   }
 
   function isRequired(el, rawLabel) {
@@ -817,18 +833,24 @@ const AutofillCore = (() => {
     if (extra && extra.group) desc.group = extra.group;
     if (extra && extra.inputs) desc.inputs = extra.inputs;
     desc.required = (desc.inputs || [el]).some(i => isRequired(i, '')) || isRequired(desc.group || el, label);
-    if (kind === 'select') {
-      desc.options = selectOptions(el).filter(o => !isPlaceholderOption(o)).map(optionText).filter(Boolean);
-    } else if ((kind === 'radio' || kind === 'checkbox') && desc.inputs && extra && extra.isGroup) {
-      desc.options = desc.inputs.map(i => optionLabel(i, ctx));
-    } else if (kind === 'combobox') {
+    desc.options = fieldOptions(desc, ctx, !!(extra && extra.isGroup));
+    return desc;
+  }
+
+  // The answers a field offers: a select's real options, a group's option
+  // labels, the rendered list a dropdown points at. [] when unknown.
+  function fieldOptions(desc, ctx, isGroup) {
+    const el = desc.el;
+    if (desc.kind === 'select') return selectOptions(el).filter(o => !isPlaceholderOption(o)).map(optionText).filter(Boolean);
+    if ((desc.kind === 'radio' || desc.kind === 'checkbox') && desc.inputs && isGroup) return desc.inputs.map(i => optionLabel(i, ctx));
+    if (desc.kind === 'combobox') {
       const listId = attr(el, 'aria-controls') || attr(el, 'aria-owns');
       const list = listId ? byId(rootNodeOf(el), listId) : null;
       if (list) {
-        try { desc.options = Array.from(list.querySelectorAll('[role="option"]')).map(o => collapse(textOf(o))).filter(Boolean); } catch (_) { /* ignore */ }
+        try { return Array.from(list.querySelectorAll('[role="option"]')).map(nodeText).filter(Boolean); } catch (_) { /* ignore */ }
       }
     }
-    return desc;
+    return [];
   }
 
   // Ant Design (TikTok's form) and other React kits render radios with no
@@ -837,15 +859,14 @@ const AutofillCore = (() => {
   // checkboxes group only inside a container marked as a group: two consent
   // boxes side by side are separate questions.
   function namelessGroup(el, type) {
-    const peer = c => tagOf(c) === 'INPUT' && String(attr(c, 'type') || 'text').toLowerCase() === type && !attr(c, 'name');
+    const peer = c => tagOf(c) === 'INPUT' && typeAttr(c) === type && !attr(c, 'name');
     let node = el.parentElement;
     for (let depth = 0; depth < 6 && node; depth++, node = node.parentElement) {
       const tag = tagOf(node);
       if (tag === 'FORM' || tag === 'BODY' || tag === 'HTML') break;
       let all = [];
       try { all = Array.from(node.querySelectorAll('input, select, textarea, [role="combobox"]')); } catch (_) { break; }
-      const other = all.some(c => !peer(c) && (tagOf(c) !== 'INPUT' || String(attr(c, 'type') || 'text').toLowerCase() !== 'hidden'));
-      if (other) break;
+      if (all.some(c => !peer(c) && !isHiddenInput(c))) break;
       const peers = all.filter(peer);
       if (peers.length < 2) continue;
       if (type === 'checkbox' && !(tag === 'FIELDSET' || attr(node, 'role') === 'group' || /group/i.test(String(attr(node, 'class') || '')))) break;
@@ -860,8 +881,7 @@ const AutofillCore = (() => {
       return choice ? choice.members : [el];
     }
     if (tagOf(el) !== 'INPUT') {
-      let group = null;
-      try { group = el.closest(type === 'radio' ? '[role="radiogroup"]' : '[role="group"]'); } catch (_) { group = null; }
+      const group = closestSafe(el, type === 'radio' ? '[role="radiogroup"]' : '[role="group"]');
       if (!group) return [el];
       let members = [];
       try { members = Array.from(group.querySelectorAll('[role="' + type + '"]')).filter(m => tagOf(m) !== 'INPUT'); } catch (_) { members = []; }
@@ -869,12 +889,10 @@ const AutofillCore = (() => {
     }
     const name = attr(el, 'name');
     if (!name) return namelessGroup(el, type);
-    let scope = null;
-    try { scope = el.closest('form'); } catch (_) { scope = null; }
-    if (!scope) scope = rootNodeOf(el);
+    const scope = closestSafe(el, 'form') || rootNodeOf(el);
     let all = [];
     try { all = Array.from(scope.querySelectorAll('input')); } catch (_) { all = [el]; }
-    const same = all.filter(i => String(attr(i, 'type') || '').toLowerCase() === type && attr(i, 'name') === name);
+    const same = all.filter(i => typeAttr(i) === type && attr(i, 'name') === name);
     return same.length ? same : [el];
   }
 
@@ -909,7 +927,7 @@ const AutofillCore = (() => {
   }
 
   function isIgnored(el) {
-    try { return !!(el.closest && el.closest(IGNORE_SELECTOR)); } catch (_) { return false; }
+    return !!closestSafe(el, IGNORE_SELECTOR);
   }
 
   function visibleEnough(el, kind) {
@@ -943,16 +961,11 @@ const AutofillCore = (() => {
     const base = root || defaultDocument();
     if (!base) return [];
     const includeFilled = !!(opts && opts.includeFilled);
-    const ctx = makeCtx();
-    const raw = [];
-    const outerCache = choiceCache;
-    choiceCache = outerCache || new Map();
-    try {
+    return withChoiceCache(() => {
+      const raw = [];
       collectControls(base, raw, 0);
-      return scanControls(raw, ctx, includeFilled);
-    } finally {
-      choiceCache = outerCache;
-    }
+      return scanControls(raw, makeCtx(), includeFilled);
+    });
   }
 
   function scanControls(raw, ctx, includeFilled) {
@@ -1263,62 +1276,83 @@ const AutofillCore = (() => {
     try { return !!(el && el.matches && el.matches(selector)); } catch (_) { return false; }
   }
 
+  // The match for one profile key, or why there is none: EEO keys only with
+  // the setting on, the resume only into file inputs (and nothing else into
+  // them), never an empty profile value.
+  function keyMatch(env, key, confidence, source) {
+    const { desc, profile, settings, resume } = env;
+    if (isEeoKey(key) && !settings.fillEeo) return { reason: 'eeo-disabled' };
+    if (key === 'resume') {
+      if (desc.kind !== 'file') return { reason: 'no-match' };
+      return resume && resume.dataUrl
+        ? { match: { profileKey: 'resume', value: resume, confidence, source } }
+        : { reason: 'no-value' };
+    }
+    if (desc.kind === 'file') return { reason: 'no-match' };
+    // A city dropdown searches places, and a bare city name matches every
+    // same-named town ("Plainview" is in NY and TX): give it the state too.
+    const value = (key === 'city' && desc.kind === 'combobox' && profileValue(profile, 'location')) ||
+      profileValue(profile, key);
+    if (!value) return { reason: 'no-value' };
+    return { match: { profileKey: key, value: presentValue(key, value, desc.kind), confidence, source } };
+  }
+
+  // The profile key a site adapter's fixed field selector gives this field.
+  function adapterKey(adapter, desc) {
+    const fields = adapter ? adapter.fields : null;
+    if (!Array.isArray(fields)) return null;
+    for (const f of fields) {
+      if (!f || !f.selector || !f.profileKey) continue;
+      if (descElements(desc).some(e => safeMatches(e, f.selector))) return f.profileKey;
+    }
+    return null;
+  }
+
+  // The learned rule for a label: this host's first, else the global one.
+  function learnedRule(rules, labelKey, host) {
+    if (!labelKey || !Array.isArray(rules) || !rules.length) return null;
+    const h = normHost(host);
+    const hostRule = h ? rules.find(r => r && r.labelKey === labelKey && r.host !== '*' && normHost(r.host) === h) : null;
+    return hostRule || rules.find(r => r && r.labelKey === labelKey && (r.host === '*' || !r.host)) || null;
+  }
+
+  // The profile key of the last autocomplete token LIT knows, or null.
+  function autocompleteKey(autocomplete) {
+    if (!autocomplete) return null;
+    const toks = autocomplete.split(/\s+/).filter(Boolean);
+    for (let i = toks.length - 1; i >= 0; i--) {
+      const key = AUTOCOMPLETE[toks[i]];
+      if (key) return key;
+    }
+    return null;
+  }
+
   // Returns { match } or { reason }. Reasons: 'eeo-disabled', 'no-value',
   // 'no-match'.
   function matchInternal(desc, profile, rules, host, opts) {
     const o = opts || {};
-    const settings = Object.assign({ fillEeo: false }, o.settings || {});
-    const resume = o.resume || null;
-    const make = (key, confidence, source) => {
-      if (isEeoKey(key) && !settings.fillEeo) return { reason: 'eeo-disabled' };
-      if (key === 'resume') {
-        if (desc.kind !== 'file') return { reason: 'no-match' };
-        return resume && resume.dataUrl
-          ? { match: { profileKey: 'resume', value: resume, confidence, source } }
-          : { reason: 'no-value' };
-      }
-      if (desc.kind === 'file') return { reason: 'no-match' };
-      // A city dropdown searches places, and a bare city name matches every
-      // same-named town ("Plainview" is in NY and TX): give it the state too.
-      const value = (key === 'city' && desc.kind === 'combobox' && profileValue(profile, 'location')) ||
-        profileValue(profile, key);
-      if (!value) return { reason: 'no-value' };
-      return { match: { profileKey: key, value: presentValue(key, value, desc.kind), confidence, source } };
-    };
+    const env = { desc, profile, settings: Object.assign({ fillEeo: false }, o.settings || {}), resume: o.resume || null };
+    const make = (key, confidence, source) => keyMatch(env, key, confidence, source);
 
     // 1. Site adapter fixed fields.
     const adapter = o.adapter !== undefined ? o.adapter : getSiteAdapter(o.url || (host ? 'https://' + host + '/' : null));
-    if (adapter && Array.isArray(adapter.fields)) {
-      for (const f of adapter.fields) {
-        if (!f || !f.selector || !f.profileKey) continue;
-        if (descElements(desc).some(e => safeMatches(e, f.selector))) return make(f.profileKey, 1, 'adapter');
-      }
-    }
+    const fixed = adapterKey(adapter, desc);
+    if (fixed) return make(fixed, 1, 'adapter');
 
-    // 2. Learned rules, this host before global.
-    const lk = desc.labelKey;
-    if (lk && Array.isArray(rules) && rules.length) {
-      const h = normHost(host);
-      const hostRule = h ? rules.find(r => r && r.labelKey === lk && r.host !== '*' && normHost(r.host) === h) : null;
-      const globalRule = rules.find(r => r && r.labelKey === lk && (r.host === '*' || !r.host));
-      const rule = hostRule || globalRule;
-      if (rule) {
-        if (rule.profileKey) return make(rule.profileKey, 1, 'rule');
-        if (rule.value != null && String(rule.value) !== '') {
-          if (!settings.fillEeo && looksEeo(desc)) return { reason: 'eeo-disabled' };
-          return { match: { value: String(rule.value), confidence: 1, source: 'rule' } };
-        }
+    // 2. Learned rules, this host before global. A rule that names neither a
+    // profile key nor a value falls through to the steps below.
+    const rule = learnedRule(rules, desc.labelKey, host);
+    if (rule) {
+      if (rule.profileKey) return make(rule.profileKey, 1, 'rule');
+      if (rule.value != null && String(rule.value) !== '') {
+        if (!env.settings.fillEeo && looksEeo(desc)) return { reason: 'eeo-disabled' };
+        return { match: { value: String(rule.value), confidence: 1, source: 'rule' } };
       }
     }
 
     // 3. autocomplete attribute.
-    if (desc.autocomplete) {
-      const toks = desc.autocomplete.split(/\s+/).filter(Boolean);
-      for (let i = toks.length - 1; i >= 0; i--) {
-        const key = AUTOCOMPLETE[toks[i]];
-        if (key) return make(key, 0.95, 'autocomplete');
-      }
-    }
+    const auto = autocompleteKey(desc.autocomplete);
+    if (auto) return make(auto, 0.95, 'autocomplete');
 
     // 4. Synonym dictionary, then the input type as a last structural hint.
     const hit = dictionaryLookup(desc);
@@ -1380,14 +1414,27 @@ const AutofillCore = (() => {
     try { el.dispatchEvent(ev); } catch (_) { /* a page handler threw; the value is already set */ }
   }
 
+  // What a person's edit fires, in order: frameworks commit on input or
+  // change, some validators only on blur.
+  const COMMIT_EVENTS = ['input', 'change', 'blur', 'focusout'];
+  const CHANGE_EVENTS = ['input', 'change'];
+
+  function fireEach(el, types) {
+    types.forEach(t => fire(el, t));
+  }
+
   function pad2(n) { return String(n).padStart(2, '0'); }
 
-  // type=date / month inputs only accept ISO forms.
+  // type=date / month inputs only accept ISO forms. An ISO date or month is
+  // converted by hand: Date reads "2027-06-01" as UTC midnight, so the local
+  // getters below would land on May 31 anywhere west of UTC.
   function formatForInput(el, value) {
-    const type = String(attr(el, 'type') || '').toLowerCase();
+    const type = typeAttr(el);
     if (type !== 'date' && type !== 'month') return value;
     if (type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
     if (type === 'month' && /^\d{4}-\d{2}$/.test(value)) return value;
+    const iso = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(value);
+    if (iso) return type === 'date' ? iso[1] + '-' + iso[2] + '-' + (iso[3] || '01') : iso[1] + '-' + iso[2];
     const d = new Date(value);
     if (isNaN(d.getTime())) return value;
     return type === 'date'
@@ -1398,10 +1445,7 @@ const AutofillCore = (() => {
   function fillText(el, value) {
     const v = formatForInput(el, String(value));
     nativeSet(el, 'value', v);
-    fire(el, 'input');
-    fire(el, 'change');
-    fire(el, 'blur');
-    fire(el, 'focusout');
+    fireEach(el, COMMIT_EVENTS);
     return v === '' ? String(el.value || '') === '' : String(el.value || '') !== '';
   }
 
@@ -1413,18 +1457,13 @@ const AutofillCore = (() => {
     const opt = opts[best.index];
     nativeSet(el, 'selectedIndex', best.index);
     try { opt.selected = true; } catch (_) { /* ignore */ }
-    fire(el, 'input');
-    fire(el, 'change');
-    fire(el, 'blur');
-    fire(el, 'focusout');
+    fireEach(el, COMMIT_EVENTS);
     return el.selectedIndex === best.index || opt.selected === true;
   }
 
-  // Click first: React and most frameworks hang radio / checkbox onChange off
-  // the click event. If a handler cancels it, set `checked` directly.
-  // Custom radios and choice buttons: ARIA state first, then the data
-  // attributes Radix / Headless UI / Chakra set, then class names, but only
-  // when no ARIA state says otherwise.
+  // Whether a radio, checkbox, or choice button is picked. Custom widgets:
+  // ARIA state first, then the data attributes Radix / Headless UI / Chakra
+  // set, then class names, but only when no ARIA state says otherwise.
   function isOn(input) {
     if (tagOf(input) === 'INPUT') return input.checked === true;
     if (STATE_ATTRS.some(a => attr(input, a) === 'true')) return true;
@@ -1435,6 +1474,8 @@ const AutofillCore = (() => {
     return STATE_CLASS_RE.test(String(attr(input, 'class') || ''));
   }
 
+  // Click first: React and most frameworks hang radio / checkbox onChange off
+  // the click event. If a handler cancels it, set `checked` directly.
   function setChecked(input, want) {
     if (tagOf(input) !== 'INPUT') {
       if (isOn(input) === want) return true;
@@ -1449,17 +1490,20 @@ const AutofillCore = (() => {
     try { if (typeof input.click === 'function') input.click(); } catch (_) { /* ignore */ }
     if (!!input.checked !== want) {
       nativeSet(input, 'checked', want);
-      fire(input, 'input');
-      fire(input, 'change');
+      fireEach(input, CHANGE_EVENTS);
     }
     return !!input.checked === want;
   }
 
+  // [label, value] per radio / checkbox / choice button, as bestOption takes.
+  function optionCandidates(inputs) {
+    const ctx = makeCtx();
+    return inputs.map(i => [optionLabel(i, ctx), String(attr(i, 'value') || '')]);
+  }
+
   function fillRadio(desc, value) {
     const inputs = descElements(desc);
-    const ctx = makeCtx();
-    const candidates = inputs.map(i => [optionLabel(i, ctx), String(attr(i, 'value') || '')]);
-    const best = bestOption(value, candidates);
+    const best = bestOption(value, optionCandidates(inputs));
     if (!best) return false;
     return setChecked(inputs[best.index], true);
   }
@@ -1475,8 +1519,7 @@ const AutofillCore = (() => {
       if (scoreOption(value, own) >= 0.65) return setChecked(input, true);
       return false;
     }
-    const ctx = makeCtx();
-    const candidates = inputs.map(i => [optionLabel(i, ctx), String(attr(i, 'value') || '')]);
+    const candidates = optionCandidates(inputs);
     // A learned answer arrives as "Python, Rust" (currentValue's form): each
     // part is its own pick unless the whole string names one option exactly.
     const whole = Array.isArray(value) ? null : bestOption(value, candidates);
@@ -1514,8 +1557,7 @@ const AutofillCore = (() => {
     const dt = new DataTransfer();
     dt.items.add(file);
     try { el.files = dt.files; } catch (_) { return false; }
-    fire(el, 'input');
-    fire(el, 'change');
+    fireEach(el, CHANGE_EVENTS);
     return !!(el.files && el.files.length);
   }
 
@@ -1523,6 +1565,18 @@ const AutofillCore = (() => {
 
   const timing = { comboWait: 1500, comboConfirm: 800, poll: 50 };
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // check() every timing.poll ms until it returns something truthy or `ms`
+  // pass; it always runs at least once. Resolves that value, or null.
+  async function pollUntil(check, ms) {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = check();
+      if (v) return v;
+      if (Date.now() >= end) return null;
+      await sleep(timing.poll);
+    }
+  }
 
   function mouse(el, type) {
     let ev = null;
@@ -1563,8 +1617,8 @@ const AutofillCore = (() => {
   function controlCount(node) {
     return Array.from(node.querySelectorAll('input, select, textarea, button')).filter(c => {
       const tag = tagOf(c);
-      if (tag === 'INPUT') return String(attr(c, 'type') || '').toLowerCase() !== 'hidden';
-      if (tag === 'BUTTON') return String(attr(c, 'aria-haspopup') || '').toLowerCase() === 'listbox';
+      if (tag === 'INPUT') return typeAttr(c) !== 'hidden';
+      if (tag === 'BUTTON') return opensListbox(c);
       return true;
     }).length;
   }
@@ -1574,7 +1628,7 @@ const AutofillCore = (() => {
     for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
       try {
         if (controlCount(n) > 1) break;
-        const texts = Array.from(n.querySelectorAll(CHOSEN_SELECTOR)).map(v => collapse(textOf(v))).filter(Boolean);
+        const texts = Array.from(n.querySelectorAll(CHOSEN_SELECTOR)).map(nodeText).filter(Boolean);
         if (texts.length) return Array.from(new Set(texts)).join(', ');
       } catch (_) { break; }
     }
@@ -1583,7 +1637,7 @@ const AutofillCore = (() => {
 
   function comboboxValue(el) {
     if (tagOf(el) === 'INPUT') return chosenNear(el) || collapse(el.value);
-    const t = collapse(comboboxText(el));
+    const t = nodeText(el);
     return PLACEHOLDER_RE.test(norm(t)) ? '' : t;
   }
 
@@ -1608,11 +1662,8 @@ const AutofillCore = (() => {
     const el = d.el;
     try {
       switch (d.kind) {
-        case 'select': {
-          const opts = selectOptions(el);
-          return opts.filter((o, i) => (o.selected || i === el.selectedIndex) && !isPlaceholderOption(o))
-            .map(optionText).filter(Boolean).join(', ');
-        }
+        case 'select':
+          return chosenOptions(el).filter(o => !isPlaceholderOption(o)).map(optionText).filter(Boolean).join(', ');
         case 'radio': {
           const on = descElements(d).find(isOn);
           return on ? (optionLabel(on, makeCtx()) || 'Yes') : '';
@@ -1664,12 +1715,16 @@ const AutofillCore = (() => {
   }
 
   async function waitForOptions(el, ms) {
-    const end = Date.now() + ms;
-    for (;;) {
+    return (await pollUntil(() => {
       const opts = listOptions(el);
-      if (opts.length || Date.now() >= end) return opts;
-      await sleep(timing.poll);
-    }
+      return opts.length ? opts : null;
+    }, ms)) || [];
+  }
+
+  // Types into a searchable dropdown's input the way a person would.
+  function setQuery(el, text) {
+    nativeSet(el, 'value', text);
+    fire(el, 'input');
   }
 
   // Any ARIA dropdown without a site adapter: open it (typing the value into
@@ -1682,35 +1737,30 @@ const AutofillCore = (() => {
     const isInput = tagOf(el) === 'INPUT';
     try { if (typeof el.focus === 'function') el.focus(); } catch (_) { /* ignore */ }
     press(el);
-    if (isInput) { nativeSet(el, 'value', want); fire(el, 'input'); }
+    if (isInput) setQuery(el, want);
     let opts = await waitForOptions(el, timing.comboWait);
     if (!opts.length && isInput) {
       // Some menus only open on an empty query or ArrowDown.
-      nativeSet(el, 'value', '');
-      fire(el, 'input');
+      setQuery(el, '');
       keyDown(el, 'ArrowDown');
       opts = await waitForOptions(el, timing.comboWait);
     }
-    const best = bestOption(want, opts.map(o => collapse(textOf(o))));
+    const best = bestOption(want, opts.map(nodeText));
     if (!best) {
-      if (isInput) { nativeSet(el, 'value', ''); fire(el, 'input'); }
+      if (isInput) setQuery(el, '');
       keyDown(el, 'Escape');
       return false;
     }
     const opt = opts[best.index];
-    const text = collapse(textOf(opt));
+    const text = nodeText(opt);
     press(opt);
-    const end = Date.now() + timing.comboConfirm;
-    for (;;) {
+    const took = await pollUntil(() => {
       const now = comboboxValue(el);
-      if (scoreOption(now, text) >= 0.65 || scoreOption(now, want) >= 0.65) return true;
-      if (attr(opt, 'aria-selected') === 'true') return true;
-      if (Date.now() >= end) break;
-      await sleep(timing.poll);
-    }
+      return scoreOption(now, text) >= 0.65 || scoreOption(now, want) >= 0.65 || attr(opt, 'aria-selected') === 'true';
+    }, timing.comboConfirm);
     // Clicked, and the menu closed, but the widget shows the value somewhere
     // unreadable: trust the click.
-    return opt.isConnected === false;
+    return took || opt.isConnected === false;
   }
 
   async function setValue(desc, value) {
@@ -1749,13 +1799,16 @@ const AutofillCore = (() => {
       (!desc.id && !desc.name && desc.labelKey && f.labelKey === desc.labelKey))) || null;
   }
 
+  // Adapter fixed fields the scan missed (hidden behind custom widgets, or
+  // outside the narrowed root), described as they are.
   function adapterExtras(adapter, base, descs) {
-    if (!adapter || !Array.isArray(adapter.fields)) return [];
+    const fields = adapter ? adapter.fields : null;
+    if (!Array.isArray(fields)) return [];
     const have = new Set();
     descs.forEach(d => descElements(d).forEach(e => have.add(e)));
     const ctx = makeCtx();
     const extras = [];
-    adapter.fields.forEach(f => {
+    fields.forEach(f => {
       if (!f || !f.selector) return;
       let els = [];
       try { els = Array.from(base.querySelectorAll(f.selector)); } catch (_) { els = []; }
@@ -1771,6 +1824,50 @@ const AutofillCore = (() => {
     return extras;
   }
 
+  // The adapter's narrower form root inside `base`, else `base` itself.
+  function adapterRoot(adapter, base) {
+    if (!adapter || typeof adapter.scanRoot !== 'function') return base;
+    try {
+      const doc = isDocument(base) ? base : (base.ownerDocument || base);
+      const narrowed = adapter.scanRoot(doc);
+      if (narrowed && (isDocument(base) || (base.contains && base.contains(narrowed)))) return narrowed;
+    } catch (_) { /* a broken scanRoot means the whole base */ }
+    return base;
+  }
+
+  // One field of a run: found again if the page replaced it, matched, then
+  // filled through the adapter's fill or setValue. The outcome goes into
+  // `report` (filled, skipped with a reason, or unmatched).
+  async function runField(desc, scope, report) {
+    let d = desc;
+    try {
+      if (d.filled) { report.skipped.push({ desc: d, reason: 'already-filled' }); return; }
+      if (!isConnected(d.el)) {
+        const fresh = refind(d, scope.root);
+        if (!fresh) { report.skipped.push({ desc: d, reason: 'detached' }); return; }
+        if (fresh.filled) { report.skipped.push({ desc: fresh, reason: 'already-filled' }); return; }
+        d = fresh;
+      }
+      const res = matchInternal(d, scope.profile, scope.rules, scope.host, scope.matchOpts);
+      if (!res.match) {
+        if (res.reason === 'eeo-disabled') report.skipped.push({ desc: d, reason: 'eeo-disabled' });
+        else report.unmatched.push(d);
+        return;
+      }
+      const m = res.match;
+      const min = m.source === 'answer' ? 0.5 : 0.6;
+      if (m.confidence < min) { report.unmatched.push(d); return; }
+      const adapter = scope.matchOpts.adapter;
+      let ok;
+      if (adapter && typeof adapter.fill === 'function') ok = await adapter.fill(d, m.value);
+      if (ok === undefined) ok = await setValue(d, m.value);
+      if (ok) report.filled.push({ desc: d, match: m });
+      else report.skipped.push({ desc: d, reason: d.kind === 'combobox' ? 'unsupported-widget' : 'fill-failed' });
+    } catch (e) {
+      report.skipped.push({ desc: d, reason: 'error', error: String((e && e.message) || e) });
+    }
+  }
+
   async function run(options) {
     const o = options || {};
     const report = { filled: [], skipped: [], unmatched: [] };
@@ -1782,49 +1879,184 @@ const AutofillCore = (() => {
 
     const base = o.root || defaultDocument();
     if (!base) return report;
-    let root = base;
-    if (adapter && typeof adapter.scanRoot === 'function') {
-      try {
-        const doc = isDocument(base) ? base : (base.ownerDocument || base);
-        const narrowed = adapter.scanRoot(doc);
-        if (narrowed && (isDocument(base) || (base.contains && base.contains(narrowed)))) root = narrowed;
-      } catch (_) { root = base; }
-    }
+    const root = adapterRoot(adapter, base);
 
     let descs = [];
     try { descs = scanFields(root, { includeFilled: true }); } catch (_) { descs = []; }
     try { descs = descs.concat(adapterExtras(adapter, base, descs)); } catch (_) { /* fixed fields are optional */ }
 
-    const matchOpts = { settings, answers: o.answers || [], resume: o.resume || null, adapter, url };
-    for (let desc of descs) {
-      try {
-        if (desc.filled) { report.skipped.push({ desc, reason: 'already-filled' }); continue; }
-        if (!isConnected(desc.el)) {
-          const fresh = refind(desc, root);
-          if (!fresh) { report.skipped.push({ desc, reason: 'detached' }); continue; }
-          if (fresh.filled) { report.skipped.push({ desc: fresh, reason: 'already-filled' }); continue; }
-          desc = fresh;
-        }
-        const res = matchInternal(desc, o.profile || {}, o.rules || [], host, matchOpts);
-        if (!res.match) {
-          if (res.reason === 'eeo-disabled') report.skipped.push({ desc, reason: 'eeo-disabled' });
-          else report.unmatched.push(desc);
-          continue;
-        }
-        const m = res.match;
-        const min = m.source === 'answer' ? 0.5 : 0.6;
-        if (m.confidence < min) { report.unmatched.push(desc); continue; }
-        let ok;
-        if (adapter && typeof adapter.fill === 'function') ok = await adapter.fill(desc, m.value);
-        if (ok === undefined) ok = await setValue(desc, m.value);
-        if (ok) report.filled.push({ desc, match: m });
-        else report.skipped.push({ desc, reason: desc.kind === 'combobox' ? 'unsupported-widget' : 'fill-failed' });
-      } catch (e) {
-        report.skipped.push({ desc, reason: 'error', error: String((e && e.message) || e) });
-      }
-    }
+    // One field at a time, in page order.
+    const scope = {
+      root,
+      host,
+      profile: o.profile || {},
+      rules: o.rules || [],
+      matchOpts: { settings, answers: o.answers || [], resume: o.resume || null, adapter, url }
+    };
+    for (const desc of descs) await runField(desc, scope, report);
     return report;
   }
+
+  // --- site adapter kit ------------------------------------------------------------
+  // The widget helpers the Greenhouse, Ashby and Workday adapters drive their
+  // custom dropdowns and buttons with (content/autofill/sites/). They are not
+  // the engine's helpers above and behave differently: option text compares
+  // in a plain ASCII form, events are built from the page's own window event
+  // classes with the given init (key codes, buttons), and waits watch the DOM
+  // with a MutationObserver plus a slow poll. Each adapter passes its own
+  // timeouts, so its `timing` object stays the knob tests and callers turn.
+  const siteKit = (() => {
+    const win = () => (typeof window !== 'undefined' ? window : null);
+
+    const norm = s => String(s == null ? '' : s).toLowerCase()
+      .replace(/&/g, ' and ').replace(/[^a-z0-9+]+/g, ' ').trim();
+
+    const ALIASES = [
+      ['united states', 'united states of america', 'us', 'usa', 'u s', 'u s a'],
+      ['united kingdom', 'uk', 'u k', 'great britain']
+    ];
+    const canon = s => { for (const g of ALIASES) if (g.includes(s)) return g[0]; return s; };
+
+    // How well option text `label` fits `value` (note the order: the label
+    // comes first, unlike AutofillCore.scoreOption). 1 exact, the place score
+    // for "City, ST" values, 0.95 alias, 0.9 yes/no prefix ("Yes, I am..."),
+    // 0.7-0.8 whole-word containment (shorter options win), then token
+    // Jaccard scaled to 0.6.
+    function scoreText(label, value) {
+      const o = norm(label);
+      const v = norm(value);
+      if (!o || !v) return 0;
+      if (o === v) return 1;
+      const loc = scoreLocation(value, label);
+      if (loc !== null) return loc;
+      if (canon(o) === canon(v)) return 0.95;
+      if (v === 'yes' || v === 'no') return new RegExp('^' + v + '\\b').test(o) ? 0.9 : 0;
+      if ((' ' + o + ' ').includes(' ' + v + ' ')) return 0.7 + 0.1 * (v.length / o.length);
+      if ((' ' + v + ' ').includes(' ' + o + ' ')) return 0.6 + 0.1 * (o.length / v.length);
+      const a = new Set(o.split(' '));
+      const b = new Set(v.split(' '));
+      let inter = 0;
+      a.forEach(t => { if (b.has(t)) inter++; });
+      return 0.6 * inter / (a.size + b.size - inter);
+    }
+
+    // The option node whose text fits `value` best, or null below 0.5.
+    function bestNode(nodes, value) {
+      let best = null;
+      let bestScore = 0;
+      for (const n of nodes) {
+        const s = scoreText(n.textContent, value);
+        if (s > bestScore) { best = n; bestScore = s; }
+      }
+      return bestScore >= 0.5 ? best : null;
+    }
+
+    function fire(el, type, init) {
+      const W = win();
+      const opts = Object.assign({ bubbles: true, cancelable: true, composed: true }, init);
+      const C = !W ? null
+        : /^pointer/.test(type) ? (W.PointerEvent || W.MouseEvent)
+        : /^(mouse|click)/.test(type) ? W.MouseEvent
+        : /^key/.test(type) ? W.KeyboardEvent
+        : W.Event;
+      let ev;
+      if (C) {
+        ev = new C(type, opts);
+      } else {
+        ev = Object.assign({ type, defaultPrevented: false }, opts);
+        ev.preventDefault = function preventDefault() { this.defaultPrevented = true; };
+        ev.stopPropagation = function stopPropagation() {};
+      }
+      el.dispatchEvent(ev);
+    }
+
+    // The full sequence a real click produces; widgets differ on which one they
+    // listen to (react-select opens on mousedown/mouseup, options select on click).
+    function press(el) {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(t =>
+        fire(el, t, { button: 0, buttons: /down$/.test(t) ? 1 : 0 }));
+    }
+
+    // Sets a search box's text through the native setter (so React sees it)
+    // and fires input.
+    function typeInto(input, text) {
+      const W = win();
+      const proto = W && (W.HTMLTextAreaElement && input instanceof W.HTMLTextAreaElement
+        ? W.HTMLTextAreaElement.prototype : W.HTMLInputElement && W.HTMLInputElement.prototype);
+      const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) desc.set.call(input, text); else input.value = text;
+      fire(input, 'input');
+    }
+
+    function key(el, name, code) {
+      fire(el, 'keydown', { key: name, code: name, keyCode: code, which: code });
+      fire(el, 'keyup', { key: name, code: name, keyCode: code, which: code });
+    }
+
+    // Resolves with the first truthy result of `find` (a function, or a
+    // selector looked up under `root`; an empty array does not count),
+    // re-checked on every DOM mutation under `root` and on a slow poll as a
+    // backstop, or null after `timeout` ms. Always disconnects its observer.
+    function waitFor(find, root, timeout) {
+      const probe = typeof find === 'string' ? () => root.querySelector(find) : find;
+      return new Promise(resolve => {
+        let done = false;
+        let obs = null;
+        let poll = null;
+        let timer = null;
+        const finish = v => {
+          if (done) return;
+          done = true;
+          if (obs) obs.disconnect();
+          clearInterval(poll);
+          clearTimeout(timer);
+          resolve(v || null);
+        };
+        const check = () => {
+          let v = null;
+          try { v = probe(); } catch (e) { v = null; }
+          if (v && !(Array.isArray(v) && !v.length)) finish(v);
+        };
+        check();
+        if (done) return;
+        if (typeof MutationObserver === 'function' && root) {
+          obs = new MutationObserver(check);
+          obs.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+        }
+        poll = setInterval(check, 100);
+        timer = setTimeout(() => finish(null), timeout);
+      });
+    }
+
+    // Types `value` into a search box and resolves the best option node the
+    // results offer, or null. Place searches can miss "Plainview, NY", so a
+    // "City, ST" value that finds nothing is searched again by the city
+    // alone, still picking the option in the right state; that second wait
+    // holds out for a matching option because the old query's results linger
+    // a moment. `options()` lists the result nodes on screen right now.
+    async function searchFor(input, value, options, root, timeout) {
+      typeInto(input, String(value));
+      let hit = bestNode(await waitFor(options, root, timeout) || [], value);
+      if (!hit && /,/.test(value)) {
+        typeInto(input, String(value).split(',')[0].trim());
+        hit = await waitFor(() => bestNode(options(), value), root, timeout);
+      }
+      return hit;
+    }
+
+    // An adapter's matches(url) for a hostname pattern; url is a string or URL.
+    function hostMatcher(hosts) {
+      return function matches(url) {
+        try {
+          return hosts.test(new URL(String(url && url.href ? url.href : url)).hostname);
+        } catch (e) {
+          return false;
+        }
+      };
+    }
+
+    return { norm, scoreText, bestNode, fire, press, typeInto, key, waitFor, searchFor, hostMatcher, sleep };
+  })();
 
   return {
     normalizeLabel,
@@ -1847,6 +2079,7 @@ const AutofillCore = (() => {
     isFilled,
     currentValue,
     refindField: (desc, root) => refind(desc, root || defaultDocument()),
+    siteKit,
     timing,
     PROFILE_KEYS: PROFILE_KEYS.slice(),
     DERIVED_KEYS: DERIVED_KEYS.slice(),

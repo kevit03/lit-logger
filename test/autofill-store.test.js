@@ -165,6 +165,22 @@ async function testNormalizeLabelThroughStore() {
     const saved = await store.saveAnswer({ question: input, answer: 'x' });
     assert.strictEqual(saved.labelKey, expected, 'normalizeLabel(' + JSON.stringify(input) + ')');
   }
+  // The store's private copy must agree with AutofillCore.normalizeLabel, or
+  // learned rules stop matching the fields they were learned on.
+  const core = require('../shared/autofill-core');
+  const corpus = cases.map(c => c[0]).concat([
+    'Will you REQUIRE sponsorship? *', '**Cover letter** (optional)', 'Salary -- range ($)', 'A & B / C',
+    'Résumé/CV', 'Not required', 'Phone #', '(Optional)', '   *  ', 'Start date: mm/dd/yyyy', 'requirement'
+  ]);
+  for (const input of corpus) {
+    const want = core.normalizeLabel(input);
+    if (!want) {
+      await expectReject(store.learnRule({ host: '*', labelKey: input, value: 'x' }), /labelKey/, 'empty after normalizing: ' + JSON.stringify(input));
+      continue;
+    }
+    const rule = await store.learnRule({ host: '*', labelKey: input, value: 'x' });
+    assert.strictEqual(rule.labelKey, want, 'store and core agree on ' + JSON.stringify(input));
+  }
   cleanup();
 }
 

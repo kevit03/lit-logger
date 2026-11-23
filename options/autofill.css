@@ -221,6 +221,25 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .save-status.is-saved { color: var(--success); }
 .save-status.is-error { color: var(--danger); }
 
+/* The status column: a link to the Applications page, then the indicator. */
+.top-end {
+  grid-area: status;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.top-link {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+.top-link:hover { text-decoration: underline; }
+
 /* ===== Page and panels ===== */
 .page { max-width: 960px; margin: 0 auto; padding: 40px 24px 120px; }
 .panel { display: flex; flex-direction: column; gap: 16px; animation: panel-in 0.24s var(--ease); }
@@ -271,6 +290,27 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .progress-text { font-size: 13px; font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .meter { width: 140px; height: 8px; border-radius: var(--radius-pill); background: var(--surface-3); overflow: hidden; }
 .meter span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width 0.4s var(--ease); }
+.progress.is-complete .meter span { background: var(--success); }
+/* "Next: Phone" takes you to the first field still to fill (or to check). */
+.progress-next {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+  white-space: nowrap;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.progress-next:hover { text-decoration: underline; }
+.progress-next.is-warn { color: var(--warn); }
+
+/* A field that looks off: a short note under it, still saved as typed. */
+.field-msg { font-size: var(--fs-sm); color: var(--warn); line-height: 1.4; }
+.input[aria-invalid="true"] { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
+.key-hint { font-size: var(--fs-xs); color: var(--text-3); }
+/* Brief ring on the field "Next" jumped to, so the eye finds it. */
+.field.is-target .input, .field.is-target .segmented, .field.is-target .stepper {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 
 /* One card per group: its name and count on the left, its fields on the right. */
 .profile-form { display: flex; flex-direction: column; gap: 16px; }
@@ -712,6 +752,8 @@ body.pt-dark .switch:checked::after { background: var(--on-accent); }
   .row-field .row-actions, .input-key, .input-model { width: 100%; }
   .row-field .row-actions .input-key { flex: 1; width: auto; min-width: 0; }
   .meter { width: 96px; }
+  .progress { flex-wrap: wrap; border-radius: var(--radius-md); }
+  .top-link { font-size: var(--fs-xs); }
   .dropzone:not(.is-empty) { flex-wrap: wrap; }
   .dropzone:not(.is-empty) .resume-actions { width: 100%; justify-content: flex-end; }
   .save-status.is-idle { display: none; }

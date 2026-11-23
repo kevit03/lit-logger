@@ -91,6 +91,12 @@ function extendChrome(mock) {
       if (!windows.has(id)) throw new Error('No window with id: ' + id + '.');
       return Object.assign(windows.get(id), opts);
     },
+    removedCalls: [],
+    async remove(id) {
+      this.removedCalls.push(id);
+      if (!windows.has(id)) throw new Error('No window with id: ' + id + '.');
+      this.close(id);
+    },
     // Test helper: the user closes the whole window.
     close(id) {
       windows.delete(id);
@@ -376,42 +382,91 @@ async function run() {
     console.log('[PASS] A vanished or closed batch window is replaced');
   }
 
-  // 11. Stop, in-flight reports after stop, clear, and the alarm lifetime.
+  // 11. Stop: nothing new opens and nothing more is submitted. Queued jobs
+  //     are skipped, tabs still looking for a form close, a form being
+  //     filled stays open for the user, a job already submitting reports its
+  //     result. Then clear, and the alarm lifetime.
   {
     const env = setup();
     const { mock } = env;
     await env.boot();
-    await env.send({ type: 'LIT_BATCH_START', concurrency: 2, jobs: jobs(5) });
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 3, jobs: jobs(6) });
     await env.settle();
+    const t1 = env.job('job1').tabId;
+    const t2 = env.job('job2').tabId;
+    const t3 = env.job('job3').tabId;
+    const win = env.batch().windowId;
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t1));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t2));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, env.fromTab(t2));
+    await env.settle();
+    assert.deepStrictEqual(env.batch().jobs.map(j => j.status), ['filling', 'submitting', 'opening', 'queued', 'queued', 'queued']);
+
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_STOP' }), { ok: true });
     await env.settle();
     let b = env.batch();
     assert.strictEqual(b.status, 'stopped');
-    assert.deepStrictEqual(b.jobs.map(j => j.status), ['opening', 'opening', 'skipped', 'skipped', 'skipped']);
+    assert.deepStrictEqual(b.jobs.map(j => j.status), ['needs-you', 'submitting', 'skipped', 'skipped', 'skipped', 'skipped']);
+    assert.strictEqual(env.job('job1').reason, 'Stopped before submitting');
     assert.ok(b.jobs.slice(2).every(j => j.reason === 'Stopped'));
-    assert.ok(mock.alarms.store.has('lit-batch-tick'), 'the alarm stays while tabs are in flight');
-    const t1 = env.job('job1').tabId;
-    const t2 = env.job('job2').tabId;
-    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t1));
-    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_UPDATE', status: 'ready', filled: 12 }, env.fromTab(t1)), { ok: true }, 'in-flight jobs still report');
+    assert.ok(mock.tabs.store.has(t1), 'a half-filled form stays open for the user');
+    assert.ok(!mock.tabs.store.has(t3), 'a tab that never found its form is closed');
+    assert.strictEqual(env.job('job3').tabId, null);
+    assert.ok(mock.alarms.store.has('lit-batch-tick'), 'the alarm stays while a job is submitting');
+
+    // The filling driver asks to submit: refused, so it stands down.
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, env.fromTab(t1)), { ok: false }, 'no submit after Stop');
+    // The job that already pressed Submit still reports.
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitted' }, env.fromTab(t2)), { ok: true }, 'in-flight submits still report');
     await env.settle();
-    assert.strictEqual(env.job('job1').status, 'ready');
-    assert.strictEqual(env.job('job1').reason, 'Filled. Review and submit.');
-    assert.ok(mock.tabs.store.has(t1), 'a ready tab is left open');
-    assert.ok(!env.batch().jobs.some(j => j.status === 'queued' || j.status === 'opening' && j.jobId !== 'job2'), 'nothing new launched after stop');
-    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(t2));
-    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'needs-you', reason: 'CAPTCHA' }, env.fromTab(t2));
-    await env.settle();
+    assert.strictEqual(env.job('job2').status, 'submitted');
     assert.ok(!mock.alarms.store.has('lit-batch-tick'), 'the alarm goes when nothing is in flight');
+    assert.ok(!env.batch().jobs.some(j => j.status === 'queued' || j.status === 'opening'), 'nothing new launched after stop');
+    // The submitted tab closes; the window stays for the tab that needs you.
+    await env.advance(env.LB.CLOSE_DELAY_MS);
+    await env.settle();
+    assert.ok(!mock.tabs.store.has(t2));
+    assert.strictEqual(env.batch().windowId, win, 'the window stays while a tab needs you');
+    assert.ok(mock.windows.store.has(win));
+    // Once the user closes that tab, the batch window goes too.
+    await mock.tabs.remove(t1);
+    await env.settle();
+    assert.strictEqual(env.job('job1').status, 'needs-you', 'a finished job keeps its result');
+    assert.strictEqual(env.job('job1').tabId, null, 'but forgets its closed tab');
+    assert.strictEqual(env.batch().windowId, null);
+    assert.deepStrictEqual(mock.windows.removedCalls, [win], 'the empty batch window is closed');
+
     assert.strictEqual(env.batch().status, 'stopped');
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_CLEAR' }), { ok: true });
     await env.settle();
     assert.strictEqual(env.batch(), undefined, 'clear removes the batch');
     assert.strictEqual((await env.send({ type: 'LIT_BATCH_STOP' })).ok, false, 'nothing to stop');
-    // A new batch may start after the old one ended.
+    // A new batch may start after the old one ended, in a new window.
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_START', jobs: jobs(1) }), { ok: true });
+    await env.settle();
+    assert.strictEqual(mock.windows.createdCalls.length, 2);
     uninstallMockChrome();
-    console.log('[PASS] Stop skips the queue but keeps in-flight reports; clear; alarm only while needed');
+    console.log('[PASS] Stop skips the queue, closes tabs with no form, keeps filled forms for you, refuses later submits; window closes when empty');
+  }
+
+  // 11a. Stop right after Start: every tab was still opening, so every tab
+  //      and the batch window close.
+  {
+    const env = setup();
+    const { mock } = env;
+    await env.boot();
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 2, jobs: jobs(4) });
+    await env.settle();
+    const win = env.batch().windowId;
+    await env.send({ type: 'LIT_BATCH_STOP' });
+    await env.settle();
+    assert.deepStrictEqual(env.batch().jobs.map(j => j.status), ['skipped', 'skipped', 'skipped', 'skipped']);
+    assert.strictEqual(Array.from(mock.tabs.store.values()).filter(t => t.windowId === win).length, 0, 'no tabs left behind');
+    assert.ok(!mock.windows.store.has(win), 'the batch window is gone');
+    assert.strictEqual(env.batch().windowId, null);
+    assert.ok(!mock.alarms.store.has('lit-batch-tick'));
+    uninstallMockChrome();
+    console.log('[PASS] Stop during opening closes every tab and the batch window');
   }
 
   // 11b. Remove: a queued job is skipped and never opens; a started one stays.

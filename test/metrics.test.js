@@ -209,6 +209,44 @@ async function run() {
     uninstallMockChrome();
   }
 
+  // Editing, hiding, and reordering goals (built-ins included)
+  {
+    const { TrackerStorage } = getFreshStorage({ metrics: baseMetrics() });
+    const custom = await TrackerStorage.addMetric({ name: 'Coffee chats', unit: 'chats', dailyGoal: 1 });
+
+    const renamed = await TrackerStorage.updateMetric('jobs', { name: 'Applications', unit: 'applications', color: '#3B7EA1', icon: 'mail' });
+    assert.strictEqual(renamed.name, 'Applications', 'built-in goals can be renamed');
+    let list = await TrackerStorage.getMetrics();
+    const jobs = list.find(m => m.id === 'jobs');
+    assert.strictEqual(jobs.unit, 'applications');
+    assert.strictEqual(jobs.color, '#3B7EA1');
+    assert.strictEqual(jobs.icon, 'mail');
+    assert.strictEqual(await TrackerStorage.updateMetric('jobs', { name: '   ' }), null, 'an empty name is refused');
+    assert.strictEqual(await TrackerStorage.updateMetric('jobs', { color: 'red' }), null, 'a bad color is refused');
+    assert.strictEqual(await TrackerStorage.updateMetric('jobs', { icon: 'rocket' }), null, 'an unknown icon is refused');
+
+    assert.strictEqual(await TrackerStorage.setMetricHidden('jobs', true), true, 'job applications can be hidden');
+    assert.strictEqual(await TrackerStorage.setMetricHidden('leetcode', true), true);
+    list = await TrackerStorage.getMetrics();
+    assert.deepStrictEqual(list.filter(m => !m.hidden).map(m => m.id), [custom.id]);
+    assert.strictEqual(await TrackerStorage.setMetricHidden(custom.id, true), false, 'the last visible goal cannot be hidden');
+    assert.strictEqual(await TrackerStorage.setMetricHidden('jobs', false), true, 'a hidden goal comes back');
+    list = await TrackerStorage.getMetrics();
+    assert.strictEqual(list.find(m => m.id === 'jobs').hidden, false);
+
+    await TrackerStorage.reorderMetrics([custom.id, 'leetcode', 'jobs']);
+    list = await TrackerStorage.getMetrics();
+    assert.deepStrictEqual(list.map(m => m.id), [custom.id, 'leetcode', 'jobs'], 'tabs follow the saved order');
+    const later = await TrackerStorage.addMetric({ name: 'Follow-ups' });
+    list = await TrackerStorage.getMetrics();
+    assert.strictEqual(list[list.length - 1].id, later.id, 'a goal added after reordering goes last');
+
+    console.log('[PASS] Goals can be renamed, recolored, hidden (never all), and reordered');
+    delete global.TrackerAuth;
+    delete global.TrackerStorage;
+    uninstallMockChrome();
+  }
+
   console.log('--- test/metrics.test.js COMPLETED SUCCESSFULLY ---\n');
 }
 

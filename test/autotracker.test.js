@@ -316,6 +316,16 @@ async function run() {
     const none = await core.dispatch(adapter, { id: 'z' }, { document: doc, storage: { addLog: undefined }, toast: false });
     assert.strictEqual(none.reason, 'no-storage');
 
+    // A goal hidden from the board stops auto-logging, without claiming the
+    // dedupe key, and resumes once it is shown again.
+    await storage.setMetricHidden('leetcode', true);
+    const paused = await core.dispatch(adapter, { id: 'hidden-one', title: 'Hidden One' }, { document: doc, storage, toast: false });
+    assert.strictEqual(paused.logged, false);
+    assert.strictEqual(paused.reason, 'hidden');
+    await storage.setMetricHidden('leetcode', false);
+    const resumed = await core.dispatch(adapter, { id: 'hidden-one', title: 'Hidden One' }, { document: doc, storage, toast: false });
+    assert.strictEqual(resumed.logged, true, 'showing the goal again resumes auto-logging');
+
     // Toast: rendered inside a shadow root, prefixed, no emoji, self-dismissing.
     const host = doc.getElementById(core.TOAST_HOST_ID);
     assert.ok(host, 'toast host element mounted on body');

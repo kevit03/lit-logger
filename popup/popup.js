@@ -221,6 +221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalReturnFocusEl = document.activeElement;
     openModalEl = modal;
     modal.classList.remove('hidden');
+    bridgeEmit('modal', { open: true, id: modal.id });
     const preferred = firstFieldId ? el(firstFieldId) : null;
     const target = (preferred && preferred.offsetParent !== null) ? preferred : focusableIn(modal)[0];
     if (target) target.focus();
@@ -230,6 +231,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const target = modal || openModalEl;
     if (!target) return;
     closeTokenPopover(false);
+    const wasOpen = !target.classList.contains('hidden');
     target.classList.add('hidden');
     if (target === openModalEl) {
       openModalEl = null;
@@ -238,6 +240,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       modalReturnFocusEl = null;
     }
+    // After the reference clears, so listeners see openModalId === null.
+    if (wasOpen) bridgeEmit('modal', { open: false, id: target.id });
   }
 
   document.addEventListener('keydown', (e) => {
@@ -298,9 +302,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   function accentId() {
     return ACCENTS.includes(prefs.accent) ? prefs.accent : 'coral';
   }
+  // Northern-hemisphere seasons by month; the Seasonal style follows them.
+  function currentSeason(d) {
+    const m = (d || new Date()).getMonth();
+    if (m === 11 || m <= 1) return 'winter';
+    if (m <= 4) return 'spring';
+    if (m <= 7) return 'summer';
+    return 'autumn';
+  }
+
   function applyAppearance() {
     const root = document.documentElement;
     root.dataset.accent = accentId();
+    const style = prefs.themeStyle || 'warm';
+    root.dataset.style = style;
+    if (style === 'seasonal') root.dataset.season = currentSeason();
+    else delete root.dataset.season;
     root.dataset.comfort = prefs.comfortMode ? 'on' : 'off';
     reduceMotion = osReducedMotion || prefs.reduceMotion === true;
     if (reduceMotion) root.dataset.motion = 'reduce';
@@ -1106,7 +1123,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       TrackerStorage.getMetrics(),
       TrackerStorage.getStats(),
       WidgetLayout.load(),
-      TrackerStorage.getPrefs()
+      TrackerStorage.getPrefs(),
+      loadCardData()
     ]);
     metrics = m;
     stats = s;
@@ -1163,12 +1181,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderTabs();
     renderCounter(current);
     renderHeadline(current);
+    renderBuddy(current);
     renderStreak(current);
     renderWeekStrip(current);
     renderLock(current);
     renderSetup();
     renderTip();
     renderWidgets();
+    bridgeEmit('render', { metric: current });
+  }
+
+  function bridgeEmit(name, detail) {
+    if (typeof LitPopup !== 'undefined') LitPopup.emit(name, detail);
   }
 
   function todayFor(metric) {
@@ -1186,6 +1210,107 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Daily-state headline under the date, in the chosen coach voice.
+  // ---------------------------------------------------------------------------
+  // The buddy: a small character beside the counter with a speech bubble.
+  // It reacts to logging, celebrates the goal, naps on rest days, and repeats
+  // the service worker's break and water nudges with a "Taking a break" button.
+  // ---------------------------------------------------------------------------
+  let buddyOverride = null;
+  let buddyCheerSoon = false;
+  let buddyTapIndex = 0;
+  let buddyTimer = null;
+
+  function buddyOn() {
+    return prefs.buddyEnabled !== false && typeof LitBuddy !== 'undefined';
+  }
+
+  function setBuddy(text, mood, action) {
+    const box = el('buddy');
+    box.dataset.mood = mood || 'idle';
+    el('buddy-text').textContent = text;
+    const btn = el('buddy-action');
+    btn.classList.toggle('hidden', !action);
+    if (action) {
+      btn.textContent = action.label;
+      btn.onclick = action.run;
+    } else {
+      btn.onclick = null;
+    }
+  }
+
+  function buddyLine(current) {
+    const now = Date.now();
+    const L = LitBuddy.lines;
+    const count = todayFor(current);
+    const goal = goalFor(current);
+    const s = buddySession;
+    // A nudge from the worker in the last 20 minutes, or one due right now.
+    const recent = s && s.lastNudge && now - s.lastNudge.at < 20 * 60 * 1000 ? s.lastNudge : null;
+    const due = !recent && s ? LitBuddy.nudgeDue(s, now, prefs) : null;
+    const kind = recent ? recent.kind : due;
+    if (kind) {
+      const mins = recent ? recent.minutes : LitBuddy.activeMinutes(s, now);
+      return {
+        text: kind === 'break' ? L.breakNudge(Math.max(1, mins)) : L.water(),
+        mood: 'thirsty',
+        action: { label: kind === 'break' ? 'Taking a break' : 'Done', run: buddyTakeBreak }
+      };
+    }
+    if (stats && stats.restToday && count === 0) return { text: L.rest(), mood: 'sleepy' };
+    if (count >= goal) return { text: L.goalMet(dayIndex()), mood: 'happy' };
+    if (count > 0) return { text: L.progress(count, goal, displayUnit(current, 2)), mood: 'idle' };
+    return { text: L.greeting(new Date().getHours(), prefs.buddyName), mood: 'idle' };
+  }
+
+  function renderBuddy(current) {
+    const box = el('buddy');
+    if (!box) return;
+    box.classList.toggle('hidden', !buddyOn());
+    if (!buddyOn() || !current) return;
+    const btn = el('buddy-btn');
+    if (!btn.firstChild) btn.innerHTML = LitBuddy.svg();
+    btn.setAttribute('aria-label', (prefs.buddyName || 'Lockie') + ', your buddy. Tap for a tip.');
+    btn.title = prefs.buddyName || 'Lockie';
+    if (buddyCheerSoon) {
+      buddyCheerSoon = false;
+      const met = todayFor(current) >= goalFor(current);
+      buddyOverride = { text: met ? LitBuddy.lines.goalMet(Date.now()) : LitBuddy.lines.cheer(Date.now()), mood: 'cheer', until: Date.now() + 4000 };
+      clearTimeout(buddyTimer);
+      buddyTimer = setTimeout(() => { buddyOverride = null; renderBuddy(metricById(activeMetricId)); }, 4100);
+    }
+    if (buddyOverride && buddyOverride.until > Date.now()) {
+      setBuddy(buddyOverride.text, buddyOverride.mood, buddyOverride.action);
+      return;
+    }
+    const line = buddyLine(current);
+    setBuddy(line.text, line.mood, line.action);
+  }
+
+  function buddyTakeBreak() {
+    const now = Date.now();
+    if (buddySession && typeof LitBuddy !== 'undefined') {
+      buddySession = LitBuddy.markNudged(buddySession, 'break', now);
+      buddySession.lastNudge = null;
+      const local = storageArea('local');
+      if (local) local.set({ [LitBuddy.SESSION_KEY]: buddySession });
+    }
+    buddyOverride = { text: LitBuddy.lines.breakThanks(), mood: 'happy', until: now + 5000 };
+    clearTimeout(buddyTimer);
+    buddyTimer = setTimeout(() => { buddyOverride = null; renderBuddy(metricById(activeMetricId)); }, 5100);
+    renderBuddy(metricById(activeMetricId));
+  }
+
+  el('buddy-btn').addEventListener('click', () => {
+    if (!buddyOn()) return;
+    const taps = LitBuddy.lines.taps;
+    const text = taps[buddyTapIndex % taps.length];
+    buddyTapIndex += 1;
+    buddyOverride = { text, mood: 'cheer', until: Date.now() + 5000 };
+    clearTimeout(buddyTimer);
+    buddyTimer = setTimeout(() => { buddyOverride = null; renderBuddy(metricById(activeMetricId)); }, 5100);
+    renderBuddy(metricById(activeMetricId));
+  });
+
   function renderHeadline(current) {
     const count = todayFor(current);
     const goal = goalFor(current);
@@ -1276,13 +1401,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   const TRACKER_ICONS = {
     briefcase: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><rect x="2.8" y="5.5" width="14.4" height="10.5" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M7.3 5.5V4.3a1.2 1.2 0 0 1 1.2-1.2h3a1.2 1.2 0 0 1 1.2 1.2v1.2M2.8 10h14.4" stroke="currentColor" stroke-width="1.6"/></svg>',
     code: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="M6.5 6 2.8 10l3.7 4M13.5 6l3.7 4-3.7 4M11.3 4.2 8.7 15.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    target: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.6"/><circle cx="10" cy="10" r="3.8" stroke="currentColor" stroke-width="1.6"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/></svg>'
+    target: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.6"/><circle cx="10" cy="10" r="3.8" stroke="currentColor" stroke-width="1.6"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/></svg>',
+    chat: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="M4.5 4h11A1.5 1.5 0 0 1 17 5.5v7a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3h-1A1.5 1.5 0 0 1 3 12.5v-7A1.5 1.5 0 0 1 4.5 4Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    mail: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><rect x="2.8" y="4.5" width="14.4" height="11" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="m3.5 5.5 6.5 5 6.5-5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    book: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="M10 5.5C8.5 4.3 6.3 3.8 3.5 4v11c2.8-.2 5 .3 6.5 1.5 1.5-1.2 3.7-1.7 6.5-1.5V4c-2.8-.2-5 .3-6.5 1.5Zm0 0v11" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    pen: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 0l1 1a1.8 1.8 0 0 1 0 2.5L7.5 16H4v-3.5l8.8-8.8ZM11.5 5l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    people: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><circle cx="7.5" cy="7" r="2.8" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 16c.4-2.8 2.4-4.5 5-4.5s4.6 1.7 5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M13 4.5a2.6 2.6 0 0 1 0 5M14.5 11.8c1.7.5 2.8 2 3 4.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    phone: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="M5 3h2.5l1.3 3.4-1.7 1.2a8.5 8.5 0 0 0 5.3 5.3l1.2-1.7L17 12.5V15a2 2 0 0 1-2 2C8.4 17 3 11.6 3 5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    star: '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false"><path d="m10 3 2.1 4.4 4.8.6-3.5 3.3.9 4.8L10 13.8 5.7 16.1l.9-4.8L3.1 8l4.8-.6L10 3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>'
   };
+  const ICON_NAMES = { briefcase: 'Briefcase', code: 'Code', target: 'Target', chat: 'Chat', mail: 'Mail', book: 'Book', pen: 'Pen', people: 'People', phone: 'Phone', star: 'Star' };
+
+  function iconKey(metric) {
+    if (metric.icon === 'users') return 'people';
+    if (metric.icon && TRACKER_ICONS[metric.icon] && !(metric.icon === 'target' && (metric.id === 'jobs' || metric.id === 'leetcode'))) return metric.icon;
+    if (metric.id === 'jobs') return 'briefcase';
+    if (metric.id === 'leetcode') return 'code';
+    return 'target';
+  }
 
   function iconFor(metric) {
-    if (metric.id === 'jobs' || metric.icon === 'briefcase') return TRACKER_ICONS.briefcase;
-    if (metric.id === 'leetcode' || metric.icon === 'code') return TRACKER_ICONS.code;
-    return TRACKER_ICONS.target;
+    return TRACKER_ICONS[iconKey(metric)];
   }
 
   let tabsRendered = false;
@@ -1342,6 +1481,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     pipelineFilter = null;
     TrackerStorage.setActiveMetricId(id);
     renderUI();
+    bridgeEmit('tab', { metric: metricById(id) });
     if (hadTabFocus && tabNode(id)) tabNode(id).focus();
   }
 
@@ -1505,6 +1645,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (ui.burst && ui.burst[current.id] === today) return;
     saveUiState({ burst: Object.assign({}, ui.burst, { [current.id]: today }) });
     burstRing();
+    bridgeEmit('goal-met', { metric: current });
     replay(el('ring-wrap'), 'celebrate', 1300);
     requestAnimationFrame(() => widgetsHost.querySelectorAll('.widget-goal').forEach(n => replay(n, 'celebrate', 1300)));
   }
@@ -1651,8 +1792,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (solveTimeSeconds > 0) {
       showStatus('Logged with a solve time of ' + TrackerStorage.formatTimeHMS(solveTimeSeconds) + '.', 'ok');
     }
+    buddyCheerSoon = true;
     notifyCalendarTabs();
     await loadData();
+    const loggedMetric = metricById(activeMetricId);
+    if (loggedMetric) bridgeEmit('log', { metric: loggedMetric, count: todayFor(loggedMetric), goal: goalFor(loggedMetric) });
   });
 
   // Undo last (the old -1): no celebration, and a toast to bring it back.
@@ -1683,6 +1827,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } : null);
     notifyCalendarTabs();
     await loadData();
+    bridgeEmit('undo', { metric: metricById(activeMetricId) });
   });
 
   // ---------------------------------------------------------------------------
@@ -1692,6 +1837,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // suggests values that were never logged. Line stays for existing layouts
   // and for reading the overall trend.
   const CHART_LABELS = { bar: 'Bars', area: 'Line', heatmap: 'Grid' };
+  const SUMMARY_LABELS = { today: 'Today', week: 'Last 7 days', month: 'This month', total: 'All time' };
+  const CARD_COLOR_NAMES = { '#E0674B': 'Coral', '#5E9270': 'Sage', '#3B7EA1': 'Ocean', '#C9821F': 'Amber', '#8A5A9E': 'Plum', '#3D4A5C': 'Slate', '#C2185B': 'Berry', '#00897B': 'Teal' };
   const CHART_HINTS = { bar: 'Bars, one per day', area: 'Line, overall trend', heatmap: 'Grid, calendar by week' };
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const WEEK_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -1800,6 +1947,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function widgetTitle(item) {
+    if (item.options && item.options.title) return item.options.title;
+    return defaultWidgetTitle(item);
+  }
+
+  function defaultWidgetTitle(item) {
     if (item.type === 'activity') return item.options.days === WidgetLayout.ALL_DAYS ? 'All-time activity' : item.options.days + '-day activity';
     return WidgetLayout.TYPES[item.type].name;
   }
@@ -1846,7 +1998,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     wrap.classList.toggle('collapsed', !!item.options.collapsed);
     // Cards that follow the tab wear the accent; a card pinned to another
     // goal keeps that goal's color so two side by side read apart.
-    if (pinLabel(item, metric)) setTrackerColor(wrap, metric.color);
+    if (item.options.color) setTrackerColor(wrap, item.options.color);
+    else if (pinLabel(item, metric)) setTrackerColor(wrap, metric.color);
     else {
       wrap.style.setProperty('--tracker', 'var(--accent)');
       wrap.style.setProperty('--on-tracker', 'var(--on-accent)');
@@ -2057,7 +2210,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       bar.classList.toggle('met', met);
       body.querySelector('.goal-fill').style.width = Math.round(pct * 100) + '%';
       body.querySelectorAll('[data-m]').forEach(n => n.classList.toggle('reached', pct * 100 >= Number(n.dataset.m)));
-      const weeklyGoal = metric.weeklyGoal || 0;
+      const showChecks = item.options.showCheckpoints !== false;
+      body.querySelectorAll('.milestone').forEach(n => n.classList.toggle('hidden', !showChecks));
+      body.querySelector('.milestone-labels').classList.toggle('hidden', !showChecks);
+      const weeklyGoal = item.options.showWeekly === false ? 0 : (metric.weeklyGoal || 0);
       const weekCount = (stats.weekToDate && stats.weekToDate[metric.id]) || 0;
       const weekly = body.querySelector('.goal-weekly');
       weekly.classList.toggle('hidden', weeklyGoal <= 0);
@@ -2069,16 +2225,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
 
     summary(body, item, metric) {
-      if (!body.firstChild) {
+      const periods = item.options.periods || WidgetLayout.DEFAULT_PERIODS;
+      const key = periods.join(',');
+      if (body.dataset.periods !== key) {
+        body.textContent = '';
+        body.dataset.periods = key;
         const row = make('div', 'stat-row');
-        row.appendChild(statTile(0, 'Last 7 days', 'week'));
-        row.appendChild(statTile(0, 'This month', 'month'));
-        row.appendChild(statTile(0, 'All time', 'total'));
+        periods.forEach(p => row.appendChild(statTile(0, SUMMARY_LABELS[p], p)));
         body.appendChild(row);
       }
-      body.querySelector('[data-stat="week"]').textContent = (stats.thisWeek && stats.thisWeek[metric.id]) || 0;
-      body.querySelector('[data-stat="month"]').textContent = (stats.thisMonth && stats.thisMonth[metric.id]) || 0;
-      body.querySelector('[data-stat="total"]').textContent = (stats.totals && stats.totals[metric.id]) || 0;
+      const source = { today: stats.today, week: stats.thisWeek, month: stats.thisMonth, total: stats.totals };
+      periods.forEach(p => {
+        const node = body.querySelector('[data-stat="' + p + '"]');
+        if (node) node.textContent = (source[p] && source[p][metric.id]) || 0;
+      });
     },
 
     streak(body, item, metric) {
@@ -2092,6 +2252,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const best = Math.max(current, (stats.longestStreaks && stats.longestStreaks[metric.id]) || 0);
       body.querySelector('[data-stat="current"]').textContent = current + (current === 1 ? ' day' : ' days');
       body.querySelector('[data-stat="best"]').textContent = best + (best === 1 ? ' day' : ' days');
+      body.querySelector('[data-stat="best"]').parentElement.classList.toggle('hidden', item.options.showLongest === false);
     },
 
     activity(body, item, metric, wrap) {
@@ -2232,7 +2393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         const list = make('ul', 'entry-list recent-list');
-        filtered.slice(0, 10).forEach((log, i) => list.appendChild(entryRow(log, { monogram: true, delay: i })));
+        filtered.slice(0, item.options.count || WidgetLayout.DEFAULT_RECENT).forEach((log, i) => list.appendChild(entryRow(log, { monogram: true, delay: i })));
         body.appendChild(list);
         // Fade the bottom edge only when there is more to scroll to.
         requestAnimationFrame(() => list.classList.toggle('scrolls', list.scrollHeight > list.clientHeight + 1));
@@ -2361,8 +2522,349 @@ document.addEventListener('DOMContentLoaded', async () => {
         body.textContent = '';
         body.appendChild(make('div', 'empty', coach('empty', ['chart'], 'Your week will show up here.')));
       });
+    },
+
+    countdown(body, item, metric) {
+      body.textContent = '';
+      const date = item.options.date;
+      if (!date) {
+        const box = make('div', 'empty empty-actions');
+        box.appendChild(make('p', '', 'Count down to a start date, a career fair, or an application deadline.'));
+        const pick = make('button', 'btn btn-accent btn-sm', 'Pick a date');
+        pick.type = 'button';
+        pick.dataset.openCardSettings = item.id;
+        box.appendChild(pick);
+        body.appendChild(box);
+        return;
+      }
+      const days = daysUntil(date);
+      const big = make('div', 'countdown-big');
+      big.appendChild(make('span', 'countdown-num', days > 0 ? String(days) : (days === 0 ? 'Today' : 'Done')));
+      if (days > 0) big.appendChild(make('span', 'countdown-unit', days === 1 ? 'day left' : 'days left'));
+      body.appendChild(big);
+      body.appendChild(make('p', 'countdown-label', (item.options.label || 'Until ' + friendlyDate(date)) + (item.options.label ? ' · ' + friendlyDate(date) : '')));
+      if (days > 0) {
+        const pace = recentPace(metric.id, 14);
+        if (pace > 0) {
+          const ahead = Math.round(pace * days);
+          body.appendChild(make('p', 'countdown-pace', 'At your recent pace, about ' + ahead + ' more ' + displayUnit(metric, ahead) + ' by then.'));
+        } else {
+          body.appendChild(make('p', 'countdown-pace', 'Every one you log from here counts toward it.'));
+        }
+      } else if (days < 0) {
+        body.appendChild(make('p', 'countdown-pace', 'That date has passed. Set a new one in card settings.'));
+      }
+    },
+
+    compare(body, item, metric) {
+      body.textContent = '';
+      const map = (stats && stats.dailyMap) || {};
+      const monday = stats.weekStartStr;
+      const lastMonday = TrackerStorage.addDays(monday, -7);
+      const today = todayStr();
+      const rows = [];
+      let thisTotal = 0;
+      let lastTotal = 0;
+      let lastToDate = 0;
+      for (let i = 0; i < 7; i++) {
+        const d1 = TrackerStorage.addDays(monday, i);
+        const d0 = TrackerStorage.addDays(lastMonday, i);
+        const now = d1 <= today ? (((map[d1] || {})[metric.id]) || 0) : null;
+        const prev = ((map[d0] || {})[metric.id]) || 0;
+        if (now !== null) { thisTotal += now; lastToDate += prev; }
+        lastTotal += prev;
+        rows.push({ label: ['M', 'T', 'W', 'T', 'F', 'S', 'S'][i], now, prev });
+      }
+      const max = Math.max(1, ...rows.map(r => Math.max(r.now || 0, r.prev)));
+      const chart = make('div', 'compare-chart');
+      chart.setAttribute('role', 'img');
+      chart.setAttribute('aria-label', 'This week ' + thisTotal + ', last week ' + lastTotal);
+      rows.forEach(r => {
+        const col = make('div', 'compare-col');
+        const bars = make('div', 'compare-bars');
+        const prev = make('span', 'compare-bar is-prev');
+        prev.style.height = Math.round((r.prev / max) * 100) + '%';
+        const now = make('span', 'compare-bar is-now' + (r.now === null ? ' is-future' : ''));
+        now.style.height = r.now === null ? '0' : Math.round((r.now / max) * 100) + '%';
+        bars.appendChild(prev);
+        bars.appendChild(now);
+        col.appendChild(bars);
+        col.appendChild(make('span', 'compare-day', r.label));
+        chart.appendChild(col);
+      });
+      body.appendChild(chart);
+      const legend = make('div', 'compare-legend');
+      const a = make('span', 'compare-key is-now', 'This week ' + thisTotal);
+      const b = make('span', 'compare-key is-prev', 'Last week ' + lastTotal);
+      legend.appendChild(a);
+      legend.appendChild(b);
+      body.appendChild(legend);
+      // Never framed as a decline: ahead says so, behind says what is left.
+      let line;
+      if (thisTotal > lastToDate) line = (thisTotal - lastToDate) + ' ahead of where you were last week.';
+      else if (thisTotal === lastToDate && thisTotal > 0) line = 'Right in step with last week.';
+      else if (thisTotal === 0) line = 'Fresh week. The first one sets the tone.';
+      else line = 'Last week had ' + (lastToDate - thisTotal) + ' more by now. Plenty of week left.';
+      body.appendChild(make('p', 'compare-line', line));
+    },
+
+    watchlist(body, item) {
+      withJobs(body, 'watch:' + item.id, logs => {
+        body.textContent = '';
+        const applied = new Set(logs.map(l => TrackerStorage.normalizeCompany(l.company || '')).filter(Boolean));
+        const list = make('ul', 'watch-list');
+        if (!watchlist.length) {
+          body.appendChild(make('p', 'empty', 'Add companies you want to apply to. LIT checks them off when it logs an application there.'));
+        }
+        watchlist.forEach(w => {
+          const done = w.done || applied.has(TrackerStorage.normalizeCompany(w.name));
+          const li = make('li', 'watch-item' + (done ? ' is-done' : ''));
+          li.dataset.watchId = w.id;
+          const check = make('button', 'watch-check');
+          check.type = 'button';
+          check.setAttribute('aria-pressed', done ? 'true' : 'false');
+          check.setAttribute('aria-label', (done ? 'Mark ' + w.name + ' as not applied' : 'Mark ' + w.name + ' as applied'));
+          check.dataset.watchToggle = '1';
+          check.innerHTML = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          if (applied.has(TrackerStorage.normalizeCompany(w.name))) { check.disabled = true; check.title = 'You logged an application here.'; }
+          li.appendChild(check);
+          li.appendChild(make('span', 'watch-name', w.name));
+          if (done) li.appendChild(make('span', 'watch-tag', 'Applied'));
+          const rm = make('button', 'tool-btn watch-remove');
+          rm.type = 'button';
+          rm.dataset.watchRemove = '1';
+          rm.setAttribute('aria-label', 'Remove ' + w.name);
+          rm.title = 'Remove';
+          rm.innerHTML = X_SVG;
+          li.appendChild(rm);
+          list.appendChild(li);
+        });
+        body.appendChild(list);
+        const form = make('form', 'watch-add');
+        const input = make('input', 'watch-input');
+        input.type = 'text';
+        input.maxLength = 60;
+        input.placeholder = watchlist.length >= MAX_WATCH ? 'List is full' : 'Add a company';
+        input.disabled = watchlist.length >= MAX_WATCH;
+        input.setAttribute('aria-label', 'Add a company to watch');
+        const add = make('button', 'btn btn-ghost btn-sm', 'Add');
+        add.type = 'submit';
+        add.disabled = input.disabled;
+        form.appendChild(input);
+        form.appendChild(add);
+        form.dataset.watchForm = '1';
+        body.appendChild(form);
+      });
+    },
+
+    notes(body, item) {
+      if (!body.firstChild) {
+        const area = make('textarea', 'notes-area');
+        area.maxLength = MAX_NOTE;
+        area.rows = 4;
+        area.placeholder = 'Today\'s plan, a recruiter\'s name, a question to ask...';
+        area.setAttribute('aria-label', 'Notes');
+        area.dataset.noteId = item.id;
+        body.appendChild(area);
+        body.appendChild(make('span', 'notes-meta', ''));
+      }
+      const area = body.querySelector('.notes-area');
+      if (document.activeElement !== area) area.value = cardNotes[item.id] || '';
+      body.querySelector('.notes-meta').textContent = 'Saved on this computer';
+    },
+
+    quote(body, item) {
+      body.textContent = '';
+      const own = item.options.quoteText;
+      const text = own || BOOSTS[dayIndex() % BOOSTS.length];
+      const q = make('blockquote', 'boost-text', text);
+      body.appendChild(q);
+      body.appendChild(make('span', 'boost-meta', own ? 'Your words' : 'New one tomorrow'));
     }
   };
+
+  // ----- Helpers for the newer cards ------------------------------------------
+  const MAX_WATCH = 30;
+  const MAX_NOTE = 4000;
+  const WATCH_KEY = 'pt_watchlist';
+  const NOTES_KEY = 'lit_card_notes';
+  let watchlist = [];
+  let cardNotes = {};
+  let buddySession = null;
+
+  // The worker updates the buddy's session while the popup is open (a new
+  // entry, a nudge, a break); keep the bubble and LitPopup.api current.
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    const sessionKey = typeof LitBuddy !== 'undefined' ? LitBuddy.SESSION_KEY : 'lit_buddy_session';
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[sessionKey]) return;
+      buddySession = changes[sessionKey].newValue || null;
+      if (metrics.length && stats) renderBuddy(metricById(activeMetricId));
+    });
+  }
+
+  // Original lines, one a day. Short, warm, never about failing.
+  const BOOSTS = [
+    'Every application is a door you knocked on. Keep knocking.',
+    'You do not need a perfect day. You need a next step.',
+    'The right team is looking for someone like you right now.',
+    'Small steps, done daily, add up to a new job.',
+    'A no is not a verdict on you. It is just not the match.',
+    'Rest is part of the plan, not a break from it.',
+    'You are building momentum even on the quiet days.',
+    'One thoughtful application beats ten rushed ones.',
+    'Say yes to the coffee chat. People hire people.',
+    'Your experience counts, even the parts that feel small.',
+    'Today, send one message you have been putting off.',
+    'Progress is not loud. It is steady.',
+    'You have done hard things before. This is one more.',
+    'The search ends. Keep showing up until it does.',
+    'Proud of you for opening this today.',
+    'Curiosity in an interview reads as confidence.',
+    'Tailor one line of your resume today. It matters.',
+    'Your next role might come from someone you have not met yet.',
+    'Drink some water. Stretch. Then one more.',
+    'Being kind to yourself is a job search skill.',
+    'Keep a list of your wins. Read it before interviews.',
+    'Done is better than perfect. Hit send.',
+    'Follow up. It shows you care, not that you are pushy.',
+    'You are allowed to be picky and persistent at once.',
+    'Celebrate the interview invites, not just the offers.',
+    'Every skill you practice today shows up later.',
+    'Where you are is not where you will stay.',
+    'Close the laptop when you are done. You earned it.',
+    'Ask for the referral. The worst answer is silence.',
+    'Your story is worth telling well. Practice it out loud.'
+  ];
+
+  function dayIndex() {
+    const d = new Date();
+    return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 86400000);
+  }
+
+  function daysUntil(dateStr) {
+    const today = new Date(todayStr() + 'T12:00:00');
+    const target = new Date(dateStr + 'T12:00:00');
+    return Math.round((target - today) / 86400000);
+  }
+
+  function friendlyDate(dateStr) {
+    const d = new Date(dateStr + 'T12:00:00');
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString(undefined, sameYear ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  // Average per day over the last `days` days (today included).
+  function recentPace(metricId, days) {
+    const map = (stats && stats.dailyMap) || {};
+    let total = 0;
+    for (let i = 0; i < days; i++) total += ((map[TrackerStorage.addDays(todayStr(), -i)] || {})[metricId]) || 0;
+    return total / days;
+  }
+
+  function storageArea(kind) {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    return kind === 'sync' ? (chrome.storage.sync || chrome.storage.local) : chrome.storage.local;
+  }
+
+  function loadCardData() {
+    return new Promise(resolve => {
+      let pending = 3;
+      const done = () => { if (--pending === 0) resolve(); };
+      const sync = storageArea('sync');
+      const local = storageArea('local');
+      if (!sync || !local) { resolve(); return; }
+      sync.get([WATCH_KEY], r => {
+        const list = r && Array.isArray(r[WATCH_KEY]) ? r[WATCH_KEY] : [];
+        watchlist = list.filter(w => w && typeof w.name === 'string' && w.id).slice(0, MAX_WATCH);
+        done();
+      });
+      local.get([NOTES_KEY], r => {
+        cardNotes = r && r[NOTES_KEY] && typeof r[NOTES_KEY] === 'object' ? r[NOTES_KEY] : {};
+        done();
+      });
+      const sessionKey = typeof LitBuddy !== 'undefined' ? LitBuddy.SESSION_KEY : 'lit_buddy_session';
+      local.get([sessionKey], r => {
+        buddySession = r && r[sessionKey] ? r[sessionKey] : null;
+        done();
+      });
+    });
+  }
+
+  function saveWatchlist() {
+    const sync = storageArea('sync');
+    if (sync) sync.set({ [WATCH_KEY]: watchlist });
+  }
+
+  let notesTimer = null;
+  function saveNotesSoon() {
+    clearTimeout(notesTimer);
+    notesTimer = setTimeout(() => {
+      const local = storageArea('local');
+      if (local) local.set({ [NOTES_KEY]: cardNotes });
+    }, 400);
+  }
+
+  function rerenderType(type) {
+    widgetItems.filter(i => i.type === type).forEach(i => {
+      const wrap = widgetsHost.querySelector('[data-widget-id="' + CSS.escape(i.id) + '"]');
+      const metric = metricFor(i);
+      if (wrap && metric && rendererFor(type)) rendererFor(type)(wrap.querySelector('.widget-body'), i, metric, wrap);
+    });
+  }
+
+  widgetsHost.addEventListener('input', (e) => {
+    const area = e.target.closest('.notes-area');
+    if (!area) return;
+    cardNotes[area.dataset.noteId] = area.value.slice(0, MAX_NOTE);
+    const meta = area.parentElement.querySelector('.notes-meta');
+    if (meta) meta.textContent = 'Saving...';
+    saveNotesSoon();
+    clearTimeout(area._savedTimer);
+    area._savedTimer = setTimeout(() => { if (meta) meta.textContent = 'Saved on this computer'; }, 700);
+  });
+
+  widgetsHost.addEventListener('submit', (e) => {
+    const form = e.target.closest('[data-watch-form]');
+    if (!form) return;
+    e.preventDefault();
+    const input = form.querySelector('.watch-input');
+    const name = input.value.replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!name) return;
+    const key = TrackerStorage.normalizeCompany(name);
+    if (watchlist.some(w => TrackerStorage.normalizeCompany(w.name) === key)) {
+      showStatus(name + ' is already on your list.');
+      return;
+    }
+    if (watchlist.length >= MAX_WATCH) return;
+    watchlist.push({ id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, added: todayStr() });
+    saveWatchlist();
+    rerenderType('watchlist');
+    const again = widgetsHost.querySelector('[data-watch-form] .watch-input');
+    if (again) again.focus();
+  });
+
+  widgetsHost.addEventListener('click', (e) => {
+    const open = e.target.closest('[data-open-card-settings]');
+    if (open) { openWidgetSettings(open.dataset.openCardSettings); return; }
+    const row = e.target.closest('.watch-item');
+    if (!row) return;
+    const idx = watchlist.findIndex(w => w.id === row.dataset.watchId);
+    if (idx < 0) return;
+    if (e.target.closest('[data-watch-remove]')) {
+      const removedW = watchlist.splice(idx, 1)[0];
+      saveWatchlist();
+      rerenderType('watchlist');
+      showStatus(removedW.name + ' removed from your list.', 'ok', {
+        label: 'Undo',
+        run: () => { watchlist.splice(idx, 0, removedW); saveWatchlist(); rerenderType('watchlist'); }
+      });
+    } else if (e.target.closest('[data-watch-toggle]')) {
+      watchlist[idx] = Object.assign({}, watchlist[idx], { done: !watchlist[idx].done });
+      saveWatchlist();
+      rerenderType('watchlist');
+    }
+  });
 
   // Brings the Add Details form into view with the first field focused,
   // adding or expanding its widget first when needed.
@@ -2646,6 +3148,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Reconciles the grid against the layout: wrappers are created for new
   // items, removed for deleted ones, and re-appended in layout order (moving
   // a node keeps its contents). Then every visible widget is repainted.
+  // Built-in cards first; then card types added by popup modules through
+  // LitPopup.registerCard. A module card that throws shows a quiet note
+  // instead of breaking the board.
+  function rendererFor(type) {
+    if (WIDGET_RENDERERS[type]) return WIDGET_RENDERERS[type];
+    return typeof LitPopup !== 'undefined' ? LitPopup.renderer(type) : null;
+  }
+
+  function renderModuleCard(item, metric, wrap) {
+    const body = wrap.querySelector('.widget-body');
+    try {
+      rendererFor(item.type)(body, item, metric, wrap);
+    } catch (err) {
+      console.warn('[LIT] card ' + item.type + ' could not render', err);
+      body.textContent = '';
+      body.appendChild(make('div', 'empty', 'This card could not load just now.'));
+    }
+  }
+
   function renderWidgets() {
     if (!widgetsHost || !metrics.length) return;
     const existing = {};
@@ -2655,7 +3176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const visible = [];
     widgetItems.forEach(item => {
       const metric = metricFor(item);
-      if (!metric || !WIDGET_RENDERERS[item.type]) return;
+      if (!metric || !rendererFor(item.type)) return;
       if (!WidgetLayout.isVisible(item, metric.id)) {
         if (PART_IDS[item.type]) parkPart(PART_IDS[item.type]);
         return;
@@ -2670,7 +3191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       keep.add(item.id);
       widgetsHost.appendChild(wrap);
       updateShell(wrap, item, metric, solo.has(item.id));
-      WIDGET_RENDERERS[item.type](wrap.querySelector('.widget-body'), item, metric, wrap);
+      renderModuleCard(item, metric, wrap);
     });
 
     Object.keys(existing).forEach(id => {
@@ -2975,6 +3496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('add-widget-btn').classList.toggle('hidden', !customizing);
     widgetsHost.querySelectorAll('.widget-remove-btn').forEach(b => { b.tabIndex = customizing ? 0 : -1; });
     if (customizing) showStatus('Drag cards to move them, or tap the corner button to remove one. Press Done when you are finished.');
+    bridgeEmit('customize', { on: customizing });
   }
   el('customize-btn').addEventListener('click', () => setCustomizing(!customizing));
   document.addEventListener('keydown', (e) => {
@@ -3006,7 +3528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const row = make('div', 'widget-picker-row');
       const icon = make('span', 'widget-picker-icon');
       icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" focusable="false">' + (WIDGET_TYPE_ICON[t.type] || '') + '</svg>';
+      icon.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" focusable="false">' + (WIDGET_TYPE_ICON[t.type] || t.icon || '') + '</svg>';
       const text = make('div', 'widget-picker-text');
       const name = make('div', 'widget-picker-name', t.name);
       if (t.isNew) name.appendChild(make('span', 'new-tag', 'New'));
@@ -3095,6 +3617,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       li.setAttribute('role', 'option');
       li.setAttribute('aria-selected', item.selected ? 'true' : 'false');
       if (item.stage) li.appendChild(make('i'));
+      if (item.swatch) {
+        const dot = make('i', 'token-swatch');
+        dot.style.background = item.swatch;
+        li.appendChild(dot);
+      }
       li.appendChild(make('span', 'token-option-label', item.label));
       if (item.selected) {
         const check = make('span', 'token-option-check');
@@ -3216,6 +3743,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('widget-size-btn').textContent = widgetDraft.size === 'compact' ? 'Half width' : 'Full width';
 
     ['widget-token-chart', 'widget-token-days', 'widget-token-stats'].forEach(id => el(id).classList.toggle('hidden', !isActivity));
+
+    const titleInput = el('widget-title-input');
+    titleInput.placeholder = defaultWidgetTitle(item);
+    if (document.activeElement !== titleInput) titleInput.value = widgetDraft.title || '';
+    el('widget-color-btn').textContent = widgetDraft.color ? (CARD_COLOR_NAMES[widgetDraft.color] || 'Custom') : 'Match the goal';
+
+    const toggles = [
+      ['widget-token-checkpoints', 'widget-checkpoints-btn', item.type === 'goal', widgetDraft.showCheckpoints],
+      ['widget-token-weekly', 'widget-weekly-btn', item.type === 'goal', widgetDraft.showWeekly],
+      ['widget-token-longest', 'widget-longest-btn', item.type === 'streak', widgetDraft.showLongest]
+    ];
+    toggles.forEach(([tokenId, btnId, applies, on]) => {
+      el(tokenId).classList.toggle('hidden', !applies);
+      const b = el(btnId);
+      b.textContent = on ? 'Shown' : 'Hidden';
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.classList.toggle('token-muted', !on);
+    });
+    el('widget-token-periods').classList.toggle('hidden', item.type !== 'summary');
+    el('widget-periods').querySelectorAll('[data-period]').forEach(b => b.setAttribute('aria-pressed', widgetDraft.periods.includes(b.dataset.period) ? 'true' : 'false'));
+    el('widget-token-count').classList.toggle('hidden', item.type !== 'recentList');
+    el('widget-token-cd-label').classList.toggle('hidden', item.type !== 'countdown');
+    el('widget-token-cd-date').classList.toggle('hidden', item.type !== 'countdown');
+    el('widget-token-quote').classList.toggle('hidden', item.type !== 'quote');
+    if (document.activeElement !== el('widget-cd-label-input')) el('widget-cd-label-input').value = widgetDraft.cdLabel || '';
+    if (document.activeElement !== el('widget-cd-date-input')) el('widget-cd-date-input').value = widgetDraft.cdDate || '';
+    if (document.activeElement !== el('widget-quote-input')) el('widget-quote-input').value = widgetDraft.quoteText || '';
+    el('widget-count-btn').textContent = 'Last ' + widgetDraft.count;
+    el('duplicate-widget-btn').classList.toggle('hidden', !!spec.singleton);
     if (isActivity) {
       el('widget-chart-btn').textContent = CHART_LABELS[widgetDraft.chart];
       const allDays = widgetDraft.days === WidgetLayout.ALL_DAYS;
@@ -3248,7 +3804,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       days: WidgetLayout.normalizeDays(item.options.days, 30),
       showStats: item.options.showStats !== false,
       size: item.options.size,
-      chart: item.options.chart || 'bar'
+      chart: item.options.chart || 'bar',
+      title: item.options.title || '',
+      color: item.options.color || '',
+      showWeekly: item.options.showWeekly !== false,
+      showCheckpoints: item.options.showCheckpoints !== false,
+      showLongest: item.options.showLongest !== false,
+      periods: (item.options.periods || WidgetLayout.DEFAULT_PERIODS).slice(),
+      count: item.options.count || WidgetLayout.DEFAULT_RECENT,
+      cdLabel: item.options.label || '',
+      cdDate: item.options.date || '',
+      quoteText: item.options.quoteText || ''
     };
     const spec = WidgetLayout.TYPES[item.type];
     el('widget-settings-title').textContent = spec.name;
@@ -3332,6 +3898,66 @@ document.addEventListener('DOMContentLoaded', async () => {
     flashToken(el('widget-stats-btn'));
   });
 
+  ['widget-title-input', 'widget-cd-label-input', 'widget-quote-input'].forEach(id => {
+    el(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); el('widget-settings-form').requestSubmit(); }
+    });
+  });
+
+  el('widget-color-btn').addEventListener('click', () => {
+    if (!widgetDraft) return;
+    const items = [{ value: '', label: 'Match the goal', selected: !widgetDraft.color }]
+      .concat(WidgetLayout.CARD_COLORS.map(hex => ({ value: hex, label: CARD_COLOR_NAMES[hex] || hex, swatch: hex, selected: widgetDraft.color === hex })));
+    openTokenPopover(el('widget-color-btn'), items, (value) => {
+      if (value === widgetDraft.color) return;
+      widgetDraft.color = value;
+      renderWidgetTokens();
+      flashToken(el('widget-color-btn'));
+    });
+  });
+
+  [['widget-checkpoints-btn', 'showCheckpoints'], ['widget-weekly-btn', 'showWeekly'], ['widget-longest-btn', 'showLongest']].forEach(([id, key]) => {
+    el(id).addEventListener('click', () => {
+      if (!widgetDraft) return;
+      widgetDraft[key] = !widgetDraft[key];
+      renderWidgetTokens();
+      flashToken(el(id));
+    });
+  });
+
+  // Totals: any mix of the four, but never none.
+  el('widget-periods').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-period]');
+    if (!chip || !widgetDraft) return;
+    const p = chip.dataset.period;
+    const has = widgetDraft.periods.includes(p);
+    if (has && widgetDraft.periods.length === 1) {
+      showStatus('Keep at least one total on the card.', 'error');
+      return;
+    }
+    const next = has ? widgetDraft.periods.filter(x => x !== p) : widgetDraft.periods.concat([p]);
+    widgetDraft.periods = WidgetLayout.SUMMARY_PERIODS.filter(x => next.includes(x));
+    renderWidgetTokens();
+  });
+
+  el('widget-count-btn').addEventListener('click', () => {
+    if (!widgetDraft) return;
+    const items = WidgetLayout.RECENT_COUNTS.map(n => ({ value: n, label: 'Last ' + n, selected: widgetDraft.count === n }));
+    openTokenPopover(el('widget-count-btn'), items, (value) => {
+      if (value === widgetDraft.count) return;
+      widgetDraft.count = value;
+      renderWidgetTokens();
+      flashToken(el('widget-count-btn'));
+    });
+  });
+
+  el('duplicate-widget-btn').addEventListener('click', async () => {
+    const item = widgetById(settingsWidgetId);
+    if (!item || typeof WidgetLayout.duplicate !== 'function') return;
+    const ok = await applyLayout(WidgetLayout.duplicate(item.id), 'Copy added below. Change its goal or style to compare.');
+    if (ok) closeModal(el('widget-settings-modal'));
+  });
+
   async function moveSettingsWidget(delta) {
     if (!settingsWidgetId) return;
     const ok = await applyLayout(WidgetLayout.move(settingsWidgetId, delta));
@@ -3347,7 +3973,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     const item = widgetById(settingsWidgetId);
     if (!item || !widgetDraft) { closeModal(el('widget-settings-modal')); return; }
-    const patch = { size: widgetDraft.size };
+    widgetDraft.title = el('widget-title-input').value.trim();
+    const patch = { size: widgetDraft.size, title: widgetDraft.title, color: widgetDraft.color };
+    if (item.type === 'goal') {
+      patch.showWeekly = widgetDraft.showWeekly;
+      patch.showCheckpoints = widgetDraft.showCheckpoints;
+    }
+    if (item.type === 'streak') patch.showLongest = widgetDraft.showLongest;
+    if (item.type === 'summary') patch.periods = widgetDraft.periods;
+    if (item.type === 'recentList') patch.count = widgetDraft.count;
+    if (item.type === 'countdown') {
+      patch.label = el('widget-cd-label-input').value.trim();
+      patch.date = el('widget-cd-date-input').value;
+    }
+    if (item.type === 'quote') patch.quoteText = el('widget-quote-input').value.trim();
     if ('metricId' in WidgetLayout.TYPES[item.type].defaults) patch.metricId = widgetDraft.metricId;
     if (item.type === 'activity') {
       patch.days = widgetDraft.days;
@@ -3403,44 +4042,203 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('cancel-widget-settings-btn').addEventListener('click', () => closeModal(el('widget-settings-modal')));
 
   // ---------------------------------------------------------------------------
-  // Trackers: add, goals, delete
+  // Goals: add, edit (name, unit, icon, color, numbers), hide, delete, reorder
   // ---------------------------------------------------------------------------
   let settingsMetricId = null;
   let metricDeleteArmed = false;
+  let metricEditFromSettings = false;
 
-  el('add-metric-tab-btn').addEventListener('click', () => openModal(el('new-metric-modal'), 'new-metric-name'));
+  const GOAL_COLORS = [
+    ['#E0674B', 'Coral'], ['#5E9270', 'Sage'], ['#3B7EA1', 'Ocean'], ['#C9821F', 'Amber'],
+    ['#8A5A9E', 'Plum'], ['#3D4A5C', 'Slate'], ['#C2185B', 'Berry'], ['#00897B', 'Teal']
+  ];
+
+  // One-tap starting points for people who are not sure what to count.
+  // Templates with an `area` match a starter goal that may already exist
+  // (hidden), so picking one shows that goal again instead of duplicating it.
+  const GOAL_TEMPLATES = [
+    // Applying
+    { group: 'Applying', name: 'Follow-ups', unit: 'follow-ups', goal: 2, icon: 'mail', color: '#00897B' },
+    { group: 'Applying', name: 'Referrals asked', unit: 'asks', goal: 1, icon: 'people', color: '#5E9270' },
+    { group: 'Applying', name: 'Tailored resumes', unit: 'resumes', goal: 2, icon: 'pen', color: '#3B7EA1' },
+    { group: 'Applying', name: 'Cover letters', unit: 'letters', goal: 1, icon: 'pen', color: '#8A5A9E' },
+    { group: 'Applying', name: 'Jobs saved to apply', unit: 'jobs', goal: 5, icon: 'star', color: '#C9821F' },
+    // Networking
+    { group: 'Networking', area: 'networking', name: 'Networking chats', unit: 'chats', goal: 1, icon: 'people', color: '#5E9270' },
+    { group: 'Networking', area: 'outreach', name: 'Cold emails', unit: 'emails', goal: 3, icon: 'mail', color: '#3B7EA1' },
+    { group: 'Networking', name: 'LinkedIn connections', unit: 'connections', goal: 5, icon: 'people', color: '#3D4A5C' },
+    { group: 'Networking', name: 'Recruiter messages', unit: 'messages', goal: 2, icon: 'chat', color: '#C2185B' },
+    { group: 'Networking', name: 'Informational interviews', unit: 'calls', goal: 1, icon: 'phone', color: '#00897B' },
+    { group: 'Networking', name: 'Events and meetups', unit: 'events', goal: 1, icon: 'star', color: '#8A5A9E' },
+    { group: 'Networking', name: 'LinkedIn posts', unit: 'posts', goal: 1, icon: 'chat', color: '#C9821F' },
+    // Interviews
+    { group: 'Interviews', name: 'Interviews', unit: 'interviews', goal: 1, icon: 'phone', color: '#8A5A9E' },
+    { group: 'Interviews', area: 'prep', name: 'Interview prep', unit: 'sessions', goal: 1, icon: 'book', color: '#8A5A9E' },
+    { group: 'Interviews', name: 'Mock interviews', unit: 'mocks', goal: 1, icon: 'people', color: '#3B7EA1' },
+    { group: 'Interviews', name: 'Thank-you notes', unit: 'notes', goal: 1, icon: 'mail', color: '#5E9270' },
+    { group: 'Interviews', name: 'Company research', unit: 'companies', goal: 2, icon: 'book', color: '#3D4A5C' },
+    // Skills
+    { group: 'Skills', area: 'leetcode', name: 'LeetCode', unit: 'problems', goal: 2, icon: 'code', color: '#3D4A5C' },
+    { group: 'Skills', name: 'Course lessons', unit: 'lessons', goal: 1, icon: 'book', color: '#C2185B' },
+    { group: 'Skills', name: 'Certification study', unit: 'sessions', goal: 1, icon: 'star', color: '#C9821F' },
+    { group: 'Skills', area: 'portfolio', name: 'Portfolio pieces', unit: 'pieces', goal: 1, icon: 'pen', color: '#C9821F' },
+    { group: 'Skills', name: 'Side project work', unit: 'sessions', goal: 1, icon: 'code', color: '#00897B' },
+    { group: 'Skills', name: 'Industry reading', unit: 'articles', goal: 1, icon: 'book', color: '#5E9270' },
+    // Wellbeing
+    { group: 'Wellbeing', name: 'Glasses of water', unit: 'glasses', goal: 8, icon: 'star', color: '#3B7EA1' },
+    { group: 'Wellbeing', name: 'Walks or workouts', unit: 'workouts', goal: 1, icon: 'people', color: '#5E9270' },
+    { group: 'Wellbeing', name: 'Screen breaks', unit: 'breaks', goal: 3, icon: 'target', color: '#C9821F' }
+  ];
+
+  function isBuiltInMetric(m) {
+    return !!m && (!!m.isDefault || m.id === 'jobs' || m.id === 'leetcode');
+  }
+
+  function buildIconPicker(container, selected, onPick) {
+    container.textContent = '';
+    Object.keys(TRACKER_ICONS).forEach(key => {
+      const b = make('button', 'icon-option');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.dataset.icon = key;
+      b.setAttribute('aria-checked', key === selected ? 'true' : 'false');
+      b.setAttribute('aria-label', ICON_NAMES[key] || key);
+      b.title = ICON_NAMES[key] || key;
+      b.innerHTML = TRACKER_ICONS[key];
+      b.addEventListener('click', () => {
+        container.querySelectorAll('.icon-option').forEach(x => x.setAttribute('aria-checked', x === b ? 'true' : 'false'));
+        onPick(key);
+      });
+      container.appendChild(b);
+    });
+  }
+
+  function buildColorPicker(container, selected, onPick) {
+    container.textContent = '';
+    const want = String(selected || '').toLowerCase();
+    const options = GOAL_COLORS.slice();
+    // A goal made before this palette keeps its own color as the first pick.
+    if (want && !options.some(([hex]) => hex.toLowerCase() === want)) options.unshift([selected, 'Current color']);
+    options.forEach(([hex, name]) => {
+      const b = make('button', 'color-option');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.dataset.color = hex;
+      b.style.background = hex;
+      b.setAttribute('aria-label', name);
+      b.title = name;
+      const on = hex.toLowerCase() === want;
+      b.classList.toggle('selected', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.addEventListener('click', () => {
+        container.querySelectorAll('.color-option').forEach(x => {
+          x.classList.toggle('selected', x === b);
+          x.setAttribute('aria-checked', x === b ? 'true' : 'false');
+        });
+        onPick(hex);
+      });
+      container.appendChild(b);
+    });
+  }
+
+  function setUnitChips(value) {
+    el('unit-chips').querySelectorAll('[data-unit]').forEach(b => b.classList.toggle('is-active', b.dataset.unit === value));
+  }
+
+  // ----- Add a goal ----------------------------------------------------------
+  const newGoalDraft = { icon: 'target', color: GOAL_COLORS[0][0] };
+
+  function existingForTemplate(t) {
+    if (!t.area) return null;
+    return metrics.find(m => (m.focusArea || m.id) === t.area) || null;
+  }
+
+  function renderGoalTemplates() {
+    const host = el('goal-templates');
+    host.textContent = '';
+    let group = null;
+    let row = null;
+    const taken = new Set(metrics.filter(m => !m.hidden).map(m => m.name.toLowerCase()));
+    GOAL_TEMPLATES.forEach((t, i) => {
+      const existing = existingForTemplate(t);
+      if (existing && !existing.hidden) return; // already on the board
+      if (!t.area && taken.has(t.name.toLowerCase())) return;
+      if (t.group !== group) {
+        group = t.group;
+        host.appendChild(make('span', 'goal-template-group', group));
+        row = make('div', 'goal-template-row');
+        host.appendChild(row);
+      }
+      const b = make('button', 'chip-btn goal-template');
+      b.type = 'button';
+      b.dataset.template = String(i);
+      const icon = make('span', 'goal-template-icon');
+      icon.style.color = t.color;
+      icon.innerHTML = TRACKER_ICONS[t.icon];
+      b.appendChild(icon);
+      b.appendChild(document.createTextNode(t.name));
+      if (existing) b.title = 'You have this goal hidden. Picking it shows it again with everything you logged.';
+      row.appendChild(b);
+    });
+    host.closest('.form-group').classList.toggle('hidden', !host.querySelector('.goal-template'));
+  }
+
+  function resetNewGoalForm() {
+    el('new-metric-name').value = '';
+    el('new-metric-unit').value = '';
+    el('new-metric-goal').value = '3';
+    setUnitChips('');
+    newGoalDraft.icon = 'target';
+    newGoalDraft.color = GOAL_COLORS[0][0];
+    buildIconPicker(el('new-metric-icons'), newGoalDraft.icon, k => { newGoalDraft.icon = k; });
+    buildColorPicker(el('color-palette'), newGoalDraft.color, c => { newGoalDraft.color = c; });
+    renderGoalTemplates();
+  }
+
+  function openNewGoal() {
+    resetNewGoalForm();
+    openModal(el('new-metric-modal'), 'new-metric-name');
+  }
+
+  el('add-metric-tab-btn').addEventListener('click', openNewGoal);
   el('close-metric-modal').addEventListener('click', () => closeModal(el('new-metric-modal')));
   el('cancel-metric-btn').addEventListener('click', () => closeModal(el('new-metric-modal')));
 
-  let selectedColor = '#E0674B';
+  el('goal-templates').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-template]');
+    if (!btn) return;
+    const t = GOAL_TEMPLATES[Number(btn.dataset.template)];
+    if (!t) return;
+    const existing = existingForTemplate(t);
+    if (existing && existing.hidden) {
+      const ok = await setGoalHidden(existing.id, false);
+      if (!ok) return;
+      closeModal(el('new-metric-modal'));
+      activeMetricId = existing.id;
+      TrackerStorage.setActiveMetricId(existing.id);
+      await loadData();
+      showStatus('"' + existing.name + '" is back on your board, with everything you logged before.', 'ok');
+      return;
+    }
+    el('new-metric-name').value = t.name;
+    el('new-metric-unit').value = t.unit;
+    el('new-metric-goal').value = String(t.goal);
+    setUnitChips(t.unit);
+    newGoalDraft.icon = t.icon;
+    newGoalDraft.color = t.color;
+    buildIconPicker(el('new-metric-icons'), t.icon, k => { newGoalDraft.icon = k; });
+    buildColorPicker(el('color-palette'), t.color, c => { newGoalDraft.color = c; });
+    el('new-metric-goal').focus();
+  });
 
   // "What are you counting?" suggestions fill the field in one tap.
   el('unit-chips').addEventListener('click', (e) => {
     const chip = e.target.closest('[data-unit]');
     if (!chip) return;
     el('new-metric-unit').value = chip.dataset.unit;
-    el('unit-chips').querySelectorAll('[data-unit]').forEach(b => b.classList.toggle('is-active', b === chip));
+    setUnitChips(chip.dataset.unit);
   });
-  el('new-metric-unit').addEventListener('input', () => {
-    const v = el('new-metric-unit').value.trim();
-    el('unit-chips').querySelectorAll('[data-unit]').forEach(b => b.classList.toggle('is-active', b.dataset.unit === v));
-  });
-  el('color-palette').addEventListener('click', (e) => {
-    const btn = e.target.closest('.color-option');
-    if (!btn) return;
-    el('color-palette').querySelectorAll('.color-option').forEach(b => {
-      b.classList.remove('selected');
-      b.setAttribute('aria-pressed', 'false');
-    });
-    btn.classList.add('selected');
-    btn.setAttribute('aria-pressed', 'true');
-    selectedColor = btn.dataset.color;
-  });
-  // Swatches keep their color name visible on hover, not only to screen readers.
-  el('color-palette').querySelectorAll('.color-option').forEach(b => {
-    if (!b.title) b.title = b.getAttribute('aria-label') || '';
-    b.setAttribute('aria-pressed', b.classList.contains('selected') ? 'true' : 'false');
-  });
+  el('new-metric-unit').addEventListener('input', () => setUnitChips(el('new-metric-unit').value.trim()));
 
   el('new-metric-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -3454,16 +4252,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     let created;
     try {
-      created = await TrackerStorage.addMetric({ name, color: selectedColor, unit, dailyGoal, icon: 'target' });
+      created = await TrackerStorage.addMetric({ name, color: newGoalDraft.color, unit, dailyGoal, icon: newGoalDraft.icon });
     } catch (err) {
       oops('That goal could not be added just now. Please try again.', err);
       return;
     }
     activeMetricId = created.id;
     TrackerStorage.setActiveMetricId(created.id);
-    el('new-metric-name').value = '';
-    el('new-metric-unit').value = '';
-    el('new-metric-goal').value = '3';
     closeModal(el('new-metric-modal'));
     markSetup('goal');
     showStatus('Goal "' + created.name + '" added. Tap + whenever you do one.', 'ok');
@@ -3471,78 +4266,296 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadData();
   });
 
-  function openMetricSettings(metricId, focusId) {
+  // ----- Hide / show ---------------------------------------------------------
+  // Returns true when the change stuck. Refuses to hide the last goal on the
+  // board, and says why.
+  async function setGoalHidden(id, hidden) {
+    if (typeof TrackerStorage.setMetricHidden !== 'function') {
+      showStatus('This version of LIT cannot hide goals yet.', 'error');
+      return false;
+    }
+    let ok = false;
+    try {
+      ok = await TrackerStorage.setMetricHidden(id, hidden);
+    } catch (err) {
+      oops('That goal could not be changed just now. Please try again.', err);
+      return false;
+    }
+    if (!ok) {
+      const msg = 'Keep at least one goal on your board. Add or show another goal first.';
+      showStatus(msg, 'error');
+      if (el('goal-manager-note')) el('goal-manager-note').textContent = msg;
+      return false;
+    }
+    if (hidden && activeMetricId === id) {
+      const next = metrics.find(m => !m.hidden && m.id !== id);
+      if (next) { activeMetricId = next.id; TrackerStorage.setActiveMetricId(next.id); }
+    }
+    notifyCalendarTabs();
+    return true;
+  }
+
+  // ----- Edit a goal ---------------------------------------------------------
+  const editDraft = { icon: 'target', color: GOAL_COLORS[0][0] };
+
+  function openMetricSettings(metricId, focusId, fromSettings) {
     const current = metricById(metricId || activeMetricId);
     if (!current) return;
     settingsMetricId = current.id;
     metricDeleteArmed = false;
-    el('metric-settings-title').textContent = current.name;
+    metricEditFromSettings = !!fromSettings;
+    el('metric-settings-title').textContent = 'Edit ' + current.name;
+    el('metric-settings-name').value = current.name;
+    el('metric-settings-unit').value = current.id === 'jobs' && (!current.unit || current.unit === 'jobs' || current.unit === 'items') ? 'applications' : (current.unit || '');
     el('metric-settings-goal').value = goalFor(current);
     el('metric-settings-weekly').value = current.weeklyGoal > 0 ? current.weeklyGoal : '';
-    const isBuiltIn = !!current.isDefault || current.id === 'jobs' || current.id === 'leetcode';
+    editDraft.icon = iconKey(current);
+    editDraft.color = current.color || GOAL_COLORS[0][0];
+    buildIconPicker(el('metric-settings-icons'), editDraft.icon, k => { editDraft.icon = k; });
+    buildColorPicker(el('metric-settings-colors'), editDraft.color, c => { editDraft.color = c; });
+
+    const hideBtn = el('hide-metric-btn');
+    const lastVisible = !current.hidden && metrics.filter(m => !m.hidden).length <= 1;
+    hideBtn.textContent = current.hidden ? 'Show on my board' : 'Hide from my board';
+    hideBtn.disabled = lastVisible;
+    hideBtn.title = lastVisible
+      ? 'This is your only goal on the board. Add or show another goal before hiding it.'
+      : (current.hidden ? 'Puts the tab back and turns auto-logging on again.' : 'Takes the tab off your board and pauses auto-logging. Nothing you logged is deleted.');
+
     const deleteBtn = el('delete-metric-btn');
-    deleteBtn.textContent = 'Remove this goal';
+    deleteBtn.textContent = 'Delete goal';
     deleteBtn.classList.remove('armed');
-    deleteBtn.classList.toggle('hidden', isBuiltIn);
+    deleteBtn.classList.toggle('hidden', isBuiltInMetric(current));
+    el('metric-settings-hint').textContent = isBuiltInMetric(current)
+      ? 'Built-in goals can be renamed or hidden. Their history always stays safe.'
+      : 'Pick a number you can hit on a normal day. You can change it any time.';
     openModal(el('metric-settings-modal'), focusId || 'metric-settings-goal');
+  }
+
+  function finishMetricEdit() {
+    closeModal(el('metric-settings-modal'));
+    if (metricEditFromSettings) {
+      metricEditFromSettings = false;
+      openSettings('goals-group');
+    }
   }
 
   el('metric-settings-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const name = el('metric-settings-name').value.trim();
+    const unit = el('metric-settings-unit').value.trim();
     const goal = parseInt(el('metric-settings-goal').value, 10);
     const weekly = parseInt(el('metric-settings-weekly').value, 10) || 0;
+    if (!name) {
+      showStatus('Give the goal a name.', 'error');
+      el('metric-settings-name').focus();
+      return;
+    }
     if (!goal || goal < 1) {
       showStatus('Pick a daily number of 1 or more.', 'error');
       el('metric-settings-goal').focus();
       return;
     }
+    const current = metricById(settingsMetricId);
     try {
+      if (current && typeof TrackerStorage.updateMetric === 'function') {
+        const patch = {};
+        if (name !== current.name) patch.name = name;
+        if (unit && unit !== current.unit) patch.unit = unit;
+        if (editDraft.color && editDraft.color !== current.color) patch.color = editDraft.color;
+        if (editDraft.icon && editDraft.icon !== iconKey(current)) patch.icon = editDraft.icon;
+        if (Object.keys(patch).length) await TrackerStorage.updateMetric(settingsMetricId, patch);
+      }
       await TrackerStorage.setMetricGoal(settingsMetricId, goal);
       await TrackerStorage.setMetricWeeklyGoal(settingsMetricId, Math.max(0, weekly));
     } catch (err) {
-      oops('Your goal did not save. Please try again.', err);
+      oops('Your changes did not save. Please try again.', err);
       return;
     }
-    closeModal(el('metric-settings-modal'));
+    finishMetricEdit();
     markSetup('goal');
-    showStatus('Goal set: ' + goal + ' a day' + (weekly > 0 ? ' and ' + weekly + ' a week' : '') + '.', 'ok');
+    showStatus('Saved. ' + name + ': ' + goal + ' a day' + (weekly > 0 ? ' and ' + weekly + ' a week' : '') + '.', 'ok');
     notifyCalendarTabs();
     await loadData();
+  });
+
+  el('hide-metric-btn').addEventListener('click', async () => {
+    const current = metricById(settingsMetricId);
+    if (!current) return;
+    const hiding = !current.hidden;
+    const ok = await setGoalHidden(current.id, hiding);
+    if (!ok) return;
+    finishMetricEdit();
+    await loadData();
+    showStatus(hiding
+      ? '"' + current.name + '" is hidden. Everything you logged is kept.'
+      : '"' + current.name + '" is back on your board.', 'ok', hiding ? {
+      label: 'Undo',
+      run: async () => { if (await setGoalHidden(current.id, false)) await loadData(); }
+    } : null);
   });
 
   el('delete-metric-btn').addEventListener('click', async () => {
     const btn = el('delete-metric-btn');
     if (!metricDeleteArmed) {
       metricDeleteArmed = true;
-      btn.textContent = 'Yes, remove this goal';
+      btn.textContent = 'Yes, delete this goal';
       btn.classList.add('armed');
       return;
     }
+    const removedGoal = metricById(settingsMetricId);
     let removed = false;
     try {
       removed = await TrackerStorage.deleteMetric(settingsMetricId);
     } catch (err) {
-      oops('That goal could not be removed just now. Please try again.', err);
+      oops('That goal could not be deleted just now. Please try again.', err);
       return;
     }
     metricDeleteArmed = false;
     if (!removed) {
-      showStatus('That goal could not be removed. It may already be gone.', 'error');
+      showStatus('That goal could not be deleted. It may already be gone.', 'error');
       return;
     }
     if (activeMetricId === settingsMetricId) {
-      activeMetricId = 'jobs';
-      TrackerStorage.setActiveMetricId('jobs');
+      const next = metrics.find(m => !m.hidden && m.id !== settingsMetricId) || metrics[0];
+      activeMetricId = next ? next.id : 'jobs';
+      TrackerStorage.setActiveMetricId(activeMetricId);
     }
     settingsMetricId = null;
-    closeModal(el('metric-settings-modal'));
-    showStatus('Goal removed. What you logged for it is still in your backups.', 'ok');
+    finishMetricEdit();
     notifyCalendarTabs();
     await loadData();
+    // Entries keep pointing at the goal's id, so bringing the goal back with
+    // the same id brings its history back too.
+    showStatus('"' + (removedGoal ? removedGoal.name : 'Goal') + '" deleted.', 'ok', removedGoal ? {
+      label: 'Undo',
+      run: async () => {
+        try {
+          await TrackerStorage.importMetrics([removedGoal]);
+        } catch (err) {
+          oops('That goal could not come back just now.', err);
+          return;
+        }
+        notifyCalendarTabs();
+        await loadData();
+        showStatus('"' + removedGoal.name + '" is back, with everything you logged.', 'ok');
+      }
+    } : null);
   });
 
-  el('close-settings-modal').addEventListener('click', () => closeModal(el('metric-settings-modal')));
-  el('cancel-settings-btn').addEventListener('click', () => closeModal(el('metric-settings-modal')));
+  el('close-settings-modal').addEventListener('click', finishMetricEdit);
+  el('cancel-settings-btn').addEventListener('click', finishMetricEdit);
+
+  // Double-click or right-click a tab to edit that goal.
+  el('metric-tabs').addEventListener('dblclick', (e) => {
+    const tab = e.target.closest('.tab-item');
+    if (tab) openMetricSettings(tab.dataset.metricId, 'metric-settings-name');
+  });
+  el('metric-tabs').addEventListener('contextmenu', (e) => {
+    const tab = e.target.closest('.tab-item');
+    if (!tab) return;
+    e.preventDefault();
+    openMetricSettings(tab.dataset.metricId, 'metric-settings-name');
+  });
+
+  // ----- Settings: Your goals ------------------------------------------------
+  const EYE_SVG = '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.4" stroke="currentColor" stroke-width="1.6"/></svg>';
+  const EYE_OFF_SVG = '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M3 3l14 14M8.3 4.8A8 8 0 0 1 10 4.5c5 0 8 5.5 8 5.5a14 14 0 0 1-2.4 3M5.6 6.3C3.3 7.8 2 10 2 10s3 5.5 8 5.5c1.3 0 2.4-.3 3.4-.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  const PENCIL_SVG = '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true" focusable="false"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 0l1 1a1.8 1.8 0 0 1 0 2.5L7.5 16H4v-3.5l8.8-8.8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+  const UP_SVG = '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 7.5 6 4l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const DOWN_SVG = '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 4.5 6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  function goalToolBtn(cls, svg, label, data) {
+    const b = make('button', 'tool-btn ' + cls);
+    b.type = 'button';
+    b.innerHTML = svg;
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    Object.keys(data).forEach(k => { b.dataset[k] = data[k]; });
+    return b;
+  }
+
+  function renderGoalManager() {
+    const list = el('goal-manager');
+    if (!list) return;
+    list.textContent = '';
+    const shownCount = metrics.filter(m => !m.hidden).length;
+    metrics.forEach((m, i) => {
+      const li = make('li', 'goal-row' + (m.hidden ? ' is-hidden' : ''));
+      li.dataset.metricId = m.id;
+      const icon = make('span', 'goal-row-icon');
+      icon.style.color = m.color;
+      icon.innerHTML = iconFor(m);
+      li.appendChild(icon);
+      const text = make('div', 'goal-row-text');
+      text.appendChild(make('span', 'goal-row-name', m.name));
+      const g = goalFor(m);
+      text.appendChild(make('span', 'goal-row-meta', m.hidden ? 'Hidden, history kept' : g + ' ' + displayUnit(m, g) + ' a day'));
+      li.appendChild(text);
+      const actions = make('div', 'goal-row-actions');
+      const up = goalToolBtn('goal-up', UP_SVG, 'Move ' + m.name + ' left in the tabs', { goalMove: '-1' });
+      up.disabled = i === 0;
+      const down = goalToolBtn('goal-down', DOWN_SVG, 'Move ' + m.name + ' right in the tabs', { goalMove: '1' });
+      down.disabled = i === metrics.length - 1;
+      const eye = goalToolBtn('goal-eye', m.hidden ? EYE_OFF_SVG : EYE_SVG, m.hidden ? 'Show ' + m.name + ' on my board' : 'Hide ' + m.name + ' from my board', { goalToggle: '1' });
+      eye.setAttribute('aria-pressed', m.hidden ? 'false' : 'true');
+      if (!m.hidden && shownCount <= 1) {
+        eye.disabled = true;
+        eye.title = 'Your only goal on the board stays visible.';
+      }
+      const edit = goalToolBtn('goal-edit-row', PENCIL_SVG, 'Edit ' + m.name, { goalEdit: '1' });
+      [up, down, eye, edit].forEach(b => actions.appendChild(b));
+      li.appendChild(actions);
+      list.appendChild(li);
+    });
+  }
+
+  el('goal-manager').addEventListener('click', async (e) => {
+    const row = e.target.closest('.goal-row');
+    const btn = e.target.closest('button');
+    if (!row || !btn || btn.disabled) return;
+    const id = row.dataset.metricId;
+    el('goal-manager-note').textContent = '';
+    if (btn.dataset.goalEdit) {
+      closeModal(el('settings-modal'));
+      openMetricSettings(id, 'metric-settings-name', true);
+      return;
+    }
+    if (btn.dataset.goalToggle) {
+      const m = metricById(id);
+      if (!m) return;
+      if (await setGoalHidden(id, !m.hidden)) {
+        await loadData();
+        renderGoalManager();
+        el('goal-manager-note').textContent = m.hidden ? m.name + ' is back on your board.' : m.name + ' is hidden. Its history is kept.';
+      }
+      return;
+    }
+    if (btn.dataset.goalMove) {
+      if (typeof TrackerStorage.reorderMetrics !== 'function') return;
+      const ids = metrics.map(m => m.id);
+      const from = ids.indexOf(id);
+      const to = from + Number(btn.dataset.goalMove);
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      try {
+        await TrackerStorage.reorderMetrics(ids);
+      } catch (err) {
+        oops('The new order did not save. Please try again.', err);
+        return;
+      }
+      notifyCalendarTabs();
+      await loadData();
+      renderGoalManager();
+      const moved = el('goal-manager').querySelector('[data-metric-id="' + CSS.escape(id) + '"] [data-goal-move="' + btn.dataset.goalMove + '"]');
+      if (moved && !moved.disabled) moved.focus();
+    }
+  });
+
+  el('settings-add-goal-btn').addEventListener('click', () => {
+    closeModal(el('settings-modal'));
+    openNewGoal();
+  });
 
   // ---------------------------------------------------------------------------
   // Add details form
@@ -3624,6 +4637,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('main-view').classList.add('hidden');
     searchInput.focus();
     runSearch();
+    bridgeEmit('search', { open: true });
   }
 
   function closeSearch() {
@@ -3636,6 +4650,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('search-results').textContent = '';
     el('search-btn').focus();
     requestAnimationFrame(() => moveTabIndicator(false));
+    bridgeEmit('search', { open: false });
   }
 
   function escapeRegExp(s) {
@@ -3918,6 +4933,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function openSettings(scrollToId) {
+    renderGoalManager();
+    renderExportOptions();
+    renderModuleSettings();
+    if (el('goal-manager-note')) el('goal-manager-note').textContent = '';
     renderAlertToggles();
     renderCoachSettings();
     applyTheme(document.body.classList.contains('pt-dark') ? 'dark' : 'light');
@@ -3937,6 +4956,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       b.tabIndex = b.dataset.accentValue === accent ? 0 : -1;
     });
     el('comfort-switch').setAttribute('aria-checked', prefs.comfortMode ? 'true' : 'false');
+    el('buddy-switch').setAttribute('aria-checked', prefs.buddyEnabled !== false ? 'true' : 'false');
+    el('water-switch').setAttribute('aria-checked', prefs.waterReminder !== false ? 'true' : 'false');
+    if (document.activeElement !== el('buddy-name-input')) el('buddy-name-input').value = prefs.buddyName || 'Lockie';
+    el('buddy-break-select').value = String(prefs.breakReminderMin === undefined ? 60 : prefs.breakReminderMin);
+    ['buddy-name-input', 'buddy-break-select', 'water-switch'].forEach(id => { el(id).disabled = prefs.buddyEnabled === false; });
+    const style = prefs.themeStyle || 'warm';
+    el('style-picker').querySelectorAll('[data-style-value]').forEach(b => {
+      const on = b.dataset.styleValue === style;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    // Seasonal and Arcade bring their own color; the accent picker rests.
+    const ownColor = style === 'seasonal' || style === 'arcade';
+    el('accent-row').classList.toggle('is-muted', ownColor);
+    el('accent-row').title = ownColor ? 'This style picks its own color.' : '';
     el('voice-segmented').querySelectorAll('[data-voice]').forEach(b => {
       b.setAttribute('aria-checked', b.dataset.voice === voice() ? 'true' : 'false');
     });
@@ -3966,12 +5000,48 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (btn) btn.focus();
     });
   });
+  const STYLE_NAMES = { warm: 'Warm', soft: 'Soft', contrast: 'High contrast', seasonal: 'Seasonal', arcade: 'Arcade' };
+  el('style-picker').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-style-value]');
+    if (!b || b.dataset.styleValue === (prefs.themeStyle || 'warm')) return;
+    const v = b.dataset.styleValue;
+    setPref({ themeStyle: v }, STYLE_NAMES[v] + ' style on.' + (v === 'seasonal' ? ' It changes with the season.' : ''));
+  });
+  el('style-picker').addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const order = Object.keys(STYLE_NAMES);
+    const i = order.indexOf(prefs.themeStyle || 'warm');
+    const next = order[(i + step + order.length) % order.length];
+    setPref({ themeStyle: next }).then(() => {
+      const btn = el('style-picker').querySelector('[data-style-value="' + next + '"]');
+      if (btn) btn.focus();
+    });
+  });
   el('comfort-switch').addEventListener('click', () => setPref({ comfortMode: !prefs.comfortMode }, prefs.comfortMode ? 'Comfort mode off.' : 'Comfort mode on: bigger text and buttons.'));
   el('voice-segmented').addEventListener('click', (e) => {
     const b = e.target.closest('[data-voice]');
     if (!b || b.dataset.voice === voice()) return;
     const sample = { gentle: 'Gentle voice: soft and encouraging.', coach: 'Coach voice: warm and direct.', drill: 'Drill voice: short and firm, never rude.' };
     setPref({ coachVoice: b.dataset.voice }, sample[b.dataset.voice]);
+  });
+  el('buddy-switch').addEventListener('click', () => {
+    const on = prefs.buddyEnabled === false;
+    setPref({ buddyEnabled: on }, on ? (prefs.buddyName || 'Lockie') + ' is back.' : (prefs.buddyName || 'Lockie') + ' is taking a rest. Turn it back on any time.');
+  });
+  el('water-switch').addEventListener('click', () => setPref({ waterReminder: prefs.waterReminder === false }, prefs.waterReminder === false ? 'Water reminders on.' : 'Water reminders off.'));
+  el('buddy-break-select').addEventListener('change', () => {
+    const v = parseInt(el('buddy-break-select').value, 10) || 0;
+    setPref({ breakReminderMin: v }, v ? 'Break reminders after ' + LitBuddy.durationText(v) + ' of applying.' : 'Break reminders off.');
+  });
+  el('buddy-name-input').addEventListener('change', () => {
+    const v = el('buddy-name-input').value.replace(/\s+/g, ' ').trim().slice(0, 20) || 'Lockie';
+    if (v === (prefs.buddyName || 'Lockie')) return;
+    setPref({ buddyName: v }, 'Say hi to ' + v + '.');
+  });
+  el('buddy-name-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
   });
   el('going-for-input').addEventListener('change', () => {
     const value = el('going-for-input').value.trim().slice(0, 80);
@@ -4074,6 +5144,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     notifyCalendarTabs();
     renderStorageInfo();
     await loadData();
+  });
+
+  // ----- Export to Google Sheets, Notion, or a CSV file ------------------------
+  // No sign-in needed: Sheets and Notion both turn a pasted table into rows.
+  function renderExportOptions() {
+    const sel = el('export-goal');
+    const was = sel.value || 'all';
+    sel.textContent = '';
+    const all = make('option', '', 'All goals');
+    all.value = 'all';
+    sel.appendChild(all);
+    metrics.forEach(m => {
+      const o = make('option', '', m.name + (m.hidden ? ' (hidden)' : ''));
+      o.value = m.id;
+      sel.appendChild(o);
+    });
+    sel.value = Array.from(sel.options).some(o => o.value === was) ? was : 'all';
+    el('export-hint').textContent = 'Google Sheets opens a blank sheet: click cell A1 and paste. In Notion, paste into any page, or use Import, then CSV, for a database.';
+  }
+
+  async function exportRows() {
+    const names = {};
+    metrics.forEach(m => { names[m.id] = m.name; });
+    const logs = await TrackerStorage.getLogs({});
+    const rows = LitExport.filterLogs(logs, { metricId: el('export-goal').value, days: el('export-range').value, today: todayStr() });
+    return { rows, names };
+  }
+
+  function exportLabel() {
+    const goal = el('export-goal');
+    const range = el('export-range');
+    return goal.options[goal.selectedIndex].text + ', ' + range.options[range.selectedIndex].text.toLowerCase();
+  }
+
+  el('export-sheets-btn').addEventListener('click', async () => {
+    let data;
+    try { data = await exportRows(); } catch (err) { oops('Your entries could not be read just now.', err); return; }
+    if (!data.rows.length) { el('export-hint').textContent = 'Nothing logged for ' + exportLabel() + ' yet.'; return; }
+    const copied = await copyText(LitExport.buildTsv(data.rows, data.names));
+    if (!copied) { el('export-hint').textContent = 'Copying is blocked here. Use Download CSV instead.'; return; }
+    el('export-hint').textContent = 'Copied ' + data.rows.length + ' rows. In the new sheet, click cell A1 and paste.';
+    if (chrome.tabs) chrome.tabs.create({ url: 'https://sheets.new' });
+  });
+
+  el('export-notion-btn').addEventListener('click', async () => {
+    let data;
+    try { data = await exportRows(); } catch (err) { oops('Your entries could not be read just now.', err); return; }
+    if (!data.rows.length) { el('export-hint').textContent = 'Nothing logged for ' + exportLabel() + ' yet.'; return; }
+    const copied = await copyText(LitExport.buildMarkdown(data.rows, data.names, { title: 'LIT: ' + exportLabel() }));
+    el('export-hint').textContent = copied
+      ? 'Copied ' + data.rows.length + ' rows. Paste into any Notion page and it becomes a table.'
+      : 'Copying is blocked here. Use Download CSV and import it into Notion.';
+  });
+
+  el('export-csv-btn').addEventListener('click', async () => {
+    let data;
+    try { data = await exportRows(); } catch (err) { oops('Your entries could not be read just now.', err); return; }
+    if (!data.rows.length) { el('export-hint').textContent = 'Nothing logged for ' + exportLabel() + ' yet.'; return; }
+    const filename = LitExport.backupFilename('lit-export', 'csv');
+    if (downloadText(filename, LitExport.buildCsv(data.rows, data.names), 'text/csv')) {
+      el('export-hint').textContent = 'Saved ' + data.rows.length + ' rows to ' + filename + '. Open it in Excel or Numbers, or import it into Notion.';
+    } else {
+      el('export-hint').textContent = 'Chrome blocked the download. Try Copy for Google Sheets instead.';
+    }
   });
 
   el('settings-modal').addEventListener('click', async (e) => {
@@ -4569,7 +5703,140 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Settings > Extras: switch rows that popup modules add through
+  // LitPopup.addSetting. The group hides when no module adds one.
+  // ---------------------------------------------------------------------------
+  function renderModuleSettings() {
+    const host = el('module-settings');
+    if (!host || typeof LitPopup === 'undefined') return;
+    const rows = LitPopup.settingRows;
+    el('module-settings-group').classList.toggle('hidden', !rows.length);
+    host.textContent = '';
+    rows.forEach(row => {
+      const wrap = make('div', 'setting-row' + (row.hint ? ' setting-row-2line' : ''));
+      const label = make('span', 'setting-label', row.label);
+      if (row.hint) label.appendChild(make('small', '', row.hint));
+      wrap.appendChild(label);
+      const sw = make('button', 'switch');
+      sw.type = 'button';
+      sw.setAttribute('role', 'switch');
+      sw.setAttribute('aria-label', row.label);
+      let on = false;
+      try { on = !!row.get(); } catch (e) { on = false; }
+      sw.setAttribute('aria-checked', on ? 'true' : 'false');
+      sw.appendChild(make('span'));
+      sw.addEventListener('click', async () => {
+        const next = sw.getAttribute('aria-checked') !== 'true';
+        sw.setAttribute('aria-checked', next ? 'true' : 'false');
+        try { await row.set(next); } catch (err) { oops('That setting did not save. Please try again.', err); }
+      });
+      wrap.appendChild(sw);
+      host.appendChild(wrap);
+    });
+  }
+
+  async function logForGoal(metricId) {
+    const metric = metricById(metricId);
+    if (!metric) return false;
+    const before = todayFor(metric);
+    try {
+      await TrackerStorage.addLog({ metricId, count: 1, source: 'manual' });
+    } catch (err) {
+      oops('That one did not save. Please try again.', err);
+      return false;
+    }
+    buddyCheerSoon = true;
+    notifyCalendarTabs();
+    await loadData();
+    const after = metricById(metricId);
+    const count = after ? todayFor(after) : before + 1;
+    const goal = goalFor(after || metric);
+    bridgeEmit('log', { metric: after || metric, count, goal });
+    if (before < goal && count >= goal) {
+      showStatus((after || metric).name + ': locked in for today.', 'ok');
+      bridgeEmit('goal-met', { metric: after || metric });
+    }
+    return true;
+  }
+
+  // Adds a company to the watchlist; false when empty, a duplicate, or full.
+  function addWatchCompany(raw) {
+    const name = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!name || watchlist.length >= MAX_WATCH) return false;
+    const key = TrackerStorage.normalizeCompany(name);
+    if (watchlist.some(w => TrackerStorage.normalizeCompany(w.name) === key)) return false;
+    watchlist.push({ id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, added: todayStr() });
+    saveWatchlist();
+    rerenderType('watchlist');
+    return true;
+  }
+
+  // Brings the watchlist card into view (adding or expanding it first) and
+  // focuses its input.
+  async function openWatchlistCard() {
+    const item = widgetItems.find(i => i.type === 'watchlist');
+    if (!item) await applyLayout(WidgetLayout.add('watchlist', {}), 'Companies card added.');
+    else if (item.options.collapsed) await applyLayout(WidgetLayout.update(item.id, { collapsed: false }));
+    const input = widgetsHost.querySelector('.widget-watchlist .watch-input');
+    if (!input) return false;
+    input.closest('.widget').scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+    input.focus({ preventScroll: true });
+    return true;
+  }
+
+  // The read-only view and the helpers popup modules get through LitPopup.api.
+  if (typeof LitPopup !== 'undefined') {
+    LitPopup.attach({
+      get metrics() { return metrics.slice(); },
+      get visibleMetrics() { return visibleMetrics(); },
+      get activeMetric() { return metricById(activeMetricId); },
+      get stats() { return stats; },
+      get prefs() { return prefs; },
+      get widgetItems() { return widgetItems.slice(); },
+      get watchlist() { return watchlist.slice(); },
+      get buddySession() { return buddySession; },
+      get reduceMotion() { return reduceMotion; },
+      get isDark() { return document.body.classList.contains('pt-dark'); },
+      get openModalId() { return openModalEl ? openModalEl.id : null; },
+      make,
+      todayStr,
+      todayFor,
+      goalFor,
+      goalMetFor,
+      streakFor,
+      displayUnit,
+      friendlyDate,
+      iconFor,
+      statusMeta,
+      statusOf,
+      metricById,
+      jobs: () => getJobs().promise,
+      showStatus,
+      oops,
+      coach,
+      // +1 on any goal. The active goal goes through the button (timer,
+      // ring, burst); another goal logs directly with the same cheer.
+      logOne: metricId => {
+        if (!metricId || metricId === activeMetricId) { el('quick-add-btn').click(); return Promise.resolve(true); }
+        return logForGoal(metricId);
+      },
+      addWatchCompany: name => addWatchCompany(name),
+      openWatchlist: () => openWatchlistCard(),
+      undoLast: () => el('undo-btn').click(),
+      selectGoal: id => selectTracker(id),
+      openShare,
+      openSettings,
+      openWidgetSettings,
+      openModal,
+      closeModal,
+      openCalendar: () => el('week-calendar-link').click(),
+      refresh: () => loadData()
+    });
+  }
+
   applyTheme(await TrackerStorage.getTheme());
+  if (typeof LitPopup !== 'undefined') await LitPopup.loadModulePrefs();
   try {
     prefs = await TrackerStorage.getPrefs();
   } catch (err) {
@@ -4599,5 +5866,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const focusSearch = await consumeSearchFlag().catch(() => false);
   await loadData();
+  if (typeof LitPopup !== 'undefined') LitPopup.markReady();
   if (focusSearch) openSearch();
 });

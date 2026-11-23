@@ -5,7 +5,9 @@
 // push?"; the time, voice, and off switch sit under their own disclosure.
 (() => {
   const el = id => document.getElementById(id);
-  const METRIC = 'jobs';
+  // Job applications lead; if that goal is hidden, the first goal still on
+  // the board stands in (set in load()).
+  let METRIC = 'jobs';
   const VIDEO_ID = 'amXl7FG7J4c';
   const DAY_LETTERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -147,9 +149,12 @@
 
     try {
       const [stats, metrics] = await Promise.all([TrackerStorage.getStats(), TrackerStorage.getMetrics()]);
-      const metric = (metrics || []).find(m => m.id === METRIC);
+      const all = metrics || [];
+      const shown = all.filter(m => m && !m.hidden);
+      const metric = shown.find(m => m.id === 'jobs') || shown[0] || all.find(m => m.id === 'jobs');
+      if (metric) METRIC = metric.id;
       state.goal = Math.max(1, parseInt(metric && metric.dailyGoal, 10) || 5);
-      state.unit = (metric && metric.unit) || 'applications';
+      state.unit = metric && metric.id === 'jobs' && (!metric.unit || metric.unit === 'jobs' || metric.unit === 'items') ? 'applications' : ((metric && metric.unit) || 'applications');
       const counts = stats.todayCount || stats.today || {};
       state.count = Math.max(0, parseInt(counts[METRIC], 10) || 0);
       state.restToday = !!stats.restToday;

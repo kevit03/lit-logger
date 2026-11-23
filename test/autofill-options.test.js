@@ -194,6 +194,7 @@ async function openPage(stored = {}, hash = '', syncStored = {}) {
   const page = {
     doc,
     location,
+    winListeners: win.listeners,
     el: id => {
       const node = doc.getElementById(id);
       assert.ok(node, 'page has #' + id);
@@ -525,9 +526,196 @@ async function testPlainLanguageAndLook() {
   uninstallMockChrome();
 }
 
+// A key press on `node` that bubbles to the document, the way the page's
+// field handlers and its page-wide shortcuts both see it. Returns whether
+// anything called preventDefault.
+function press(page, node, key, mods = {}) {
+  let prevented = false;
+  const event = Object.assign({ type: 'keydown', key, target: node, preventDefault() { prevented = true; } }, mods);
+  (node.listeners.keydown || []).slice().forEach(fn => fn(event));
+  (page.doc.listeners.keydown || []).slice().forEach(fn => fn(event));
+  return prevented;
+}
+
+// The meter points at the next thing to do, and fields with a shape say
+// plainly when a value looks off (but still save it as typed).
+async function testNextStepAndChecks() {
+  const page = await openPage(SEED, '#answers');
+  const next = page.el('progress-next');
+  assert.ok(!page.el('profile').visible);
+  assert.strictEqual(next.textContent, 'Next: Portfolio', 'the first empty field that counts');
+  next.click();
+  assert.ok(page.el('profile').visible, 'Next opens the profile');
+  assert.strictEqual(page.doc.activeElement, page.el('pf-portfolio'), 'and puts the cursor in that field');
+  assert.ok(page.el('pf-portfolio').parent.classList.contains('is-target'), 'the field is ringed');
+
+  // Saved as typed, flagged under the field, and the meter points at it.
+  await page.type(page.el('pf-email'), 'sam@example');
+  assert.strictEqual(page.stored().af_profile.email, 'sam@example', 'a value that looks off is still saved');
+  const msg = page.el('pf-email-msg');
+  assert.ok(msg.visible);
+  assert.strictEqual(msg.textContent, 'Check this email. It should look like name@example.com.');
+  assert.strictEqual(page.el('pf-email').getAttribute('aria-invalid'), 'true');
+  assert.strictEqual(page.el('pf-email').getAttribute('aria-describedby'), 'pf-email-msg');
+  assert.strictEqual(next.textContent, 'Check: Email');
+  assert.ok(next.classList.contains('is-warn'));
+  await page.type(page.el('pf-email'), 'sam@example.com');
+  assert.ok(!msg.visible, 'the note goes once it is fixed');
+  assert.strictEqual(page.el('pf-email').getAttribute('aria-invalid'), null);
+  assert.strictEqual(next.textContent, 'Next: Portfolio');
+
+  // Format tidying only: a missing https:// or +.
+  await page.type(page.el('pf-linkedin'), 'linkedin.com/in/sam-r');
+  assert.strictEqual(page.stored().af_profile.linkedin, 'https://linkedin.com/in/sam-r');
+  assert.strictEqual(page.el('pf-linkedin').value, 'https://linkedin.com/in/sam-r');
+  assert.ok(!page.el('pf-linkedin-msg').visible);
+  await page.type(page.el('pf-linkedin'), 'https://example.com/sam');
+  assert.ok(/does not look like a LinkedIn link/.test(page.el('pf-linkedin-msg').textContent));
+  await page.type(page.el('pf-phoneCountryCode'), '44');
+  assert.strictEqual(page.stored().af_profile.phoneCountryCode, '+44');
+  await page.type(page.el('pf-phone'), 'call me');
+  assert.strictEqual(page.el('pf-phone-msg').textContent, 'Use numbers only, like 555 123 4567.');
+  await page.type(page.el('pf-phone'), '(555) 123-4567 ext. 9');
+  assert.ok(!page.el('pf-phone-msg').visible, 'brackets, dashes and an extension are fine');
+  await page.type(page.el('pf-gradYear'), '27');
+  assert.strictEqual(page.el('pf-gradYear-msg').textContent, 'Use a 4-digit year, like 2027.');
+  await page.type(page.el('pf-portfolio'), 'my site');
+  assert.ok(/starting with https:\/\//.test(page.el('pf-portfolio-msg').textContent), 'text that is not a link is not given a scheme');
+  assert.strictEqual(page.stored().af_profile.portfolio, 'my site');
+  uninstallMockChrome();
+
+  // A stored value that looks off is flagged on open, without writing.
+  const seed = JSON.parse(JSON.stringify(SEED));
+  seed.af_profile.website = 'not a link';
+  const again = await openPage(seed);
+  assert.deepStrictEqual(again.stored(), seed, 'opening the page writes nothing');
+  assert.ok(again.el('pf-website-msg').visible);
+  assert.strictEqual(again.el('progress-next').textContent, 'Check: Website');
+  uninstallMockChrome();
+
+  // Everything filled: the resume is next, then all set.
+  const full = JSON.parse(JSON.stringify(SEED));
+  Object.assign(full.af_profile, { portfolio: 'https://sam.example.com', website: 'https://sam.example.com',
+    willingToRelocate: 'yes', earliestStartDate: 'June 2027' });
+  delete full.af_resume;
+  const done = await openPage(full);
+  assert.strictEqual(done.el('progress-text').textContent, '23 of 23 filled');
+  assert.strictEqual(done.el('progress-next').textContent, 'Next: add your resume');
+  done.el('progress-next').click();
+  assert.ok(done.el('resume').visible);
+  assert.strictEqual(done.doc.activeElement, done.el('resume-upload-btn'));
+  uninstallMockChrome();
+  full.af_resume = RESUME;
+  const allSet = await openPage(full);
+  assert.strictEqual(allSet.el('progress-text').textContent, 'All 23 filled');
+  assert.ok(!allSet.el('progress-next').visible);
+  assert.ok(allSet.el('progress-box').classList.contains('is-complete'));
+  uninstallMockChrome();
+}
+
+async function testKeyboardAndLeaving() {
+  const page = await openPage(SEED);
+
+  // Ctrl/Cmd+S saves the field you are in without leaving it.
+  const city = page.el('pf-city');
+  city.focus();
+  city.value = 'Tacoma';
+  assert.ok(press(page, city, 's', { ctrlKey: true }), 'the browser save dialog is held off');
+  await page.settle();
+  assert.strictEqual(page.stored().af_profile.city, 'Tacoma');
+  assert.strictEqual(page.doc.activeElement, city, 'still in the field');
+  assert.strictEqual(page.el('save-status').textContent, 'Saved');
+  press(page, city, 'S', { metaKey: true });
+  await page.settle();
+  assert.strictEqual(page.el('save-status').textContent, 'Everything is saved', 'nothing new to save says so');
+
+  // Esc takes back an edit in a profile field.
+  const state = page.el('pf-state');
+  state.focus();
+  state.value = 'Oregon';
+  press(page, state, 'Escape');
+  await page.settle();
+  assert.strictEqual(state.value, 'WA');
+  assert.strictEqual(page.stored().af_profile.state, 'WA', 'nothing written');
+
+  // ...and in a saved answer.
+  const item = page.el('answers-list').children[0];
+  const [question, text] = item.children;
+  text.focus();
+  text.value = 'A half-written thought';
+  press(page, text, 'Escape');
+  await page.settle();
+  assert.strictEqual(text.value, 'Because.');
+  assert.strictEqual(page.stored().af_answers[0].answer, 'Because.');
+  assert.ok(question, 'the item has its question field');
+
+  // New answer: Enter moves from question to answer, Ctrl+Enter saves.
+  page.el('tab-answers').click();
+  page.el('answer-add-btn').click();
+  const q = page.el('answer-new-question');
+  const a = page.el('answer-new-text');
+  assert.strictEqual(page.doc.activeElement, q);
+  assert.ok(/(Ctrl|Cmd)\+Enter saves\. Esc cancels\./.test(page.el('answer-new-keys').textContent));
+  q.value = 'What are your salary expectations?';
+  assert.ok(press(page, q, 'Enter'), 'Enter does not send a half-done form');
+  assert.strictEqual(page.doc.activeElement, a, 'Enter moves on to the answer');
+  assert.ok(!press(page, a, 'Enter'), 'plain Enter in the answer is a new line');
+  a.value = 'Open to discussing.';
+  press(page, a, 'Enter', { ctrlKey: true });
+  await page.settle();
+  assert.strictEqual(page.stored().af_answers.length, 3);
+  assert.ok(!page.el('answer-new').visible);
+  assert.strictEqual(page.el('save-status').textContent, 'Answer saved');
+
+  // Saving with a piece missing says which, in plain words.
+  page.el('answer-add-btn').click();
+  page.el('answer-new').fire('submit');
+  await page.settle();
+  assert.strictEqual(page.el('answer-new-error').textContent, 'Add the question first, then your answer.');
+  q.value = 'Anything else?';
+  page.el('answer-new').fire('submit');
+  await page.settle();
+  assert.strictEqual(page.el('answer-new-error').textContent, 'Write your answer, then save.');
+  assert.strictEqual(page.doc.activeElement, a);
+
+  // A draft blocks a careless close; Esc closes it but offers it back.
+  a.value = 'Draft words';
+  const unload = { returnValue: undefined, prevented: false, preventDefault() { this.prevented = true; } };
+  const win = page.winListeners;
+  win.beforeunload(unload);
+  assert.ok(unload.prevented && unload.returnValue === '', 'leaving with a draft asks first');
+  press(page, a, 'Escape');
+  assert.ok(!page.el('answer-new').visible, 'Esc cancels the form');
+  assert.strictEqual(page.doc.activeElement, page.el('answer-add-btn'));
+  assert.strictEqual(page.el('undo-text').textContent, 'Answer draft closed.');
+  page.el('undo-btn').click();
+  await page.settle();
+  assert.ok(page.el('answer-new').visible, 'undo brings the draft back');
+  assert.strictEqual(q.value, 'Anything else?');
+  assert.strictEqual(a.value, 'Draft words');
+  assert.strictEqual(page.stored().af_answers.length, 3, 'the draft was never saved');
+  page.el('answer-new-cancel').click();
+  const calm = { returnValue: undefined, prevented: false, preventDefault() { this.prevented = true; } };
+  win.beforeunload(calm);
+  assert.ok(!calm.prevented && calm.returnValue === undefined, 'nothing unsaved, no question');
+
+  // Esc answers the import question with "Keep my data".
+  page.el('tab-settings').click();
+  page.el('import-confirm').classList.remove('hidden');
+  press(page, page.doc.body, 'Escape');
+  assert.ok(!page.el('import-confirm').visible);
+
+  // The Applications page link uses the extension URL.
+  assert.strictEqual(page.el('applications-link').getAttribute('href'),
+    'chrome-extension://job-tracker-mock-extension-id/applications/applications.html');
+  uninstallMockChrome();
+}
+
 async function run() {
   const tests = [
     testPlainLanguageAndLook,
+    testNextStepAndChecks,
+    testKeyboardAndLeaving,
     testShowsStoredData,
     testTabs,
     testProfileEdits,

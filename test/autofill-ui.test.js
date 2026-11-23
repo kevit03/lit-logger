@@ -597,6 +597,96 @@ async function run() {
     cleanup(ctx);
   }
 
+  // 7e2. Keyboard: Enter takes the prompt's primary button from the form,
+  // Esc skips it, and the keys keep their page meaning where they have one.
+  {
+    const ctx = await learningPage();
+    await ctx.api.fill();
+    const key = (k, target, extra = {}) => ctx.win.dispatch('keydown', Object.assign({ key: k, target }, extra));
+
+    userTypes(ctx, ctx.fields.ref, 'LIT-2026');
+    await settle();
+    assert.strictEqual(promptTitle(ctx.doc), 'Save answer for next time?');
+    const hint = promptEl(ctx.doc).querySelector('.hint');
+    assert.ok(hint, 'the prompt shows its keys');
+    assert.deepStrictEqual(hint.querySelectorAll('kbd').map(k => k.textContent), ['Enter', 'Esc']);
+
+    // The keystroke that committed the field cannot also answer the prompt.
+    let ev = key('Enter', ctx.fields.city);
+    assert.strictEqual(ev.defaultPrevented, false, 'Enter right as the prompt appears is left alone');
+    assert.ok(promptEl(ctx.doc), 'prompt still up');
+    await wait(300);
+
+    // Held-down Enter (auto-repeat) never answers.
+    ev = key('Enter', ctx.fields.city, { repeat: true });
+    assert.strictEqual(ev.defaultPrevented, false);
+    // Shift+Enter and Alt+Enter are not the shortcut.
+    key('Enter', ctx.fields.city, { shiftKey: true });
+    key('Enter', ctx.fields.city, { altKey: true });
+    // An IME composition's Enter belongs to the composition.
+    key('Enter', ctx.fields.city, { isComposing: true });
+    assert.ok(promptEl(ctx.doc), 'none of those answered');
+    assert.strictEqual(ctx.store.calls.learnRule.length, 0);
+
+    // Enter in a textarea is a new line, not a yes.
+    ev = key('Enter', ctx.fields.essay);
+    assert.strictEqual(ev.defaultPrevented, false, 'textarea keeps Enter');
+    assert.ok(promptEl(ctx.doc));
+    // An open dropdown keeps Enter for picking its option.
+    const combo = ctx.doc.createElement('input');
+    combo.setAttribute('role', 'combobox');
+    combo.setAttribute('aria-expanded', 'true');
+    ev = key('Enter', combo);
+    assert.strictEqual(ev.defaultPrevented, false, 'open dropdown keeps Enter');
+    ev = key('Escape', combo);
+    assert.strictEqual(ev.defaultPrevented, false, 'open dropdown keeps Esc');
+    assert.ok(promptEl(ctx.doc));
+
+    // Plain Enter from a text box saves (primary: this site) and is swallowed
+    // so the form is not submitted by the same key.
+    ev = key('Enter', ctx.fields.city);
+    assert.strictEqual(ev.defaultPrevented, true, 'Enter does not also submit the form');
+    await settle();
+    assert.deepStrictEqual(ctx.store.calls.learnRule, [{ host: HOST, labelKey: 'referral code optional', value: 'LIT-2026' }]);
+    assert.strictEqual(promptEl(ctx.doc), null, 'the prompt closes');
+    assert.ok(/Saved/.test(toastText(ctx.doc)), 'the usual saved note shows');
+
+    // With no prompt up, Enter is the page's again.
+    ev = key('Enter', ctx.fields.city);
+    assert.strictEqual(ev.defaultPrevented, false, 'no prompt: Enter untouched');
+
+    // Esc skips: nothing saved, prompt gone, and the key does not reach the page.
+    userTypes(ctx, ctx.fields.ref, 'LIT-2027');
+    await settle();
+    assert.ok(promptEl(ctx.doc));
+    ev = key('Escape', ctx.fields.city);
+    assert.strictEqual(ev.defaultPrevented, true);
+    assert.strictEqual(promptEl(ctx.doc), null, 'Esc closes the prompt');
+    assert.strictEqual(ctx.store.calls.learnRule.length, 1, 'Esc saves nothing');
+
+    // Ctrl/Cmd+Enter answers even from a textarea (the long-answer offer).
+    const answer = 'I have wanted to build analytical engines since I was a child.';
+    ctx.fields.essay.value = answer;
+    mock.fire(ctx.doc, ctx.win, ctx.fields.essay, 'change');
+    mock.fire(ctx.doc, ctx.win, ctx.fields.essay, 'focusout');
+    await settle();
+    assert.strictEqual(promptTitle(ctx.doc), 'Add to your saved answers?');
+    await wait(300);
+    ev = key('Enter', ctx.fields.essay);
+    assert.strictEqual(ev.defaultPrevented, false, 'plain Enter in the textarea is still a new line');
+    ev = key('Enter', ctx.fields.essay, { metaKey: true });
+    assert.strictEqual(ev.defaultPrevented, true);
+    await settle();
+    assert.deepStrictEqual(ctx.store.calls.saveAnswer, [{ question: 'Why do you want to work here?', answer }]);
+    assert.strictEqual(promptEl(ctx.doc), null);
+
+    // Alt+Shift+F still runs autofill with the prompt logic in front of it.
+    ev = ctx.win.dispatch('keydown', { altKey: true, shiftKey: true, key: 'F', code: 'KeyF' });
+    assert.strictEqual(ev.defaultPrevented, true, 'fill shortcut still handled');
+    await settle();
+    cleanup(ctx);
+  }
+
   // 7f. autoLearn off: nothing is watched for learning.
   {
     const ctx = await learningPage();

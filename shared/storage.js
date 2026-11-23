@@ -104,10 +104,28 @@ const TrackerStorage = (() => {
     // { [metricId]: Array<number | 'first-interview'> } of celebrated milestones.
     seenMilestones: {},
     shareHideCompanies: true,
-    tipsOff: false
+    tipsOff: false,
+    // Popup look: 'warm' (default), 'soft', 'contrast', 'seasonal' (changes
+    // with the month), or 'arcade'.
+    themeStyle: 'warm',
+    // The buddy: a small character in the popup that cheers you on and,
+    // during a long applying session, nudges a break and some water.
+    buddyEnabled: true,
+    buddyName: 'Lockie',
+    // Minutes of steady logging before a break nudge; 0 turns it off.
+    breakReminderMin: 60,
+    waterReminder: true,
+    // --- Follow-ups (added 2026-11-20) ---
+    // One quiet notification a day when an application still at Applied is
+    // ready for a follow-up: followUpDays after applying, unless the person
+    // picked a day for that entry (followUpAt). See shared/followups.js.
+    followUpEnabled: true,
+    followUpDays: 7
   };
 
   const ACCENTS = ['coral', 'sage', 'ocean', 'plum', 'amber', 'slate'];
+  const THEME_STYLES = ['warm', 'soft', 'contrast', 'seasonal', 'arcade'];
+  const BREAK_CHOICES = [0, 30, 45, 60, 90, 120];
   const COACH_VOICES = ['gentle', 'coach', 'drill'];
 
   // Starter trackers offered during onboarding. 'jobs' and 'leetcode' are the
@@ -170,6 +188,14 @@ const TrackerStorage = (() => {
     if (key === 'coachVoice') return COACH_VOICES.includes(value) ? value : undefined;
     if (key === 'reminderTime') return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : undefined;
     if (key === 'goingFor') return value.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+    if (key === 'themeStyle') return THEME_STYLES.includes(value) ? value : undefined;
+    if (key === 'buddyName') {
+      const name = value.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20);
+      return name || undefined;
+    }
+    if (key === 'breakReminderMin') return BREAK_CHOICES.includes(value) ? value : undefined;
+    // Follow-ups (added 2026-11-20): whole days, 1 to 60.
+    if (key === 'followUpDays') return Number.isInteger(value) && value >= 1 && value <= 60 ? value : undefined;
     return value;
   }
 
@@ -305,6 +331,24 @@ const TrackerStorage = (() => {
     if (metricId === 'leetcode') return 2;
     return 1;
   }
+
+  // Tab order: an explicit `order` (set by reorderMetrics) wins; goals
+  // without one keep their stored position, after every ordered goal.
+  function sortKey(m) {
+    const o = Number(m.order);
+    return Number.isFinite(o) ? o : 100000 + (m.__index || 0);
+  }
+
+  // Built-in goals are shared by every account on the device; a custom goal
+  // belongs to the account (or signed-out profile) that made it.
+  function canEditMetric(m, targetEmail) {
+    if (m.isDefault || m.id === 'jobs' || m.id === 'leetcode') return true;
+    const owner = normalizeEmail(m.userEmail);
+    return (!targetEmail && !owner) || (!!targetEmail && owner === targetEmail);
+  }
+
+  // Icons a goal can wear. The popup draws them; storage only validates.
+  const METRIC_ICONS = ['briefcase', 'code', 'target', 'chat', 'mail', 'book', 'pen', 'people', 'phone', 'star'];
 
   // A streak day is a day the DAILY GOAL was met, not merely a day with an
   // entry. Logging one application against a goal of five keeps the count
@@ -541,6 +585,143 @@ const TrackerStorage = (() => {
     const s = cleanText(value, 600);
     return /^https?:\/\//i.test(s) ? s : '';
   }
+
+  // --- Applications: extra job details and follow-ups (added 2026-11-20) ---
+  // Optional fields on a job entry ('jobs' only), kept on add, edit, import,
+  // backup, snapshot restore, and the content-script proxy. Unknown means the
+  // field is left out, never guessed:
+  //   location      up to 80 chars, "Austin, TX" or "Remote (US)"
+  //   salary        up to 60 chars, as the posting shows it
+  //   workMode      'remote' | 'hybrid' | 'onsite'
+  //   followUpAt    YYYY-MM-DD the person picked to follow up. Without it,
+  //                 shared/followups.js uses the date + prefs.followUpDays,
+  //                 so changing that preference moves every default at once.
+  //   followedUpAt  ISO time the person marked it followed up
+  const WORK_MODES = ['remote', 'hybrid', 'onsite'];
+  const JOB_DETAIL_MAX = { location: 80, salary: 60 };
+  const APPLICATION_SORTS = ['date', 'company', 'role', 'status'];
+
+  // One line of plain text: control characters and runs of space collapse.
+  function cleanLine(value, max) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max);
+  }
+
+  function normalizeWorkMode(value) {
+    if (typeof value !== 'string') return null;
+    const v = value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+    if (v === 'remote' || v === 'fullyremote' || v === 'workfromhome') return 'remote';
+    if (v === 'hybrid') return 'hybrid';
+    if (v === 'onsite' || v === 'inoffice' || v === 'inperson') return 'onsite';
+    return null;
+  }
+
+  function cleanIsoTimestamp(value) {
+    if (typeof value !== 'string' || !value) return null;
+    const t = new Date(value);
+    return isNaN(t.getTime()) ? null : t.toISOString();
+  }
+
+  // Copies the extra job details from `source` onto `target`. 'add' (a new
+  // or imported entry) keeps only valid values. 'patch' (an edit) also reads
+  // null or an empty string as "remove it", and leaves a field alone when the
+  // value given is not valid, so a bad value can never wipe a good one.
+  function applyJobDetails(target, source, mode) {
+    if (!target || !source || typeof source !== 'object') return target;
+    const patch = mode === 'patch';
+    const cleared = v => v === null || v === '' || v === false;
+    ['location', 'salary'].forEach(key => {
+      const raw = source[key];
+      if (raw === undefined) return;
+      const value = typeof raw === 'string' ? cleanLine(raw, JOB_DETAIL_MAX[key]) : '';
+      if (value) target[key] = value;
+      else if (patch && (raw === null || typeof raw === 'string')) delete target[key];
+    });
+    if (source.workMode !== undefined) {
+      const workMode = normalizeWorkMode(source.workMode);
+      if (workMode) target.workMode = workMode;
+      else if (patch && cleared(source.workMode)) delete target.workMode;
+    }
+    if (source.followUpAt !== undefined) {
+      if (isDateStr(source.followUpAt)) target.followUpAt = source.followUpAt;
+      else if (patch && cleared(source.followUpAt)) delete target.followUpAt;
+    }
+    if (source.followedUpAt !== undefined) {
+      const at = cleanIsoTimestamp(source.followedUpAt);
+      if (at) target.followedUpAt = at;
+      else if (patch && cleared(source.followedUpAt)) delete target.followedUpAt;
+    }
+    return target;
+  }
+
+  // Narrows job entries for the Applications page and listApplications:
+  //   status     a stage id (aliases work) or a list of them; empty or 'all'
+  //              keeps every stage
+  //   query      words that must all appear in the role, company, notes,
+  //              location, salary, or stage name
+  //   workMode   'remote' | 'hybrid' | 'onsite'
+  //   startDate / endDate  YYYY-MM-DD, inclusive
+  function filterApplications(logs, filters) {
+    const f = filters && typeof filters === 'object' ? filters : {};
+    const statuses = (Array.isArray(f.status) ? f.status : [f.status]).map(normalizeStatus).filter(Boolean);
+    const workMode = normalizeWorkMode(f.workMode);
+    const tokens = String(f.query || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+    return (Array.isArray(logs) ? logs : []).filter(l => {
+      if (!l || l.metricId !== 'jobs') return false;
+      const status = normalizeStatus(l.status) || 'applied';
+      if (statuses.length && !statuses.includes(status)) return false;
+      if (workMode && l.workMode !== workMode) return false;
+      if (isDateStr(f.startDate) && l.date < f.startDate) return false;
+      if (isDateStr(f.endDate) && l.date > f.endDate) return false;
+      if (tokens.length) {
+        const hay = [l.role, l.company, l.notes, l.location, l.salary, statusLabel(status)].join(' ').toLowerCase();
+        if (!tokens.every(t => hay.includes(t))) return false;
+      }
+      return true;
+    });
+  }
+
+  // Sorts a copy. 'date' (the default) is newest first; 'company' and 'role'
+  // are A to Z with blanks always last; 'status' follows the pipeline order.
+  // dir 'asc' / 'desc' flips the default. Ties fall back to newest first.
+  function sortApplications(logs, sort, dir) {
+    const key = APPLICATION_SORTS.includes(sort) ? sort : 'date';
+    const natural = key === 'date' ? 'desc' : 'asc';
+    const flip = (dir === 'asc' || dir === 'desc') && dir !== natural ? -1 : 1;
+    const text = v => String(v || '').trim().toLowerCase();
+    const rank = l => STATUS_IDS.indexOf(normalizeStatus(l.status) || 'applied');
+    return (Array.isArray(logs) ? logs : []).slice().sort((a, b) => {
+      let d = 0;
+      if (key === 'date') {
+        d = a.date === b.date ? timeOf(b) - timeOf(a) : (a.date < b.date ? 1 : -1);
+      } else if (key === 'status') {
+        d = rank(a) - rank(b);
+      } else {
+        const x = text(a[key]);
+        const y = text(b[key]);
+        if (!x !== !y) return x ? -1 : 1;
+        d = x.localeCompare(y);
+      }
+      if (d) return d * flip;
+      return compareNewestFirst(a, b);
+    });
+  }
+
+  // shared/followups.js holds the follow-up rules. The service worker and the
+  // Applications page load it; content scripts reach it through the proxy.
+  function followUpsModule() {
+    try {
+      if (typeof LitFollowUps !== 'undefined' && LitFollowUps) return LitFollowUps;
+      if (typeof module !== 'undefined' && module.exports && typeof require === 'function') return require('./followups');
+    } catch (e) {
+      // Not bundled in this context.
+    }
+    return null;
+  }
+  // --- end Applications helpers ---
 
   function countOf(rec) {
     return Math.max(1, parseInt(rec && rec.count, 10) || 1);
@@ -1670,7 +1851,9 @@ const TrackerStorage = (() => {
     'findRecentApplication', 'searchLogs', 'getRecentLogs', 'getPipelineSummary',
     'getWeekSummary', 'exportBackup', 'importBackup', 'createSnapshot', 'listSnapshots',
     'getSnapshot', 'restoreSnapshot', 'maybeAutoSnapshot', 'getStorageInfo', 'rebuildAggregates',
-    'getWeekDots', 'getMilestones', 'mergeSignedOutEntries'
+    'getWeekDots', 'getMilestones', 'mergeSignedOutEntries',
+    // Applications and follow-ups (added 2026-11-20).
+    'listApplications', 'setFollowUp', 'markFollowedUp', 'dueFollowUps'
   ];
 
   // JSON messaging turns an undefined argument into null, and null means
@@ -1741,6 +1924,8 @@ const TrackerStorage = (() => {
     if (sourceId) log.sourceId = sourceId;
     const url = cleanUrl(logData.url);
     if (url) log.url = url;
+    // Applications (added 2026-11-20): location, salary, work mode, follow-up.
+    if (metricId === 'jobs') applyJobDetails(log, logData, 'add');
     return log;
   }
 
@@ -1823,6 +2008,8 @@ const TrackerStorage = (() => {
     if (sourceId) log.sourceId = sourceId;
     const url = cleanUrl(raw.url);
     if (url) log.url = url;
+    // Applications (added 2026-11-20): backups and snapshots keep the details.
+    if (log.metricId === 'jobs') applyJobDetails(log, raw, 'add');
     return log;
   }
 
@@ -1855,14 +2042,19 @@ const TrackerStorage = (() => {
         allMetrics = [...DEFAULT_METRICS];
         seedDefaultMetrics();
       }
-      return allMetrics.filter(m => m && typeof m === 'object' && typeof m.id === 'string').map(m => {
+      const list = allMetrics.filter(m => m && typeof m === 'object' && typeof m.id === 'string').map((m, index) => {
         const dailyGoal = m.dailyGoal || defaultGoalFor(m.id);
         const weeklyGoal = Math.max(0, parseInt(m.weeklyGoal, 10) || 0);
-        // Hidden trackers (focus areas not picked) keep their data and can be
-        // shown again; 'jobs' is never hidden.
-        const hidden = m.hidden === true && m.id !== 'jobs';
-        return { ...m, dailyGoal, weeklyGoal, hidden };
-      }).filter(m => {
+        // Hidden goals keep their data and can be shown again from Settings.
+        // Any goal can be hidden, built-ins included (setMetricHidden keeps
+        // at least one visible).
+        const hidden = m.hidden === true;
+        return { ...m, dailyGoal, weeklyGoal, hidden, __index: index };
+      });
+      // Goals the person reordered carry `order`; anything added later goes
+      // after them in the order it was created.
+      list.sort((a, b) => sortKey(a) - sortKey(b));
+      return list.map(m => { const { __index, ...rest } = m; return rest; }).filter(m => {
         // Installs from before the calorie tracker was removed still have its
         // built-in metric saved; keep it out of the tab bar.
         if (m.id === 'calories' && m.isBudget) return false;
@@ -1950,6 +2142,94 @@ const TrackerStorage = (() => {
           };
         });
       });
+    },
+
+    // Rename, recount, recolor, or re-icon any goal, built-ins included.
+    // Only name, unit, color, and icon change; the id (and every entry that
+    // points at it) stays put. Returns the updated goal, or null.
+    async updateMetric(id, patch = {}, userEmailOverride) {
+      if (!id || !patch || typeof patch !== 'object') return null;
+      const clean = {};
+      if (patch.name !== undefined) {
+        const name = cleanText(patch.name, 40);
+        if (!name) return null;
+        clean.name = name;
+      }
+      if (patch.unit !== undefined) clean.unit = cleanText(patch.unit, 40) || 'times';
+      if (patch.color !== undefined) {
+        if (!/^#[0-9a-f]{6}$/i.test(patch.color)) return null;
+        clean.color = patch.color;
+      }
+      if (patch.icon !== undefined) {
+        if (!METRIC_ICONS.includes(patch.icon)) return null;
+        clean.icon = patch.icon;
+      }
+      if (!Object.keys(clean).length) return null;
+      const targetEmail = normalizeEmail(userEmailOverride !== undefined ? userEmailOverride : await getCurrentUserEmail());
+      const matches = m => Object.keys(clean).every(k => m[k] === clean[k]);
+      return enqueueWrite(async () => mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
+        const all = current.length === 0 ? [...DEFAULT_METRICS] : current;
+        const target = all.find(m => m && m.id === id);
+        if (!target || !canEditMetric(target, targetEmail)) return { write: false, result: null };
+        const updated = { ...target, ...clean };
+        if (matches(target)) return { write: false, result: updated };
+        return {
+          write: true,
+          value: all.map(m => (m && m.id === id ? updated : m)),
+          verify: list => { const f = list.find(m => m && m.id === id); return !f || matches(f); },
+          result: updated
+        };
+      }));
+    },
+
+    // Hide or show any goal. Hiding never deletes entries. Refuses (returns
+    // false) when it would leave this account with no visible goal.
+    async setMetricHidden(id, hidden, userEmailOverride) {
+      if (!id) return false;
+      const hide = !!hidden;
+      const targetEmail = normalizeEmail(userEmailOverride !== undefined ? userEmailOverride : await getCurrentUserEmail());
+      const visibleIds = new Set((await this.getMetrics(targetEmail)).filter(m => !m.hidden).map(m => m.id));
+      if (hide && visibleIds.has(id) && visibleIds.size <= 1) return false;
+      return enqueueWrite(async () => mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
+        const all = current.length === 0 ? [...DEFAULT_METRICS] : current;
+        const target = all.find(m => m && m.id === id);
+        if (!target || !canEditMetric(target, targetEmail)) return { write: false, result: false };
+        if ((target.hidden === true) === hide) return { write: false, result: true };
+        const copy = { ...target };
+        if (hide) copy.hidden = true; else delete copy.hidden;
+        return {
+          write: true,
+          value: all.map(m => (m && m.id === id ? copy : m)),
+          verify: list => { const f = list.find(m => m && m.id === id); return !f || (f.hidden === true) === hide; },
+          result: true
+        };
+      }));
+    },
+
+    // Saves the tab order. `ids` lists this account's goals in the order
+    // wanted; goals not listed keep their place after them.
+    async reorderMetrics(ids, userEmailOverride) {
+      const wanted = (Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string' && x);
+      if (!wanted.length) return false;
+      const targetEmail = normalizeEmail(userEmailOverride !== undefined ? userEmailOverride : await getCurrentUserEmail());
+      const rank = new Map(wanted.map((id, i) => [id, i]));
+      return enqueueWrite(async () => mutateVerified(readMetricsRaw, writeMetricsRaw, current => {
+        const all = current.length === 0 ? [...DEFAULT_METRICS] : current;
+        let changed = false;
+        const value = all.map(m => {
+          if (!m || !rank.has(m.id) || !canEditMetric(m, targetEmail)) return m;
+          if (m.order === rank.get(m.id)) return m;
+          changed = true;
+          return { ...m, order: rank.get(m.id) };
+        });
+        if (!changed) return { write: false, result: true };
+        return {
+          write: true,
+          value,
+          verify: list => list.every(m => !m || !rank.has(m.id) || !canEditMetric(m, targetEmail) || m.order === rank.get(m.id)),
+          result: true
+        };
+      }));
     },
 
     async deleteMetric(id, userEmailOverride) {
@@ -2092,6 +2372,8 @@ const TrackerStorage = (() => {
             if (url) next.url = url; else delete next.url;
           }
           if (patch.status !== undefined) applyStatus(next, cur, patch.status, nowIso);
+          // Applications (added 2026-11-20): details and follow-up marks.
+          if (next.metricId === 'jobs') applyJobDetails(next, patch, 'patch');
           next._ck = normalizeCompany(next.company);
           const changed = JSON.stringify(next) !== JSON.stringify(cur);
           return changed ? { record: next } : { status: 'noop', record: null, current: cur };
@@ -2561,6 +2843,9 @@ const TrackerStorage = (() => {
     FREEZE_CAP,
     ACCENTS,
     COACH_VOICES,
+    METRIC_ICONS,
+    THEME_STYLES,
+    BREAK_CHOICES,
 
     formatTimeHMS(totalSeconds) {
       const s = Math.max(0, parseInt(totalSeconds, 10) || 0);
@@ -2688,6 +2973,50 @@ const TrackerStorage = (() => {
       const logs = await api.getLogs({ metricId: 'jobs' }, userEmailOverride);
       return summarizePipeline(logs);
     },
+
+    // --- Applications page and follow-ups (added 2026-11-20) ---
+
+    // Job entries narrowed and sorted (see filterApplications and
+    // sortApplications), plus an optional limit. Returns { results, total }.
+    async listApplications(options = {}, userEmailOverride) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const logs = await api.getLogs({ metricId: 'jobs' }, userEmailOverride);
+      const list = sortApplications(filterApplications(logs, opts), opts.sort, opts.dir);
+      const limit = Math.max(0, parseInt(opts.limit, 10) || 0);
+      return { results: limit ? list.slice(0, limit) : list, total: list.length };
+    },
+
+    // Picks the day to follow up on one entry (YYYY-MM-DD). null or '' clears
+    // it, so the default (prefs.followUpDays after applying) applies again.
+    async setFollowUp(id, date, userEmailOverride) {
+      if (date !== null && date !== '' && !isDateStr(date)) return false;
+      return api.updateLog(id, { followUpAt: date || null }, userEmailOverride);
+    },
+
+    // Marks an entry followed up, now or at the ISO time given. false or null
+    // takes the mark off again (the page's Undo).
+    async markFollowedUp(id, when, userEmailOverride) {
+      const at = when === false || when === null ? null : (cleanIsoTimestamp(when) || new Date().toISOString());
+      return api.updateLog(id, { followedUpAt: at }, userEmailOverride);
+    },
+
+    // Entries ready for a follow-up on `date` (today by default), the one
+    // waiting longest first. The rules live in shared/followups.js.
+    async dueFollowUps(date, userEmailOverride) {
+      const F = followUpsModule();
+      if (!F) throw new Error('Follow-ups are not available in this part of LIT.');
+      const [logs, prefs] = await Promise.all([
+        api.getLogs({ metricId: 'jobs' }, userEmailOverride),
+        api.getPrefs().catch(() => PREF_DEFAULTS)
+      ]);
+      return F.dueFollowUps(logs, isDateStr(date) ? date : getLocalDateStr(), prefs);
+    },
+
+    filterApplications,
+    sortApplications,
+    normalizeWorkMode,
+    WORK_MODES,
+    // --- end Applications page and follow-ups ---
 
     // Totals for one Monday-to-Sunday week (the previous one by default), for
     // the weekly recap card.

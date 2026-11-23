@@ -22,6 +22,8 @@
 //   - Any other value asks "Remember this for '<label>'?" and saves a literal.
 //   - Overwriting a filled field with another profile value moves the rule.
 //   - A textarea left with 40+ characters offers "Add to your saved answers?".
+//   - While one of these prompts is up, Enter takes its primary button and
+//     Esc skips it (Ctrl/Cmd+Enter from a textarea); see onPromptKey.
 // Nothing is ever learned from password, card, or SSN-like fields, and
 // nothing on the page is ever clicked.
 //
@@ -322,6 +324,19 @@
     .swatch.unmatched { border: 2px dashed #f9ab00; }
     .actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
     .actions button { border-radius: 10px; }
+    .hint { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .hint .sep { margin: 0 3px; }
+    .hint kbd {
+      font: inherit;
+      font-size: 10.5px;
+      line-height: 1;
+      padding: 2px 5px;
+      border-radius: 5px;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      background: var(--surface-2);
+      color: var(--body);
+    }
     .bar {
       position: absolute;
       left: 0; bottom: 0;
@@ -981,6 +996,7 @@
       el.appendChild(note);
     }
     if (options.actions && options.actions.length) makeButtons(el, options.actions, close);
+    if (options.hint) el.appendChild(keyHint(options.hint));
     const bar = document.createElement('div');
     bar.className = 'bar';
     el.appendChild(bar);
@@ -989,6 +1005,28 @@
       if (event && event.key === 'Escape') { swallow(event); close(); }
     });
     return el;
+  }
+
+  // "Enter save · Esc skip" under a prompt's buttons. pairs: [[key, verb]].
+  function keyHint(pairs) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    pairs.forEach(([key, verb], i) => {
+      if (i) {
+        const dot = document.createElement('span');
+        dot.className = 'sep';
+        dot.setAttribute('aria-hidden', 'true');
+        dot.textContent = '·';
+        hint.appendChild(dot);
+      }
+      const k = document.createElement('kbd');
+      k.textContent = key;
+      hint.appendChild(k);
+      const v = document.createElement('span');
+      v.textContent = verb;
+      hint.appendChild(v);
+    });
+    return hint;
   }
 
   // What the outlines on the page mean, in words, so the green and amber
@@ -1090,8 +1128,10 @@
     }
     const root = ensureUi();
     closePrompt();
-    const current = { el: null, timer: null, entry };
+    const current = { el: null, timer: null, entry, actions, close: null, shownAt: Date.now() };
     const close = () => { if (prompt === current) closePrompt(); };
+    current.close = close;
+    const primary = primaryAction(actions);
     const el = buildCard('prompt', {
       title: card.title,
       variant: 'info',
@@ -1099,6 +1139,7 @@
       text: card.text,
       value: card.value,
       actions,
+      hint: primary ? [['Enter', primary.hintVerb || 'save'], ['Esc', 'skip']] : null,
       durationMs: PROMPT_MS
     }, close);
     el.setAttribute('role', 'dialog');
@@ -1547,8 +1588,86 @@
     if (key === 'Enter' || key === ' ' || key === 'Tab' || key === 'Escape') scheduleSweep();
   }
 
+  // --- prompt keys ---------------------------------------------------------------
+  // While a "Save answer?" prompt is up, Enter takes its primary button and
+  // Esc skips it, from wherever the cursor is, so answering never needs the
+  // mouse. Enter is also what submits a form from a text box, so taking it
+  // here (preventDefault) keeps a quick "yes" from sending the application.
+  // Left alone: a textarea or rich-text box (Enter is a new line there; use
+  // Ctrl/Cmd+Enter), an open dropdown (Enter picks the option), an IME
+  // composition, a held-down key, and the first moments after the prompt
+  // appears, so the keystroke that committed the field cannot also answer.
+  const PROMPT_KEY_GRACE_MS = 250;
+
+  function primaryAction(actions) {
+    const list = Array.isArray(actions) ? actions : [];
+    return list.find(a => a && a.primary) || null;
+  }
+
+  // The element the key is really aimed at, through open shadow roots.
+  function keyTarget(event) {
+    try {
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+      if (path && path.length && path[0] && path[0].nodeType === 1) return path[0];
+    } catch (e) { /* fall through */ }
+    return event.target || document.activeElement || null;
+  }
+
+  function takesEnter(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = tagOf(el);
+    if (tag === 'textarea') return true;
+    if (el.isContentEditable === true) return true;
+    let editable = null;
+    try { editable = typeof el.getAttribute === 'function' ? el.getAttribute('contenteditable') : null; } catch (e) { editable = null; }
+    if (typeof editable === 'string' && editable.toLowerCase() !== 'false') return true;
+    const role = attr(el, 'role');
+    if (role === 'textbox' && attr(el, 'aria-multiline') === 'true') return true;
+    // An open dropdown or autocomplete list uses Enter to pick an option.
+    if (attr(el, 'aria-expanded') === 'true') return true;
+    return false;
+  }
+
+  function isOwnUi(el) {
+    return !!el && (el.id === HOST_ID || tagOf(el) === HOST_TAG);
+  }
+
+  function onPromptKey(event) {
+    const current = prompt;
+    if (!current || !current.el || !current.el.parentNode) return false;
+    if (event.isComposing || event.keyCode === 229) return false;
+    const key = event.key;
+    if (key !== 'Enter' && key !== 'Escape') return false;
+    const target = keyTarget(event);
+    // Focus is on the prompt's own buttons: the browser's own Enter/Space and
+    // the card's Escape handler already do the right thing.
+    if (isOwnUi(target)) return false;
+
+    if (key === 'Escape') {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      if (target && attr(target, 'aria-expanded') === 'true') return false;
+      swallow(event);
+      current.close();
+      return true;
+    }
+
+    if (event.altKey || event.shiftKey || event.repeat) return false;
+    const chord = event.ctrlKey || event.metaKey;
+    if (!chord && takesEnter(target)) return false;
+    if (Date.now() - current.shownAt < PROMPT_KEY_GRACE_MS) return false;
+    const action = primaryAction(current.actions);
+    if (!action) return false;
+    swallow(event);
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    current.close();
+    if (typeof action.onClick === 'function') action.onClick();
+    return true;
+  }
+
   function onKeyDown(event) {
-    if (!event || !event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return;
+    if (!event) return;
+    if (onPromptKey(event)) return;
+    if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return;
     if (event.code !== 'KeyF' && String(event.key || '').toLowerCase() !== 'f') return;
     if (!eligible) return;
     if (typeof event.preventDefault === 'function') event.preventDefault();

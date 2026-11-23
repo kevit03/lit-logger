@@ -1374,8 +1374,8 @@ const AutoTrackerCore = (() => {
 
   // Result: { logged, reason?, key, log? }. reason is 'duplicate' (the same
   // activity was already logged: today for a solved problem, in the last ten
-  // minutes for a job application), 'write-failed', 'no-storage', or
-  // 'invalid'.
+  // minutes for a job application), 'hidden' (that goal is hidden from the
+  // board), 'write-failed', 'no-storage', or 'invalid'.
   function dispatch(adapter, payload, options = {}) {
     const run = async () => {
       if (!adapter || !payload || !payload.id) return { logged: false, reason: 'invalid' };
@@ -1383,6 +1383,15 @@ const AutoTrackerCore = (() => {
       if (!storage || typeof storage.addLog !== 'function') return { logged: false, reason: 'no-storage' };
 
       const entry = buildLog(adapter, payload);
+      // A goal the person hid from their board stops auto-logging. What was
+      // already logged stays; showing the goal again resumes it.
+      if (typeof storage.getMetrics === 'function') {
+        try {
+          const list = await storage.getMetrics();
+          const target = Array.isArray(list) ? list.find(m => m && m.id === entry.metricId) : null;
+          if (target && target.hidden === true) return { logged: false, reason: 'hidden' };
+        } catch (e) { /* unknown visibility: log as before */ }
+      }
       const isJob = entry.metricId === 'jobs';
       const windowMs = isJob ? JOB_DEDUPE_WINDOW_MS : 0;
       const cache = options.cache || getDedupeCache();

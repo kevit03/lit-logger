@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LIT: Job Search Tracker",
   "short_name": "LIT",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "A friendly daily tracker for your job search: auto-logs applications, shows progress on Google Calendar, and autofills forms.",
   "action": {
     "default_popup": "popup/popup.html",

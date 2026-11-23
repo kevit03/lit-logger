@@ -6,19 +6,13 @@
 // Custom "cards" questions are plain radios, checkboxes, selects, and
 // textareas, so they are left to AutofillCore; there is no custom fill.
 (() => {
-  if (typeof AutofillCore === 'undefined' || !AutofillCore) return;
+  if (typeof AutofillCore === 'undefined' || !AutofillCore || !AutofillCore.siteKit) return;
 
   const HOSTS = /^jobs(\.eu)?\.lever\.co$/;
 
   AutofillCore.registerSiteAdapter({
     id: 'lever',
-    matches(url) {
-      try {
-        return HOSTS.test(new URL(String(url && url.href ? url.href : url)).hostname);
-      } catch (e) {
-        return false;
-      }
-    },
+    matches: AutofillCore.siteKit.hostMatcher(HOSTS),
     fields: [
       { selector: 'input[name="name"]', profileKey: 'fullName' },
       { selector: 'input[name="email"]', profileKey: 'email' },

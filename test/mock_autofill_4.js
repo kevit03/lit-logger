@@ -491,6 +491,8 @@ function stubAutofillCore() {
     registerSiteAdapter(adapter) { core.adapters.push(adapter); },
     // Real place scoring: adapters defer to it for "City, ST" values.
     scoreLocation: require('../shared/autofill-core.js').scoreLocation,
+    // The real widget helpers the adapters share.
+    siteKit: require('../shared/autofill-core.js').siteKit,
     async setValue(desc, value) {
       core.setValueCalls.push({ desc, value });
       if (!desc || !desc.el) return false;

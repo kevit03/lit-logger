@@ -23,7 +23,10 @@
         <button type="button" role="tab" id="tab-rules" data-tab="rules" aria-controls="rules">Learned<span class="count" id="count-rules"></span></button>
         <button type="button" role="tab" id="tab-settings" data-tab="settings" aria-controls="settings">Settings</button>
       </nav>
-      <span id="save-status" class="save-status is-idle is-visible" role="status" aria-live="polite">Saves automatically</span>
+      <div class="top-end">
+        <a class="top-link" id="applications-link" href="../applications/applications.html" target="_blank" rel="noopener">My applications</a>
+        <span id="save-status" class="save-status is-idle is-visible" role="status" aria-live="polite">Saves automatically</span>
+      </div>
     </div>
   </header>
 
@@ -36,9 +39,10 @@
           <h2>Your profile</h2>
           <p class="panel-lede">The basics most application forms ask for. LIT types them in for you, and nothing is ever submitted without you.</p>
         </div>
-        <div class="progress">
+        <div class="progress" id="progress-box">
           <span id="progress-text" class="progress-text"></span>
           <div class="meter" aria-hidden="true"><span id="progress-bar"></span></div>
+          <button type="button" class="progress-next hidden" id="progress-next"></button>
         </div>
       </div>
       <form id="profile-form" class="profile-form" novalidate></form>
@@ -89,9 +93,12 @@
           <label class="field-label" for="answer-new-text">Answer</label>
           <textarea class="input textarea" id="answer-new-text" rows="4" placeholder="Write it the way you would say it"></textarea>
         </div>
-        <div class="row-actions">
-          <button type="button" class="btn btn-ghost" id="answer-new-cancel">Cancel</button>
-          <button type="submit" class="btn btn-accent">Save answer</button>
+        <div class="row-actions between">
+          <span class="key-hint" id="answer-new-keys"></span>
+          <span class="row-actions">
+            <button type="button" class="btn btn-ghost" id="answer-new-cancel">Cancel</button>
+            <button type="submit" class="btn btn-accent">Save answer</button>
+          </span>
         </div>
         <div id="answer-new-error" class="field-error hidden" role="alert"></div>
       </form>

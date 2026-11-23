@@ -115,10 +115,11 @@ const LitBatch = (() => {
   function step(fn, nowOverride) {
     const run = async () => {
       const now = Number.isFinite(nowOverride) ? nowOverride : clock();
-      const ctx = { now, state: await readBatch(), dirty: false, remove: false, submitted: [], closes: [], injects: [], timers: [] };
+      const ctx = { now, state: await readBatch(), dirty: false, remove: false, submitted: [], closes: [], injects: [], timers: [], closeWindow: null };
       if (ctx.state) sweep(ctx);
       const result = fn ? await fn(ctx) : undefined;
       if (ctx.state && !ctx.remove) await pump(ctx);
+      if (ctx.state && !ctx.remove) releaseWindow(ctx);
       if (ctx.remove) {
         await removeKey(KEY);
       } else if (ctx.state && ctx.dirty) {
@@ -142,6 +143,13 @@ const LitBatch = (() => {
         if (r && typeof r.catch === 'function') r.catch(() => {});
       } catch (e) { /* already closed */ }
     });
+    // Usually gone already (Chrome closes a window with its last tab).
+    if (typeof ctx.closeWindow === 'number' && chrome.windows && typeof chrome.windows.remove === 'function') {
+      try {
+        const r = chrome.windows.remove(ctx.closeWindow);
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+      } catch (e) { /* already closed */ }
+    }
     ctx.injects.forEach(tabId => {
       if (typeof hooks.injectAutofill !== 'function') return;
       Promise.resolve().then(() => hooks.injectAutofill(tabId)).catch(() => {});
@@ -187,6 +195,19 @@ const LitBatch = (() => {
         ctx.dirty = true;
       }
     });
+  }
+
+  // A batch that is over (stopped or done) and holds no tab the user still
+  // needs gives its window back. Chrome closes a window with its last tab,
+  // but a tab a job site opened by itself would otherwise keep a stray
+  // window around after the batch.
+  function releaseWindow(ctx) {
+    const state = ctx.state;
+    if (state.status === 'running' || typeof state.windowId !== 'number') return;
+    if (state.jobs.some(j => isActive(j) || typeof j.tabId === 'number')) return;
+    ctx.closeWindow = state.windowId;
+    state.windowId = null;
+    ctx.dirty = true;
   }
 
   async function openTab(state, url) {
@@ -306,10 +327,27 @@ const LitBatch = (() => {
     });
   }
 
+  // Stop: nothing new opens and nothing more is submitted.
+  // - queued: skipped.
+  // - opening (no form found yet, nothing typed): skipped, and its tab closed.
+  // - filling: left open for the user as needs-you; when its driver asks to
+  //   submit, the transition table refuses and it stands down.
+  // - submitting: Submit was already pressed, so its result still counts.
+  // Once nothing holds a tab, the batch window closes (releaseWindow).
   function stop() {
     return step(ctx => {
       if (!ctx.state) return { ok: false, error: 'No batch' };
-      ctx.state.jobs.forEach(job => { if (job.status === 'queued') finish(ctx, job, 'skipped', 'Stopped'); });
+      ctx.state.jobs.forEach(job => {
+        if (job.status === 'queued') {
+          finish(ctx, job, 'skipped', 'Stopped');
+        } else if (job.status === 'opening') {
+          finish(ctx, job, 'skipped', 'Stopped');
+          if (typeof job.tabId === 'number') ctx.closes.push(job.tabId);
+          job.tabId = null;
+        } else if (job.status === 'filling') {
+          finish(ctx, job, 'needs-you', 'Stopped before submitting');
+        }
+      });
       if (ctx.state.status === 'running') ctx.state.status = 'stopped';
       ctx.dirty = true;
       return { ok: true };
@@ -400,14 +438,16 @@ const LitBatch = (() => {
     });
   }
 
+  // A job still in flight is skipped. A finished one only forgets its tab,
+  // so the panel stops offering to open it.
   function onTabRemoved(tabId) {
     return step(ctx => {
       if (!ctx.state) return;
       ctx.state.jobs.forEach(job => {
-        if (job.tabId === tabId && isActive(job)) {
-          finish(ctx, job, 'skipped', 'Tab closed');
-          job.tabId = null;
-        }
+        if (job.tabId !== tabId) return;
+        if (isActive(job)) finish(ctx, job, 'skipped', 'Tab closed');
+        job.tabId = null;
+        ctx.dirty = true;
       });
     });
   }

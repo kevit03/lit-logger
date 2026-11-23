@@ -68,6 +68,28 @@ A fixed counter card up top (big number, `+1`, `-1`, a progress ring, and the pa
 
 Hit **+** to add a widget and drag to reorder. Your layout syncs everywhere.
 
+**Make the cards yours.** Every card's gear opens its settings: rename it, give it its own color (or match the goal), pin it to a goal, set half or full width, and move it. Some cards have extra choices: which totals to show (Today, 7 days, Month, All time), whether the goal bar shows checkpoints and the weekly bar, whether the streak shows your longest run, and how many recent applications to list (5, 10, or 20). **Duplicate** copies a card with its settings, handy for comparing two goals side by side.
+
+**More cards:** Countdown (days to a start date or deadline, plus what your pace adds up to by then), This week vs last (day-by-day bars, never framed as a decline), Companies I'm watching (a short list that checks itself off when LIT logs an application there), Notes (a scratchpad saved on this computer), and Daily boost (a new line of encouragement each day, or your own words).
+
+### Your buddy
+
+A little padlock friend (named Lockie until you rename it) lives beside the counter. It cheers when you log, celebrates the goal, naps on rest days, and gives a tip when tapped. During a long run of applying it nudges you: some water at half your break interval, then a break (1 hour by default). Nudges come as quiet notifications with **Taking a break** and **Remind me in 30 min**, and the popup repeats the latest one. A run of logging ends after 45 quiet minutes, which counts as a break. Settings > Your buddy turns it off, renames it, and sets the break and water reminders.
+
+### Styles
+
+Settings > Look and feel > Style: **Warm** (default), **Soft** (cool and calm), **High contrast** (black and white with stronger borders), **Seasonal** (colors change with the season), and **Arcade** (deep violet, bolder numbers, a glow in dark mode). Warm, Soft, and High contrast keep your accent color; Seasonal and Arcade bring their own. Styles apply to the popup.
+
+### Export to Google Sheets, Notion, or Excel
+
+Settings > Your data: pick a goal (or all) and a range, then **Copy for Google Sheets** (copies a table and opens a blank sheet; paste into A1), **Copy for Notion** (paste into any page and it becomes a table), or **Download CSV** (Excel, Numbers, or Notion's CSV import). No sign-in needed, and formula-looking cells are neutralized.
+
+### Your goals
+
+Track whatever your search needs. Add a goal from the **+** at the end of the tabs, starting from an idea (Networking chats, Cold emails, Interview prep, Portfolio pieces, LeetCode, Follow-ups, Learning a skill) or from scratch. Pick a name, what you're counting, a daily (and optional weekly) number, an icon, and a color.
+
+Double-click or right-click a tab to edit that goal; **Settings > Your goals** lists all of them to reorder, hide, show, or edit. Any goal can be renamed or hidden, Job Applications and LeetCode included. Hiding takes the tab off your board and calendar and pauses auto-logging for it; nothing you logged is deleted, and showing it again brings everything back. Goals you created can also be deleted (with Undo). At least one goal always stays on the board.
+
 ### Streaks, rest days, and freezes
 
 - **Rest days** (picked in onboarding or Settings) neither break nor extend a streak. Logging on a rest day still counts as a bonus.
@@ -104,7 +126,7 @@ Fill in your profile once (open LIT, **Settings > Autofill profile**). On Greenh
 
 On any other site, such as a company's own applicant system (TikTok, for example), press **Alt+Shift+F**, click **Autofill** in the LIT popup, or right-click and choose **Autofill this page**. With **Detect applications on any career site** turned on, the button shows up there by itself whenever the page has an application form.
 
-The button and its cards stay out of the way. Drag the grip (or the button) anywhere, and LIT remembers the spot for each site. When the field you are editing is under the widget, the widget moves aside. Questions such as "save answer for next time?" appear beside the button, not over the form. The X hides the button on that page.
+The button and its cards stay out of the way. Drag the grip (or the button) anywhere, and LIT remembers the spot for each site. When the field you are editing is under the widget, the widget moves aside. Questions such as "save answer for next time?" appear beside the button, not over the form. Press **Enter** to accept one (it takes the highlighted button, such as **Save for this site**) or **Esc** to skip it, without leaving the field you are on. Enter is never taken from a text area (use **Ctrl+Enter** or **Cmd+Enter** there) or from an open dropdown, and taking it means the same keystroke cannot submit the form. The X hides the button on that page.
 
 - **No AI and no servers.** Fields are matched by rules: site-specific selectors first, then rules you taught it, then the page's `autocomplete` hints, then a dictionary of common phrasings ("legal first name", "will you now or in the future require sponsorship").
 - **It learns from everything you answer.** Text boxes, dropdowns (including custom ones like Workday's and Greenhouse's), multiple choice, checkboxes, and yes/no buttons. Fill or change one and LIT either learns it outright (when it matches your profile) or offers to remember it for that site or all sites. Fields that appear on later steps count too. Long answers can go into an answer bank and get suggested the next time a similar question shows up.

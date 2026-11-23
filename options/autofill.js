@@ -11,6 +11,9 @@
   const el = id => document.getElementById(id);
   const errText = err => (err && err.message) || String(err);
   const show = (node, visible) => node.classList.toggle('hidden', !visible);
+  // What Ctrl/Cmd+S runs for the focused control: each editable control
+  // registers the same save it runs on blur.
+  const commits = new WeakMap();
 
   // ---------------------------------------------------------------------------
   // Profile schema
@@ -32,9 +35,9 @@
         { key: 'firstName', label: 'First name', autocomplete: 'given-name', placeholder: 'As it appears on your resume' },
         { key: 'lastName', label: 'Last name', autocomplete: 'family-name' },
         { key: 'preferredName', label: 'Preferred name', autocomplete: 'nickname', placeholder: 'Only if different from first name', optional: true },
-        { key: 'email', label: 'Email', type: 'email', autocomplete: 'email', placeholder: 'name@example.com' },
-        { key: 'phoneCountryCode', label: 'Phone country code', placeholder: '+1', autocomplete: 'tel-country-code' },
-        { key: 'phone', label: 'Phone', type: 'tel', autocomplete: 'tel-national', placeholder: 'e.g. 555 123 4567' }
+        { key: 'email', label: 'Email', type: 'email', autocomplete: 'email', placeholder: 'name@example.com', check: 'email' },
+        { key: 'phoneCountryCode', label: 'Phone country code', placeholder: '+1', autocomplete: 'tel-country-code', check: 'countryCode' },
+        { key: 'phone', label: 'Phone', type: 'tel', autocomplete: 'tel-national', placeholder: 'e.g. 555 123 4567', check: 'phone' }
       ]
     },
     {
@@ -51,11 +54,11 @@
     {
       title: 'Links',
       fields: [
-        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'https://www.linkedin.com/in/your-name' },
-        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'Work samples, a Behance or Dribbble page' },
-        { key: 'website', label: 'Website', type: 'url', placeholder: 'Personal site or blog' },
+        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'https://www.linkedin.com/in/your-name', check: 'url', site: 'linkedin.com' },
+        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'Work samples, a Behance or Dribbble page', check: 'url' },
+        { key: 'website', label: 'Website', type: 'url', placeholder: 'Personal site or blog', check: 'url' },
         // Only some roles ask for it, so it sits last and is not counted.
-        { key: 'github', label: 'GitHub', type: 'url', placeholder: 'https://github.com/your-name', optional: true }
+        { key: 'github', label: 'GitHub', type: 'url', placeholder: 'https://github.com/your-name', optional: true, check: 'url', site: 'github.com' }
       ]
     },
     {
@@ -64,9 +67,9 @@
         { key: 'school', label: 'School', wide: true, placeholder: 'e.g. University of Washington' },
         { key: 'degree', label: 'Degree', placeholder: 'e.g. Bachelor of Science' },
         { key: 'major', label: 'Major', placeholder: 'e.g. Computer Science' },
-        { key: 'gpa', label: 'GPA', placeholder: 'e.g. 3.8', hint: 'Leave blank to skip GPA questions.', optional: true },
+        { key: 'gpa', label: 'GPA', placeholder: 'e.g. 3.8', hint: 'Leave blank to skip GPA questions.', optional: true, check: 'gpa' },
         { key: 'gradMonth', label: 'Graduation month', options: choices('Not set', MONTHS) },
-        { key: 'gradYear', label: 'Graduation year', placeholder: 'e.g. 2027', inputmode: 'numeric',
+        { key: 'gradYear', label: 'Graduation year', placeholder: 'e.g. 2027', inputmode: 'numeric', check: 'year',
           stepper: { min: 1950, max: 2100, start: new Date().getFullYear() } }
       ]
     },
@@ -75,17 +78,17 @@
       fields: [
         { key: 'currentCompany', label: 'Current company', autocomplete: 'organization', placeholder: 'Leave blank if not working', optional: true },
         { key: 'currentTitle', label: 'Current title', autocomplete: 'organization-title', placeholder: 'e.g. Software Engineer', optional: true },
-        { key: 'yearsExperience', label: 'Years of experience', placeholder: 'e.g. 2', inputmode: 'decimal',
+        { key: 'yearsExperience', label: 'Years of experience', placeholder: 'e.g. 2', inputmode: 'decimal', check: 'years',
           stepper: { min: 0, max: 60, start: 0 }, hint: 'Count internships if the job is entry level.' }
       ]
     },
     {
       title: 'Logistics',
       fields: [
-        { key: 'workAuthorized', label: 'Authorized to work in the country of the job', toggle: true },
-        { key: 'needsSponsorship', label: 'Will need visa sponsorship', toggle: true },
-        { key: 'willingToRelocate', label: 'Willing to relocate', toggle: true },
-        { key: 'earliestStartDate', label: 'Earliest start date', placeholder: 'e.g. June 2027 or 2027-06-01' },
+        { key: 'workAuthorized', label: 'Authorized to work in the country of the job', short: 'Work authorization', toggle: true },
+        { key: 'needsSponsorship', label: 'Will need visa sponsorship', short: 'Visa sponsorship', toggle: true },
+        { key: 'willingToRelocate', label: 'Willing to relocate', short: 'Relocation', toggle: true },
+        { key: 'earliestStartDate', label: 'Earliest start date', short: 'Start date', placeholder: 'e.g. June 2027 or 2027-06-01' },
         { key: 'salaryExpectation', label: 'Salary expectation', placeholder: 'e.g. $120,000', hint: 'Filled exactly as written. Leave blank to skip.', optional: true },
         { key: 'howDidYouHear', label: 'How did you hear about us', placeholder: 'e.g. LinkedIn', optional: true }
       ]
@@ -118,10 +121,58 @@
 
   // Rules name profile keys with or without the "eeo." prefix.
   const FIELD_LABELS = { fullName: 'Full name' };
+  const FIELDS = {}; // key -> field spec
   GROUPS.forEach(g => g.fields.forEach(f => {
+    FIELDS[f.key] = f;
     FIELD_LABELS[f.key] = f.label;
     if (f.key.startsWith('eeo.')) FIELD_LABELS[f.key.slice(4)] = f.label;
   }));
+
+  // Friendly checks for fields that have a shape (`check` in the schema).
+  // A value that fails is still saved as typed: autosave must never lose
+  // what someone wrote, and only they know their details. The note under
+  // the field says what to look at. `fix` only tidies the format (a missing
+  // https://, a missing +), never the content.
+  const onSite = (host, site) => host === site || host.endsWith('.' + site);
+  const CHECKS = {
+    email: {
+      problem: v => (/^[^\s@]+@[^\s@]+\.[^\s@.]{2,}$/.test(v) ? '' : 'Check this email. It should look like name@example.com.')
+    },
+    countryCode: {
+      fix: v => (/^\d{1,4}$/.test(v) ? '+' + v : v),
+      problem: v => (/^\+\d{1,4}$/.test(v) ? '' : 'Use a plus and 1 to 4 digits, like +1 or +44.')
+    },
+    phone: {
+      problem: v => {
+        // An extension at the end ("x 12", "ext. 12") is fine.
+        const main = v.replace(/\s*(ext\.?|x)\s*\d+$/i, '');
+        if (/[^\d\s().+-]/.test(main)) return 'Use numbers only, like 555 123 4567.';
+        const digits = main.replace(/\D/g, '').length;
+        if (digits < 7) return 'This number looks too short. Check for missing digits.';
+        return digits > 15 ? 'This number looks too long. Put the country code in its own box.' : '';
+      }
+    },
+    url: {
+      fix: v => (/^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(v) ? 'https://' + v : v),
+      problem: (v, f) => {
+        let u = null;
+        try { u = new URL(v); } catch (e) { u = null; }
+        if (!u || !/^https?:$/.test(u.protocol) || u.hostname.indexOf('.') < 0) {
+          return 'Check this link. Paste the full address from your browser, starting with https://';
+        }
+        if (f.site && !onSite(u.hostname.toLowerCase(), f.site)) return 'This does not look like a ' + f.label + ' link. It should be on ' + f.site + '.';
+        return '';
+      }
+    },
+    year: { problem: v => (/^(19[5-9]\d|20\d\d|2100)$/.test(v) ? '' : 'Use a 4-digit year, like 2027.') },
+    years: { problem: v => (/^\d{1,2}(\.\d+)?\+?$/.test(v) ? '' : 'Use a number, like 2 or 3.5.') },
+    gpa: { problem: v => (/^\d(\.\d{1,3})?(\s*(\/|out of)\s*\d+(\.\d+)?)?$/i.test(v) ? '' : 'Use a number, like 3.8 or 3.8 / 4.0.') }
+  };
+
+  function problemOf(f, value) {
+    const check = f && f.check && CHECKS[f.check];
+    return check && value ? check.problem(value, f) : '';
+  }
 
   const getPath = (obj, key) => (key.startsWith('eeo.') ? (obj.eeo || {})[key.slice(4)] : obj[key]) || '';
   const patchFor = (key, value) => (key.startsWith('eeo.') ? { eeo: { [key.slice(4)]: value } } : { [key]: value });
@@ -228,8 +279,10 @@
   // this page are already on screen, so ownWrites keeps the onChange listener
   // from rebuilding lists for them.
   let ownWrites = 0;
+  let writesStarted = 0; // lets Ctrl/Cmd+S tell "saved just now" from "nothing to save"
   async function write(promise) {
     ownWrites++;
+    writesStarted++;
     pending++;
     setStatus('Saving', 'saving');
     try {
@@ -247,7 +300,10 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Undo bar: shown after a delete, erase, or import, for 8 seconds
+  // Undo bar: shown after a delete, erase, or import, for 8 seconds. An
+  // action that returns a promise is a storage write (saved, then the page
+  // reloads from storage); one that returns nothing only puts something back
+  // on screen, like a closed answer draft.
   // ---------------------------------------------------------------------------
   const undoBar = el('undo-bar');
   let undoAction = null;
@@ -272,7 +328,9 @@
     hideUndo();
     if (!action) return;
     try {
-      await write(action());
+      const result = action();
+      if (!result || typeof result.then !== 'function') return;
+      await write(result);
       await loadAll();
       setStatus('Restored', 'saved');
     } catch (err) {
@@ -328,9 +386,21 @@
       spellcheck: 'false'
     });
     input.addEventListener('blur', () => saveField(f.key));
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      } else if (e.key === 'Escape' && savedProfile) {
+        // Esc takes back what was typed: the saved value returns, nothing is written.
+        e.preventDefault();
+        input.value = getPath(savedProfile, f.key);
+        input.blur();
+      }
+    });
+    commits.set(input, () => saveField(f.key));
     return {
       node: input,
+      focusEl: input,
       root: f.stepper ? stepper(f, input) : input,
       get: () => input.value.trim(),
       set: value => { input.value = value; }
@@ -342,6 +412,7 @@
     select.addEventListener('change', () => saveField(f.key));
     return {
       node: select,
+      focusEl: select,
       get: () => select.value,
       // A stored value that is not in the list (from an import, say) is kept
       // as an extra option instead of being dropped.
@@ -372,6 +443,7 @@
       });
       b.value = value;
       group.append(b);
+      if (!control.focusEl) control.focusEl = b;
     });
     return control;
   }
@@ -425,14 +497,35 @@
           // Optional fields say so, unless the whole group is optional.
           const label = make('label', { className: 'field-label', id: id + '-label', for: f.toggle ? undefined : id, text: f.label });
           if (f.optional && !group.optional) label.append(make('span', { className: 'field-optional', text: 'optional' }));
-          return make('div', { className: 'field' + (f.wide ? ' wide' : '') }, [
+          // Fields with a shape get a note line for "this looks off".
+          if (f.check) {
+            control.msg = make('p', { className: 'field-msg hidden', id: id + '-msg' });
+            control.node.setAttribute('aria-describedby', id + '-msg');
+          }
+          control.field = make('div', { className: 'field' + (f.wide ? ' wide' : '') }, [
             label,
-            control.root || control.node
+            control.root || control.node,
+            control.msg
           ]);
+          return control.field;
         }))
       ]);
     }));
     profileForm.addEventListener('submit', e => e.preventDefault());
+  }
+
+  // The one thing to do next, for the "Next" button by the meter: a value
+  // that looks off comes first, then the first empty field that counts,
+  // then the resume. Null when there is nothing left to do.
+  let nextTarget = null;
+  function nextStep() {
+    const all = GROUPS.reduce((list, g) => list.concat(g.fields), []);
+    const off = all.find(f => problemOf(f, getPath(savedProfile, f.key)));
+    if (off) return { key: off.key, text: 'Check: ' + (off.short || off.label), warn: true };
+    const empty = GROUPS.reduce((list, g) => list.concat(counted(g)), []).find(f => !getPath(savedProfile, f.key));
+    if (empty) return { key: empty.key, text: 'Next: ' + (empty.short || empty.label) };
+    if (currentResume === null) return { tab: 'resume', text: 'Next: add your resume' };
+    return null;
   }
 
   function renderProgress() {
@@ -446,26 +539,72 @@
       group.countEl.textContent = group.optional ? 'Optional' : done + ' / ' + fields.length;
       group.countEl.classList.toggle('is-done', !group.optional && done === fields.length);
     });
-    el('progress-text').textContent = filled + ' of ' + total + ' filled';
+    nextTarget = nextStep();
+    const complete = filled === total && !nextTarget;
+    el('progress-text').textContent = complete ? 'All ' + total + ' filled' : filled + ' of ' + total + ' filled';
     el('progress-bar').style.width = Math.round((filled / total) * 100) + '%';
+    el('progress-box').classList.toggle('is-complete', complete);
+    const next = el('progress-next');
+    next.textContent = nextTarget ? nextTarget.text : '';
+    next.classList.toggle('is-warn', !!(nextTarget && nextTarget.warn));
+    show(next, !!nextTarget);
+  }
+
+  el('progress-next').addEventListener('click', () => {
+    const target = nextTarget;
+    if (!target) return;
+    if (target.tab) {
+      selectTab(target.tab);
+      el('resume-upload-btn').focus();
+      return;
+    }
+    const control = controls[target.key];
+    selectTab('profile');
+    // A short ring so the eye lands on it, then the cursor goes in.
+    control.field.classList.add('is-target');
+    setTimeout(() => control.field.classList.remove('is-target'), 1800);
+    if (typeof control.field.scrollIntoView === 'function') control.field.scrollIntoView({ block: 'center' });
+    control.focusEl.focus({ preventScroll: true });
+  });
+
+  // Shows or clears the "looks off" note for one field from what it holds.
+  function renderCheck(key) {
+    const control = controls[key];
+    if (!control.msg) return '';
+    const problem = problemOf(FIELDS[key], control.get());
+    control.msg.textContent = problem;
+    show(control.msg, !!problem);
+    if (problem) control.node.setAttribute('aria-invalid', 'true');
+    else control.node.removeAttribute('aria-invalid');
+    return problem;
   }
 
   function fillProfileForm(profile) {
     savedProfile = profile;
     Object.entries(controls).forEach(([key, control]) => {
-      if (document.activeElement !== control.node) control.set(getPath(profile, key));
+      if (document.activeElement === control.node) return;
+      control.set(getPath(profile, key));
+      renderCheck(key);
     });
     renderProgress();
   }
 
   async function saveField(key) {
     const control = controls[key];
-    const value = control.get();
+    const check = CHECKS[FIELDS[key].check];
+    let value = control.get();
+    // Tidy the format first ("linkedin.com/in/sam" gets its https://).
+    if (value && check && check.fix && check.fix(value) !== value) {
+      value = check.fix(value);
+      control.set(value);
+    }
+    renderCheck(key);
     if (savedProfile && getPath(savedProfile, key) === value) return;
     try {
       savedProfile = await write(store.saveProfile(patchFor(key, value)));
       // Show the value as stored (trimmed, normalized) once focus has moved on.
       if (!control.node.contains(document.activeElement)) control.set(getPath(savedProfile, key));
+      renderCheck(key);
       renderProgress();
     } catch (e) {
       // Shown by reportError.
@@ -479,7 +618,12 @@
   const resumeDrop = el('resume-drop');
   const resumeError = el('resume-error');
 
+  // undefined until the first load, then the stored resume or null.
+  let currentResume;
+
   function renderResume(resume) {
+    currentResume = resume || null;
+    if (savedProfile) renderProgress();
     const download = el('resume-download');
     resumeDrop.classList.toggle('is-empty', !resume);
     show(download, !!resume);
@@ -627,6 +771,19 @@
     };
     qInput.addEventListener('blur', commit);
     aText.addEventListener('blur', commit);
+    // Esc takes back an edit in progress: the saved text returns.
+    const revert = e => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      qInput.value = a.question;
+      aText.value = a.answer;
+      showError(err, '');
+      e.target.blur();
+    };
+    qInput.addEventListener('keydown', revert);
+    aText.addEventListener('keydown', revert);
+    commits.set(qInput, commit);
+    commits.set(aText, commit);
     armedDelete(del, 'Yes, delete answer', () => deleteEntry('answers', a.id, id => store.deleteAnswer(id), 'Answer deleted.'));
 
     return make('div', { className: 'card answer-item', dataset: { id: a.id } }, [
@@ -641,31 +798,90 @@
 
   // While the new-answer form is open its Save button is the one primary
   // action in this section, so Add answer steps aside.
+  //
+  // Keys: Enter in the question moves on to the answer (or saves once the
+  // answer is written), Ctrl/Cmd+Enter in the answer saves (plain Enter is a
+  // new line), Esc cancels. Cancelling with something typed offers it back.
   const newForm = el('answer-new');
-  function openNewAnswer(question) {
+  const newQuestion = el('answer-new-question');
+  const newText = el('answer-new-text');
+  const newError = el('answer-new-error');
+  const IS_MAC = (() => {
+    try { return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ''); } catch (e) { return false; }
+  })();
+  el('answer-new-keys').textContent = (IS_MAC ? 'Cmd' : 'Ctrl') + '+Enter saves. Esc cancels.';
+
+  function openNewAnswer(question, text) {
     show(newForm, true);
     show(el('answer-add-btn'), false);
-    el('answer-new-question').value = question;
-    el(question ? 'answer-new-text' : 'answer-new-question').focus();
+    newQuestion.value = question;
+    newText.value = text || '';
+    (question ? newText : newQuestion).focus();
   }
   function closeNewAnswer() {
     newForm.reset();
-    showError(el('answer-new-error'), '');
+    showError(newError, '');
     show(newForm, false);
     show(el('answer-add-btn'), true);
   }
-  el('answer-add-btn').addEventListener('click', () => openNewAnswer(''));
-  el('answer-new-cancel').addEventListener('click', closeNewAnswer);
-  newForm.addEventListener('submit', async e => {
-    e.preventDefault();
+  function hasDraft() {
+    return !newForm.classList.contains('hidden') && !!(newQuestion.value.trim() || newText.value.trim());
+  }
+  function cancelNewAnswer() {
+    const draft = { question: newQuestion.value, answer: newText.value };
+    const typed = hasDraft();
+    closeNewAnswer();
+    el('answer-add-btn').focus();
+    if (typed) offerUndo('Answer draft closed.', () => { openNewAnswer(draft.question, draft.answer); });
+  }
+
+  // False when something is missing (said under the form), so Ctrl/Cmd+S
+  // does not also report "Everything is saved".
+  async function submitNewAnswer() {
+    const question = newQuestion.value.trim();
+    const answer = newText.value;
+    if (!question) {
+      showError(newError, 'Add the question first, then your answer.');
+      newQuestion.focus();
+      return false;
+    }
+    if (!answer.trim()) {
+      showError(newError, 'Write your answer, then save.');
+      newText.focus();
+      return false;
+    }
     try {
-      await write(store.saveAnswer({ question: el('answer-new-question').value, answer: el('answer-new-text').value }));
+      await write(store.saveAnswer({ question, answer }));
       closeNewAnswer();
       PARTS.answers.render(await store.getAnswers());
+      el('answer-add-btn').focus();
+      setStatus('Answer saved', 'saved');
+      return true;
     } catch (err) {
-      showError(el('answer-new-error'), errText(err));
+      showError(newError, errText(err));
+      return false;
     }
+  }
+
+  el('answer-add-btn').addEventListener('click', () => openNewAnswer(''));
+  el('answer-new-cancel').addEventListener('click', cancelNewAnswer);
+  newForm.addEventListener('submit', e => {
+    e.preventDefault();
+    submitNewAnswer();
   });
+  newQuestion.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (newText.value.trim()) submitNewAnswer();
+    else newText.focus();
+  });
+  newText.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    submitNewAnswer();
+  });
+  commits.set(newQuestion, submitNewAnswer);
+  commits.set(newText, submitNewAnswer);
 
   // ----- Learned rules -------------------------------------------------------
   const rulesSearch = el('rules-search');
@@ -766,6 +982,7 @@
   keyInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') keyInput.blur();
   });
+  commits.set(keyInput, () => keyInput.blur());
 
   armedDelete(keyRemove, 'Yes, remove key', async () => {
     const previous = settings.aiKey;
@@ -779,6 +996,7 @@
     if (value === (settings.aiModel || '')) return;
     saveSetting('aiModel', value).catch(() => {});
   });
+  commits.set(modelInput, () => modelInput.blur());
 
   // ---------------------------------------------------------------------------
   // Import / export / erase
@@ -848,6 +1066,57 @@
     await loadAll();
     offerUndo('All autofill data erased.', () => store.importAll(snapshot));
   });
+
+  // ---------------------------------------------------------------------------
+  // Keyboard and leaving the page
+  //
+  // Ctrl/Cmd+S saves the field you are in (and keeps the browser's "Save
+  // page" dialog away); with nothing to save it says so. Esc backs out of
+  // the import question or the new-answer form; inside a field it takes
+  // back the edit (see the controls above).
+  // ---------------------------------------------------------------------------
+  async function saveNow() {
+    const active = document.activeElement;
+    const commit = active ? commits.get(active) : null;
+    const before = writesStarted;
+    if (commit && (await commit()) === false) return;
+    if (writesStarted === before && !pending) setStatus('Everything is saved', 'saved');
+  }
+
+  document.addEventListener('keydown', e => {
+    const key = String(e.key || '');
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key.toLowerCase() === 's') {
+      e.preventDefault();
+      saveNow();
+    } else if (key === 'Escape') {
+      if (!importPanel.classList.contains('hidden')) {
+        e.preventDefault();
+        el('import-cancel').click();
+      } else if (!newForm.classList.contains('hidden') && newForm.contains(document.activeElement)) {
+        e.preventDefault();
+        cancelNewAnswer();
+      }
+    }
+  });
+
+  // Everything else saves itself; only a new answer still being written, or
+  // a save still on its way, is worth asking about before the tab closes.
+  window.addEventListener('beforeunload', e => {
+    if (!hasDraft() && !pending) return undefined;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  });
+
+  // The Applications page lives elsewhere in the extension; the relative
+  // link in the markup is the fallback.
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function') {
+      el('applications-link').setAttribute('href', chrome.runtime.getURL('applications/applications.html'));
+    }
+  } catch (e) {
+    // Keep the relative link.
+  }
 
   // ---------------------------------------------------------------------------
   // Look: the popup's light/dark choice (the OS scheme until one is made),

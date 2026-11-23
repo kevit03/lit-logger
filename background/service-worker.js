@@ -59,6 +59,7 @@ importScripts('../shared/auth.js', '../shared/db.js', '../shared/storage.js');
 // Coach copy is a nicety: a missing or broken file must not take the storage
 // host down with it, so it loads on its own and every caller checks for it.
 try { importScripts('../shared/coach-copy.js'); } catch (e) { /* plain fallback text */ }
+try { importScripts('../shared/buddy.js'); } catch (e) { /* no buddy nudges */ }
 importScripts('batch-runner.js');
 // Answer writing for auto-apply: the store and composer have no DOM or window
 // dependency, so they load here too and the API key stays in the worker.
@@ -86,6 +87,8 @@ const REMINDER_ALARM = 'pt-reminder';
 const REMINDER_PAGE = 'reminder/reminder.html';
 const REMINDER_NOTIFICATION = 'lit-checkin';
 const MIDNIGHT_ALARM = 'pt-midnight';
+const BUDDY_ALARM = 'lit-buddy';
+const BUDDY_NOTIFICATION = 'lit-buddy';
 const ONBOARDING_PAGE = 'onboarding/onboarding.html';
 // chrome.storage.local marker: this device has run the Warm Coach install or
 // update step. Without it a later update would mistake a fresh install's
@@ -326,12 +329,17 @@ async function scheduleReminder() {
 // storage build without the newer stats still gives a sensible answer.
 async function primaryProgress() {
   const [stats, metrics] = await Promise.all([TrackerStorage.getStats(), TrackerStorage.getMetrics()]);
-  const metric = (metrics || []).find(m => m.id === PRIMARY_METRIC) || null;
+  // Job applications lead unless the person hid that goal; then the first
+  // goal still on their board stands in.
+  const all = metrics || [];
+  const shown = all.filter(m => m && !m.hidden);
+  const metric = shown.find(m => m.id === PRIMARY_METRIC) || shown[0] || all.find(m => m.id === PRIMARY_METRIC) || null;
+  const id = metric ? metric.id : PRIMARY_METRIC;
   const goal = Math.max(1, parseInt(metric && metric.dailyGoal, 10) || 5);
   const counts = (stats && (stats.todayCount || stats.today)) || {};
-  const count = Math.max(0, parseInt(counts[PRIMARY_METRIC], 10) || 0);
-  const met = stats && stats.goalMet && typeof stats.goalMet[PRIMARY_METRIC] === 'boolean'
-    ? stats.goalMet[PRIMARY_METRIC]
+  const count = Math.max(0, parseInt(counts[id], 10) || 0);
+  const met = stats && stats.goalMet && typeof stats.goalMet[id] === 'boolean'
+    ? stats.goalMet[id]
     : count >= goal;
   return { count, goal, met, restToday: !!(stats && stats.restToday), metric };
 }
@@ -410,6 +418,7 @@ function clearCheckinNotification() {
 
 if (chrome.notifications && chrome.notifications.onClicked) {
   chrome.notifications.onClicked.addListener(id => {
+    if (id === BUDDY_NOTIFICATION) { buddyTookBreak(); return; }
     if (id !== REMINDER_NOTIFICATION) return;
     clearCheckinNotification();
     openCheckinPage('');
@@ -417,6 +426,11 @@ if (chrome.notifications && chrome.notifications.onClicked) {
 }
 if (chrome.notifications && chrome.notifications.onButtonClicked) {
   chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (id === BUDDY_NOTIFICATION) {
+      if (index === 0) buddyTookBreak();
+      else buddySnooze();
+      return;
+    }
     if (id !== REMINDER_NOTIFICATION) return;
     clearCheckinNotification();
     openCheckinPage(index === 0 ? 'log' : '');
@@ -618,6 +632,10 @@ chrome.alarms.onAlarm.addListener(alarm => {
     showReminder();
     return;
   }
+  if (alarm.name === BUDDY_ALARM) {
+    buddyCheck(false);
+    return;
+  }
   if (alarm.name === MIDNIGHT_ALARM) {
     lastIconKey = null;
     updateToolbarIcon();
@@ -628,6 +646,99 @@ chrome.alarms.onAlarm.addListener(alarm => {
   if (!key) return;
   settleTimer(key);
 });
+
+// ---------------------------------------------------------------------------
+// Buddy nudges: a break or some water during a long run of applying
+// ---------------------------------------------------------------------------
+// Each new entry extends the session (LitBuddy.recordActivity). A nudge is a
+// quiet notification in the buddy's name, at most one at a time, never while
+// snoozed, and never once the session has gone quiet. New entries are told
+// apart from edits and deletes by today's total going up.
+function buddyState() {
+  return new Promise(resolve => {
+    chrome.storage.local.get([LitBuddy.SESSION_KEY, 'lit_buddy_total'], r => resolve({
+      session: r && r[LitBuddy.SESSION_KEY] ? r[LitBuddy.SESSION_KEY] : null,
+      total: r && typeof r.lit_buddy_total === 'object' && r.lit_buddy_total ? r.lit_buddy_total : null
+    }));
+  });
+}
+
+function saveBuddy(patch) {
+  return new Promise(resolve => chrome.storage.local.set(patch, () => resolve()));
+}
+
+let buddyChain = Promise.resolve();
+function buddyCheck(fromLog) {
+  if (typeof LitBuddy === 'undefined') return Promise.resolve();
+  buddyChain = buddyChain.then(() => runBuddyCheck(fromLog)).catch(e => console.warn('[LIT] buddy check failed', e));
+  return buddyChain;
+}
+
+async function runBuddyCheck(fromLog) {
+  const prefs = await TrackerStorage.getPrefs();
+  if (prefs.buddyEnabled === false) return;
+  const now = Date.now();
+  let { session, total } = await buddyState();
+  if (fromLog) {
+    const stats = await TrackerStorage.getStats();
+    const counts = (stats && (stats.todayCount || stats.today)) || {};
+    const sum = Object.keys(counts).reduce((a, k) => a + (parseInt(counts[k], 10) || 0), 0);
+    const today = stats && stats.todayStr;
+    const grew = !total || total.date !== today ? sum > 0 : sum > (parseInt(total.sum, 10) || 0);
+    await saveBuddy({ lit_buddy_total: { date: today, sum } });
+    if (!grew) return;
+    session = LitBuddy.recordActivity(session, now);
+  }
+  if (!session) return;
+  const due = LitBuddy.nudgeDue(session, now, prefs);
+  if (due) {
+    showBuddyNudge(due, LitBuddy.activeMinutes(session, now), prefs);
+    session = LitBuddy.markNudged(session, due, now);
+    // The popup's buddy repeats the latest nudge for a while.
+    session.lastNudge = { kind: due, at: now, minutes: LitBuddy.activeMinutes(session, now) };
+  }
+  await saveBuddy({ [LitBuddy.SESSION_KEY]: session });
+  const next = LitBuddy.nextNudgeAt(session, prefs);
+  if (next && next > now) chrome.alarms.create(BUDDY_ALARM, { when: next });
+  else chrome.alarms.clear(BUDDY_ALARM);
+}
+
+function showBuddyNudge(kind, minutes, prefs) {
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') return;
+  const name = prefs.buddyName || 'Lockie';
+  const message = kind === 'break' ? LitBuddy.lines.breakNudge(Math.max(1, minutes)) : LitBuddy.lines.water();
+  try {
+    chrome.notifications.create(BUDDY_NOTIFICATION, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: name + (kind === 'break' ? ' says: time for a break' : ' says: water break'),
+      message,
+      buttons: [{ title: kind === 'break' ? 'Taking a break' : 'Done' }, { title: 'Remind me in 30 min' }],
+      priority: 0,
+      silent: true
+    }, () => { void chrome.runtime.lastError; });
+  } catch (e) { /* notifications unavailable */ }
+}
+
+async function buddyTookBreak() {
+  try { chrome.notifications.clear(BUDDY_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+  if (typeof LitBuddy === 'undefined') return;
+  const { session } = await buddyState();
+  if (!session) return;
+  const rested = LitBuddy.markNudged(session, 'break', Date.now());
+  rested.lastNudge = null;
+  await saveBuddy({ [LitBuddy.SESSION_KEY]: rested });
+}
+
+async function buddySnooze() {
+  try { chrome.notifications.clear(BUDDY_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+  if (typeof LitBuddy === 'undefined') return;
+  const { session } = await buddyState();
+  if (!session) return;
+  const snoozed = LitBuddy.snooze(session, Date.now());
+  await saveBuddy({ [LitBuddy.SESSION_KEY]: snoozed });
+  chrome.alarms.create(BUDDY_ALARM, { when: snoozed.snoozeUntil });
+}
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts
@@ -1011,6 +1122,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if ((area === 'sync' || area === 'local') && (changes.pt_logs_rev || changes.metrics || changes.pt_auth_user)) {
     scheduleIconUpdate();
   }
+  if ((area === 'sync' || area === 'local') && changes.pt_logs_rev) buddyCheck(true);
 });
 
 // The auto-tracker's dedupe cache lives in chrome.storage.session so it
@@ -1078,3 +1190,421 @@ if (typeof module !== 'undefined' && module.exports) {
     OPEN_SEARCH_FLAG
   };
 }
+
+// ---------------------------------------------------------------------------
+// --- Follow-ups and the Applications page (added 2026-11-20) ---
+// ---------------------------------------------------------------------------
+// applications/applications.html lists every job application. Once a day at
+// FOLLOWUP_TIME, one notification says how many are ready for a follow-up
+// (shared/followups.js decides which). Quiet by default:
+//   - nothing at all when none are due or prefs.followUpEnabled is off;
+//   - only when at least one became ready since the last reminder, so a
+//     list the person is already sitting on is not repeated every morning;
+//   - at most one a day (lit_followup_state.lastShownOn), never on a rest
+//     day, never while snoozed;
+//   - silent, low priority, and it never opens a tab by itself.
+// "Open list" (or a click) opens the page on its follow-up filter; "Snooze 2
+// days" keeps it quiet until the day after tomorrow. The toolbar icon's
+// right-click menu gets "Open my applications".
+//
+// Alarms are not guaranteed to survive a browser restart, so every start
+// books the next check when none is waiting. A browser opened after
+// FOLLOWUP_TIME that has not checked yet today checks a couple of minutes
+// in, so someone who starts Chrome late still hears about it, once.
+//
+// Everything here waits for LitFollowUps: if shared/followups.js is missing
+// the section stays off, the same way the buddy does without its file.
+try { importScripts('../shared/followups.js'); } catch (e) { /* no follow-up reminders */ }
+
+const APPLICATIONS_PAGE = 'applications/applications.html';
+const FOLLOWUP_ALARM = 'lit-followups';
+const FOLLOWUP_NOTIFICATION = 'lit-followups';
+// chrome.storage.local: { lastCheckedOn, lastShownOn, snoozeUntil }, all
+// local YYYY-MM-DD days.
+const FOLLOWUP_STATE_KEY = 'lit_followup_state';
+const FOLLOWUP_TIME = '10:00';
+const FOLLOWUP_CATCHUP_MINUTES = 2;
+const FOLLOWUP_SNOOZE_DAYS = 2;
+const MENU_OPEN_APPLICATIONS = 'lit-open-applications';
+
+function followUpsAvailable() {
+  return typeof LitFollowUps !== 'undefined' && !!LitFollowUps;
+}
+
+function readFollowUpState() {
+  return new Promise(resolve => {
+    chrome.storage.local.get([FOLLOWUP_STATE_KEY], r => {
+      const v = r && r[FOLLOWUP_STATE_KEY];
+      resolve(v && typeof v === 'object' ? v : {});
+    });
+  });
+}
+
+function writeFollowUpState(v) {
+  return new Promise(resolve => chrome.storage.local.set({ [FOLLOWUP_STATE_KEY]: v }, () => resolve()));
+}
+
+function followUpTimeToday(now) {
+  const [h, m] = FOLLOWUP_TIME.split(':').map(Number);
+  const at = new Date(now);
+  at.setHours(h, m, 0, 0);
+  return at.getTime();
+}
+
+// Books the next daily check unless one is already waiting. Off clears it.
+async function ensureFollowUpAlarm(now = Date.now()) {
+  if (!followUpsAvailable()) return null;
+  let prefs;
+  try { prefs = await TrackerStorage.getPrefs(); } catch (e) { return null; }
+  if (prefs.followUpEnabled === false) {
+    await chrome.alarms.clear(FOLLOWUP_ALARM);
+    return null;
+  }
+  const existing = await chrome.alarms.get(FOLLOWUP_ALARM);
+  const at = existing ? (existing.scheduledTime || existing.when) : null;
+  if (Number.isFinite(at) && at > now) return at;
+  const state = await readFollowUpState();
+  const today = TrackerStorage.getLocalDateStr(new Date(now));
+  const when = now >= followUpTimeToday(now) && state.lastCheckedOn !== today
+    ? now + FOLLOWUP_CATCHUP_MINUTES * 60000
+    : nextReminderAt(FOLLOWUP_TIME, now);
+  await chrome.alarms.create(FOLLOWUP_ALARM, { when });
+  return when;
+}
+
+function showFollowUpNotice(due) {
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') return false;
+  const copy = LitFollowUps.notificationCopy(due);
+  try {
+    chrome.notifications.create(FOLLOWUP_NOTIFICATION, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title: copy.title,
+      message: copy.message,
+      contextMessage: copy.contextMessage,
+      buttons: [{ title: 'Open list' }, { title: 'Snooze 2 days' }],
+      priority: 0,
+      silent: true
+    }, () => { void chrome.runtime.lastError; });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function clearFollowUpNotice() {
+  try { chrome.notifications.clear(FOLLOWUP_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+}
+
+// The daily check. Returns what happened ({ shown, reason, count }) for the
+// tests and the console; reason is 'shown', 'off', 'already-shown',
+// 'snoozed', 'rest-day', 'none-due', 'nothing-new', or 'unavailable'. The
+// count is every application ready now, not only the new ones.
+async function checkFollowUps(now = Date.now()) {
+  if (!followUpsAvailable()) return { shown: false, reason: 'unavailable', count: 0 };
+  let prefs;
+  try { prefs = await TrackerStorage.getPrefs(); } catch (e) { return { shown: false, reason: 'unavailable', count: 0 }; }
+  const today = TrackerStorage.getLocalDateStr(new Date(now));
+  const state = await readFollowUpState();
+  let reason = null;
+  let due = [];
+  if (prefs.followUpEnabled === false) reason = 'off';
+  else if (state.lastShownOn === today) reason = 'already-shown';
+  else if (state.snoozeUntil && today < state.snoozeUntil) reason = 'snoozed';
+  else if (TrackerStorage.isRestDay(today, prefs.restDays)) reason = 'rest-day';
+  else {
+    try { due = await TrackerStorage.dueFollowUps(today); } catch (e) { due = []; }
+    if (!due.length) reason = 'none-due';
+    else if (!LitFollowUps.newlyDue(due, state.lastShownOn, prefs).length) reason = 'nothing-new';
+  }
+  const shown = !reason && showFollowUpNotice(due);
+  if (!reason && !shown) reason = 'unavailable';
+  const next = Object.assign({}, state, { lastCheckedOn: today });
+  if (shown) next.lastShownOn = today;
+  await writeFollowUpState(next);
+  return { shown, reason: shown ? 'shown' : reason, count: due.length };
+}
+
+// The alarm: check today, then book tomorrow whatever today said.
+async function runFollowUpAlarm(now = Date.now()) {
+  let result = null;
+  try { result = await checkFollowUps(now); } catch (e) { result = null; }
+  try {
+    const prefs = await TrackerStorage.getPrefs();
+    if (followUpsAvailable() && prefs.followUpEnabled !== false) {
+      await chrome.alarms.create(FOLLOWUP_ALARM, { when: nextReminderAt(FOLLOWUP_TIME, now) });
+    }
+  } catch (e) {
+    // The next start books it again.
+  }
+  return result;
+}
+
+async function snoozeFollowUps(now = Date.now()) {
+  clearFollowUpNotice();
+  const state = await readFollowUpState();
+  const today = TrackerStorage.getLocalDateStr(new Date(now));
+  const snoozeUntil = TrackerStorage.addDays(today, FOLLOWUP_SNOOZE_DAYS);
+  await writeFollowUpState(Object.assign({}, state, { snoozeUntil }));
+  return snoozeUntil;
+}
+
+// Opens (or focuses) the Applications page. Only ever called from a click,
+// so focusing it is what the person asked for.
+async function openApplicationsPage(hash) {
+  const base = chrome.runtime.getURL(APPLICATIONS_PAGE);
+  const url = base + (hash ? '#' + hash : '');
+  try {
+    const open = await new Promise(resolve => chrome.tabs.query({}, tabs => resolve(tabs || [])));
+    const existing = open.find(t => t && t.id != null && String(t.url || '').indexOf(base) === 0);
+    if (existing) {
+      await chrome.tabs.update(existing.id, { active: true, url });
+      if (existing.windowId != null && chrome.windows && chrome.windows.update) {
+        await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
+      }
+      return existing.id;
+    }
+    const tab = await chrome.tabs.create({ url, active: true });
+    return tab && tab.id;
+  } catch (err) {
+    console.warn('LIT: could not open the applications page:', err && err.message);
+    return null;
+  }
+}
+
+function createApplicationsMenu() {
+  if (!chrome.contextMenus || !followUpsAvailable()) return;
+  chrome.contextMenus.create({
+    id: MENU_OPEN_APPLICATIONS,
+    title: 'Open my applications',
+    contexts: ['action']
+  }, () => { void chrome.runtime.lastError; });
+}
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm && alarm.name === FOLLOWUP_ALARM) runFollowUpAlarm();
+});
+
+if (chrome.notifications && chrome.notifications.onClicked) {
+  chrome.notifications.onClicked.addListener(id => {
+    if (id !== FOLLOWUP_NOTIFICATION) return;
+    clearFollowUpNotice();
+    openApplicationsPage('followups');
+  });
+}
+if (chrome.notifications && chrome.notifications.onButtonClicked) {
+  chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (id !== FOLLOWUP_NOTIFICATION) return;
+    if (index === 0) {
+      clearFollowUpNotice();
+      openApplicationsPage('followups');
+    } else {
+      snoozeFollowUps();
+    }
+  });
+}
+
+if (chrome.contextMenus && chrome.contextMenus.onClicked) {
+  chrome.contextMenus.onClicked.addListener(info => {
+    if (info && info.menuItemId === MENU_OPEN_APPLICATIONS) openApplicationsPage('');
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area !== 'sync' && area !== 'local') || !changes.pt_prefs) return;
+  const before = changes.pt_prefs.oldValue || {};
+  const after = changes.pt_prefs.newValue || {};
+  if (before.followUpEnabled === after.followUpEnabled) return;
+  if (after.followUpEnabled === false) {
+    chrome.alarms.clear(FOLLOWUP_ALARM);
+    clearFollowUpNotice();
+  } else {
+    ensureFollowUpAlarm().catch(() => {});
+  }
+});
+
+chrome.runtime.onStartup.addListener(() => { ensureFollowUpAlarm().catch(() => {}); });
+// createMenus() starts with removeAll(); waiting a turn puts this item after
+// that call, so it is never swept away with the rest.
+chrome.runtime.onInstalled.addListener(() => {
+  setTimeout(createApplicationsMenu, 0);
+  ensureFollowUpAlarm().catch(() => {});
+});
+ensureFollowUpAlarm().catch(() => {});
+
+if (typeof module !== 'undefined' && module.exports) {
+  Object.assign(module.exports, {
+    checkFollowUps,
+    runFollowUpAlarm,
+    ensureFollowUpAlarm,
+    snoozeFollowUps,
+    openApplicationsPage,
+    createApplicationsMenu,
+    APPLICATIONS_PAGE,
+    FOLLOWUP_ALARM,
+    FOLLOWUP_NOTIFICATION,
+    FOLLOWUP_STATE_KEY,
+    MENU_OPEN_APPLICATIONS
+  });
+}
+// --- end Follow-ups and the Applications page ---
+
+// ---------------------------------------------------------------------------
+// --- BEGIN Focus sessions (popup/modules/shell-fx.js mini player) ---
+// ---------------------------------------------------------------------------
+// The popup's focus player keeps one record in chrome.storage.local:
+//
+//   lit_focus = { status: 'idle' | 'running' | 'paused' | 'done',
+//                 length: minutes, startedAt: epoch ms | null,
+//                 endsAt: epoch ms | null (the deadline while running),
+//                 remaining: ms left (authoritative while paused) }
+//
+// Like the solve timer, a running session is a deadline, so it survives the
+// popup closing. This section only mirrors it into the 'lit-focus' alarm
+// (cleared on pause or stop) and, at the deadline, marks it done and shows one
+// notification in the buddy's name. "Start another" begins a new session of
+// the same length; a click on the body just clears it. It never touches the
+// solve-timer alarms, and it uses its own listeners.
+const LIT_FOCUS_KEY = 'lit_focus';
+const LIT_FOCUS_ALARM = 'lit-focus';
+const LIT_FOCUS_NOTIFICATION = 'lit-focus';
+const LIT_FOCUS_MINUTE = 60000;
+// A session that ended this long ago (browser was closed) closes quietly.
+const LIT_FOCUS_STALE_MS = 10 * LIT_FOCUS_MINUTE;
+
+function litFocusNormalize(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const status = raw.status;
+  if (status !== 'idle' && status !== 'running' && status !== 'paused' && status !== 'done') return null;
+  const length = Math.min(180, Math.max(1, parseInt(raw.length, 10) || 25));
+  const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const endsAt = num(raw.endsAt);
+  if (status === 'running' && endsAt === null) return null;
+  return { status, length, startedAt: num(raw.startedAt), endsAt, remaining: Math.max(0, num(raw.remaining) || 0) };
+}
+
+function litFocusRead() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get([LIT_FOCUS_KEY], r => {
+        if (chrome.runtime.lastError) { resolve(null); return; }
+        resolve(litFocusNormalize(r && r[LIT_FOCUS_KEY]));
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+function litFocusWrite(state) {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.set({ [LIT_FOCUS_KEY]: state }, () => resolve(!chrome.runtime.lastError));
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+function litFocusClearNotification() {
+  try { chrome.notifications.clear(LIT_FOCUS_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+}
+
+// One alarm per running session; create() replaces an older one of the
+// same name, so a restart or a new length cannot leave two racing.
+async function litFocusSync(state) {
+  if (!chrome.alarms) return;
+  if (!state || state.status !== 'running') {
+    await chrome.alarms.clear(LIT_FOCUS_ALARM);
+    return;
+  }
+  if (state.endsAt <= Date.now()) {
+    await chrome.alarms.clear(LIT_FOCUS_ALARM);
+    await litFocusSettle();
+    return;
+  }
+  await chrome.alarms.create(LIT_FOCUS_ALARM, { when: state.endsAt });
+}
+
+async function litFocusNotify() {
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') return;
+  let prefs = null;
+  try { prefs = await TrackerStorage.getPrefs(); } catch (e) { prefs = null; }
+  // The buddy's name, or plain LIT when the buddy is switched off.
+  const title = prefs && prefs.buddyEnabled === false ? 'LIT' : ((prefs && prefs.buddyName) || 'Lockie');
+  try {
+    chrome.notifications.create(LIT_FOCUS_NOTIFICATION, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title,
+      message: 'Focus session done. Stretch and grab some water.',
+      buttons: [{ title: 'Start another' }],
+      priority: 1
+    }, () => { void chrome.runtime.lastError; });
+  } catch (e) { /* notifications unavailable */ }
+}
+
+// Closes out a session whose deadline has passed. Idempotent: a session
+// already marked done is left alone, so a duplicate alarm or a revival
+// reconcile cannot announce one session twice.
+let litFocusChain = Promise.resolve(false);
+function litFocusSettle() {
+  litFocusChain = litFocusChain.then(async () => {
+    const state = await litFocusRead();
+    if (!state || state.status !== 'running' || state.endsAt > Date.now() + 1000) return false;
+    await litFocusWrite({ status: 'done', length: state.length, startedAt: state.startedAt, endsAt: state.endsAt, remaining: 0 });
+    if (Date.now() - state.endsAt < LIT_FOCUS_STALE_MS) await litFocusNotify();
+    return true;
+  }).catch(e => {
+    console.warn('[LIT] focus session close-out failed', e);
+    return false;
+  });
+  return litFocusChain;
+}
+
+async function litFocusStartAnother() {
+  litFocusClearNotification();
+  const state = await litFocusRead();
+  const length = state ? state.length : 25;
+  const now = Date.now();
+  const next = { status: 'running', length, startedAt: now, endsAt: now + length * LIT_FOCUS_MINUTE, remaining: length * LIT_FOCUS_MINUTE };
+  await litFocusWrite(next);
+  await litFocusSync(next);
+  return next;
+}
+
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener(alarm => {
+    if (alarm && alarm.name === LIT_FOCUS_ALARM) litFocusSettle();
+  });
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes || !changes[LIT_FOCUS_KEY]) return;
+  litFocusSync(litFocusNormalize(changes[LIT_FOCUS_KEY].newValue)).catch(() => {});
+});
+if (chrome.notifications && chrome.notifications.onClicked) {
+  chrome.notifications.onClicked.addListener(id => {
+    if (id === LIT_FOCUS_NOTIFICATION) litFocusClearNotification();
+  });
+}
+if (chrome.notifications && chrome.notifications.onButtonClicked) {
+  chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (id === LIT_FOCUS_NOTIFICATION && index === 0) litFocusStartAnother().catch(() => {});
+  });
+}
+// Alarms do not survive a browser restart: every revival re-arms a running
+// session, or closes one whose deadline passed while the worker slept.
+litFocusRead().then(litFocusSync).catch(() => {});
+
+if (typeof module !== 'undefined' && module.exports) {
+  Object.assign(module.exports, {
+    litFocusNormalize,
+    litFocusSync,
+    litFocusSettle,
+    litFocusStartAnother,
+    LIT_FOCUS_KEY,
+    LIT_FOCUS_ALARM,
+    LIT_FOCUS_NOTIFICATION
+  });
+}
+// --- END Focus sessions (popup/modules/shell-fx.js mini player) ---
