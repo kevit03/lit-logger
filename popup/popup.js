@@ -233,7 +233,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeTokenPopover(false);
     const wasOpen = !target.classList.contains('hidden');
     target.classList.add('hidden');
-    if (wasOpen) bridgeEmit('modal', { open: false, id: target.id });
     if (target === openModalEl) {
       openModalEl = null;
       if (modalReturnFocusEl && typeof modalReturnFocusEl.focus === 'function' && modalReturnFocusEl.isConnected) {
@@ -241,6 +240,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       modalReturnFocusEl = null;
     }
+    // After the reference clears, so listeners see openModalId === null.
+    if (wasOpen) bridgeEmit('modal', { open: false, id: target.id });
   }
 
   document.addEventListener('keydown', (e) => {
@@ -2691,6 +2692,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   let cardNotes = {};
   let buddySession = null;
 
+  // The worker updates the buddy's session while the popup is open (a new
+  // entry, a nudge, a break); keep the bubble and LitPopup.api current.
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    const sessionKey = typeof LitBuddy !== 'undefined' ? LitBuddy.SESSION_KEY : 'lit_buddy_session';
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[sessionKey]) return;
+      buddySession = changes[sessionKey].newValue || null;
+      if (metrics.length && stats) renderBuddy(metricById(activeMetricId));
+    });
+  }
+
   // Original lines, one a day. Short, warm, never about failing.
   const BOOSTS = [
     'Every application is a door you knocked on. Keep knocking.',
@@ -3484,6 +3496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('add-widget-btn').classList.toggle('hidden', !customizing);
     widgetsHost.querySelectorAll('.widget-remove-btn').forEach(b => { b.tabIndex = customizing ? 0 : -1; });
     if (customizing) showStatus('Drag cards to move them, or tap the corner button to remove one. Press Done when you are finished.');
+    bridgeEmit('customize', { on: customizing });
   }
   el('customize-btn').addEventListener('click', () => setCustomizing(!customizing));
   document.addEventListener('keydown', (e) => {
@@ -3515,7 +3528,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const row = make('div', 'widget-picker-row');
       const icon = make('span', 'widget-picker-icon');
       icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" focusable="false">' + (WIDGET_TYPE_ICON[t.type] || '') + '</svg>';
+      icon.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" focusable="false">' + (WIDGET_TYPE_ICON[t.type] || t.icon || '') + '</svg>';
       const text = make('div', 'widget-picker-text');
       const name = make('div', 'widget-picker-name', t.name);
       if (t.isNew) name.appendChild(make('span', 'new-tag', 'New'));
@@ -4624,6 +4637,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('main-view').classList.add('hidden');
     searchInput.focus();
     runSearch();
+    bridgeEmit('search', { open: true });
   }
 
   function closeSearch() {
@@ -4636,6 +4650,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('search-results').textContent = '';
     el('search-btn').focus();
     requestAnimationFrame(() => moveTabIndicator(false));
+    bridgeEmit('search', { open: false });
   }
 
   function escapeRegExp(s) {
@@ -5721,6 +5736,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  async function logForGoal(metricId) {
+    const metric = metricById(metricId);
+    if (!metric) return false;
+    const before = todayFor(metric);
+    try {
+      await TrackerStorage.addLog({ metricId, count: 1, source: 'manual' });
+    } catch (err) {
+      oops('That one did not save. Please try again.', err);
+      return false;
+    }
+    buddyCheerSoon = true;
+    notifyCalendarTabs();
+    await loadData();
+    const after = metricById(metricId);
+    const count = after ? todayFor(after) : before + 1;
+    const goal = goalFor(after || metric);
+    bridgeEmit('log', { metric: after || metric, count, goal });
+    if (before < goal && count >= goal) {
+      showStatus((after || metric).name + ': locked in for today.', 'ok');
+      bridgeEmit('goal-met', { metric: after || metric });
+    }
+    return true;
+  }
+
+  // Adds a company to the watchlist; false when empty, a duplicate, or full.
+  function addWatchCompany(raw) {
+    const name = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!name || watchlist.length >= MAX_WATCH) return false;
+    const key = TrackerStorage.normalizeCompany(name);
+    if (watchlist.some(w => TrackerStorage.normalizeCompany(w.name) === key)) return false;
+    watchlist.push({ id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, added: todayStr() });
+    saveWatchlist();
+    rerenderType('watchlist');
+    return true;
+  }
+
+  // Brings the watchlist card into view (adding or expanding it first) and
+  // focuses its input.
+  async function openWatchlistCard() {
+    const item = widgetItems.find(i => i.type === 'watchlist');
+    if (!item) await applyLayout(WidgetLayout.add('watchlist', {}), 'Companies card added.');
+    else if (item.options.collapsed) await applyLayout(WidgetLayout.update(item.id, { collapsed: false }));
+    const input = widgetsHost.querySelector('.widget-watchlist .watch-input');
+    if (!input) return false;
+    input.closest('.widget').scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+    input.focus({ preventScroll: true });
+    return true;
+  }
+
   // The read-only view and the helpers popup modules get through LitPopup.api.
   if (typeof LitPopup !== 'undefined') {
     LitPopup.attach({
@@ -5751,7 +5815,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       showStatus,
       oops,
       coach,
-      logOne: () => el('quick-add-btn').click(),
+      // +1 on any goal. The active goal goes through the button (timer,
+      // ring, burst); another goal logs directly with the same cheer.
+      logOne: metricId => {
+        if (!metricId || metricId === activeMetricId) { el('quick-add-btn').click(); return Promise.resolve(true); }
+        return logForGoal(metricId);
+      },
+      addWatchCompany: name => addWatchCompany(name),
+      openWatchlist: () => openWatchlistCard(),
       undoLast: () => el('undo-btn').click(),
       selectGoal: id => selectTracker(id),
       openShare,

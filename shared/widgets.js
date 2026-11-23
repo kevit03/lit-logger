@@ -211,6 +211,11 @@ const WidgetLayout = (() => {
       defaultSize: SIZES.includes(spec.defaultSize) ? spec.defaultSize : 'expanded',
       defaults: spec.defaults && typeof spec.defaults === 'object' ? Object.assign({}, spec.defaults) : {},
       normalize: typeof spec.normalize === 'function' ? spec.normalize : null,
+      // SVG markup drawn inside a 14x14 viewBox for the "Add a card" list.
+      icon: typeof spec.icon === 'string' ? spec.icon : '',
+      // When this returns false (the module is switched off) the type leaves
+      // the picker and its cards leave the board; nothing is deleted.
+      enabled: typeof spec.enabled === 'function' ? spec.enabled : null,
       module: true
     };
     if (spec.isNew !== false && !NEW_TYPES.includes(type)) NEW_TYPES.push(type);
@@ -427,6 +432,7 @@ const WidgetLayout = (() => {
   function isVisible(item, resolvedMetricId) {
     const spec = item && Object.prototype.hasOwnProperty.call(TYPES, item.type) ? TYPES[item.type] : null;
     if (!spec) return false;
+    if (!typeEnabled(spec)) return false;
     if (spec.leetcodeOnly) return resolvedMetricId === 'leetcode';
     if (spec.jobsOnly) return resolvedMetricId === 'jobs';
     return true;
@@ -455,15 +461,21 @@ const WidgetLayout = (() => {
     return solo;
   }
 
+  function typeEnabled(spec) {
+    if (!spec || typeof spec.enabled !== 'function') return true;
+    try { return spec.enabled() !== false; } catch (e) { return true; }
+  }
+
   function availableTypes(items) {
     const present = new Set((items || []).map(i => i.type));
-    return Object.keys(TYPES).map(type => ({
+    return Object.keys(TYPES).filter(type => typeEnabled(TYPES[type])).map(type => ({
       type,
       name: TYPES[type].name,
       description: TYPES[type].description,
       singleton: TYPES[type].singleton,
       isNew: NEW_TYPES.includes(type),
-      added: TYPES[type].singleton && present.has(type)
+      added: TYPES[type].singleton && present.has(type),
+      icon: TYPES[type].icon || ''
     }));
   }
 

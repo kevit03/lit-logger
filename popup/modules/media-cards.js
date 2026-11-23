@@ -801,6 +801,8 @@
       a.logOne();
       return Promise.resolve(null);
     }
+    // Newer popups log any goal with the same cheer and goal-met moment.
+    if (a && typeof a.addWatchCompany === 'function' && typeof a.logOne === 'function') return Promise.resolve(a.logOne(metric.id));
     return addOne(metric.id).then(log => {
       status('Logged 1 for ' + metric.name + '.', 'ok', undoLog(log));
       return refresh();
@@ -823,6 +825,7 @@
   async function openWatchlist() {
     const a = api();
     if (!a) return;
+    if (typeof a.openWatchlist === 'function') { await a.openWatchlist(); return; }
     let item = (a.widgetItems || []).find(i => i.type === 'watchlist');
     try {
       if (!item) {
@@ -1095,6 +1098,18 @@
     if (!btn) return;
     btn.closest('.mc-row').querySelectorAll('.mc-tile-btn').forEach(b => { b.tabIndex = b === btn ? 0 : -1; });
     btn.focus({ preventScroll: true });
+    btn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }
+
+  // Rebuilding a row would snap it back to the start; keep where it was.
+  function keepScroll(root) {
+    const row = root.querySelector('.mc-row');
+    return row ? row.scrollLeft : 0;
+  }
+
+  function restoreScroll(root, left) {
+    const row = root.querySelector('.mc-row');
+    if (row && left > 0) row.scrollLeft = left;
   }
 
   function bindContinue(root) {
@@ -1141,9 +1156,13 @@
       const tiles = continueTiles(logs, today, followups, ROW_LIMIT);
       const sig = JSON.stringify([today, tiles.map(t => [t.id, t.title, t.role, t.days, t.status, t.followUp, t.followedUp])]);
       if (st.sig === sig && root.firstChild) { focusPendingTile(root); return; }
-      // A rebuild drops an open action sheet, so close it cleanly first.
+      // A rebuild drops an open action sheet, so close it cleanly first, and
+      // keep focus on the same application when it was inside the row.
+      const focused = root.contains(document.activeElement) ? document.activeElement.closest('.mc-tile') : null;
+      if (focused && !pendingFocus) pendingFocus = focused.dataset.logId;
       if (openSheet && root.contains(openSheet.tile)) closeSheet(false);
       st.sig = sig;
+      const scrolled = keepScroll(root);
       root.textContent = '';
       if (!tiles.length) {
         const empty = h('div', 'mc-empty');
@@ -1161,6 +1180,7 @@
       if (tiles.every(t => t.unnamed)) root.appendChild(h('p', 'mc-note', 'Add the company with the next one and it gets its own poster.'));
       const due = tiles.filter(t => t.followUp).length;
       if (due) root.appendChild(h('p', 'mc-note', due === 1 ? 'One has waited a week. A short follow-up note can help.' : due + ' have waited a week. A short follow-up note can help.'));
+      restoreScroll(root, scrolled);
       focusPendingTile(root);
       afterLayout(() => updateArrows(rail));
     });
@@ -1305,6 +1325,8 @@
       const ranked = rankItems(mode, { dailyMap: stats.dailyMap, metricId: metric.id, todayStr: today, logs, limit: TOP_LIMIT });
       const sig = JSON.stringify([mode, metric.id, today, ranked.map(r => [r.key, r.label, r.value])]);
       if (st.sig === sig && content.firstChild) return;
+      const scrolled = st.lastMode === mode ? keepScroll(content) : 0;
+      st.lastMode = mode;
       st.sig = sig;
       content.textContent = '';
       root.dataset.mode = mode;
@@ -1352,6 +1374,7 @@
       }
       const rail = buildRail(row, 'your top 10');
       content.appendChild(rail);
+      restoreScroll(content, scrolled);
       if (ranked.length < 3) content.appendChild(h('p', 'mc-note', 'Your top 10 fills in as you go.'));
       afterLayout(() => updateArrows(rail));
     });
@@ -1451,15 +1474,16 @@
         return;
       }
       const cta = e.target.closest('.mc-cta');
-      if (cta && !cta.disabled) {
+      if (cta && cta.dataset.busy !== '1') {
         const st = stateOf(body);
         const metric = st.args && st.args.metric;
         const slide = (st.slides || []).find(x => x.id === cta.dataset.slide);
         if (!metric || !slide) return;
-        cta.disabled = true;
+        // A busy flag rather than disabled, so keyboard focus stays put.
+        cta.dataset.busy = '1';
         runCta(slide.cta, metric)
           .catch(err => oops('That did not go through. Please try again.', err))
-          .finally(() => { if (cta.isConnected) cta.disabled = false; });
+          .finally(() => { delete cta.dataset.busy; });
       }
     });
     root.addEventListener('keydown', e => {
@@ -1495,6 +1519,18 @@
       });
     }
     return hit ? hit.value : null;
+  }
+
+  // A selector for the focused control inside a card, to restore after a
+  // rebuild (otherwise focus falls back to the page).
+  function focusKeyIn(root) {
+    const active = document.activeElement;
+    if (!active || !root.contains(active)) return null;
+    if (active.classList.contains('mc-cta')) return '.mc-slide[data-slide="' + CSS.escape(active.dataset.slide || '') + '"] .mc-cta';
+    if (active.classList.contains('mc-dot')) return '.mc-dot[data-index="' + CSS.escape(active.dataset.index || '0') + '"]';
+    if (active.classList.contains('mc-pause')) return '.mc-pause';
+    if (active.classList.contains('mc-q-btn')) return '[data-mc-key="' + CSS.escape(active.dataset.mcKey || '') + '"]';
+    return null;
   }
 
   function buildSlide(slide, index, count) {
@@ -1569,6 +1605,7 @@
       s.count = slides.length;
       if (st.sig === sig && root.firstChild) { scheduleSpot(); return; }
       st.sig = sig;
+      const refocus = focusKeyIn(root);
       root.textContent = '';
       const bill = h('div', 'mc-bill');
       bill.setAttribute('role', 'group');
@@ -1598,6 +1635,11 @@
       root.appendChild(bill);
       updatePauseBtn(s);
       showSlide(s, slideIndexFor(slides, s.id, s.index), false);
+      if (refocus) {
+        const node = root.querySelector(refocus);
+        if (node && !node.closest('[inert]')) node.focus({ preventScroll: true });
+        else s.focus = false;
+      }
       scheduleSpot();
     });
   }
@@ -1646,12 +1688,17 @@
   function bindQueue(root, body) {
     root.addEventListener('click', e => {
       const b = e.target.closest('.mc-q-btn');
-      if (!b || b.disabled) return;
+      if (!b || b.dataset.busy === '1') return;
       const st = stateOf(body);
       const entry = (st.queue || []).find(x => x.key === b.dataset.mcKey);
       if (!entry) return;
       const a = api();
-      b.disabled = true;
+      b.dataset.busy = '1';
+      b.setAttribute('aria-disabled', 'true');
+      const release = () => {
+        delete b.dataset.busy;
+        b.removeAttribute('aria-disabled');
+      };
       const row = b.closest('.mc-q');
       const done = () => {
         if (row) row.classList.add('is-done');
@@ -1666,7 +1713,7 @@
           status('Logged 1 for ' + (metric ? metric.name : entry.title) + '.', 'ok', undoLog(log));
           setTimeout(refresh, settle);
         }).catch(err => {
-          b.disabled = false;
+          release();
           oops('That did not log just now. Please try again.', err);
         });
       } else if (entry.action === 'followed') {
@@ -1682,7 +1729,7 @@
           status('Logged an application at ' + entry.company + '. Nice work.', 'ok', undoLog(log));
           setTimeout(refresh, settle);
         }).catch(err => {
-          b.disabled = false;
+          release();
           oops('That did not log just now. Please try again.', err);
         });
       }
@@ -1716,24 +1763,34 @@
       });
       st.queue = q.items;
       const sig = JSON.stringify([today, q, !!stats.restToday]);
-      if (st.sig === sig && root.querySelector('.mc-q-wrap')) return;
+      let wrapEl = root.querySelector(':scope > .mc-q-wrap');
+      if (st.sig === sig && wrapEl) return;
       st.sig = sig;
       const prevCount = queueSeen.has(item.id) ? queueSeen.get(item.id) : -1;
       queueSeen.set(item.id, q.total);
-      root.textContent = '';
-      const region = h('span', 'sr-only mc-live');
-      region.setAttribute('aria-live', 'polite');
-      root.appendChild(region);
-      const wrapEl = h('div', 'mc-q-wrap');
-      root.appendChild(wrapEl);
+      // The live region stays put across rebuilds so announcements land.
+      if (!root.querySelector(':scope > .mc-live')) {
+        const region = h('span', 'sr-only mc-live');
+        region.setAttribute('aria-live', 'polite');
+        root.appendChild(region);
+      }
+      const refocus = focusKeyIn(root);
+      const hadFocus = root.contains(document.activeElement);
+      if (!wrapEl) {
+        wrapEl = h('div', 'mc-q-wrap');
+        root.appendChild(wrapEl);
+      }
+      wrapEl.textContent = '';
       if (!q.items.length) {
         const caught = h('div', 'mc-caught' + (prevCount > 0 && !reduceMotion() ? ' is-fresh' : ''));
+        caught.tabIndex = -1;
         caught.appendChild(icon('check', 'mc-caught-check'));
         caught.appendChild(h('p', 'mc-empty-title', stats.restToday ? 'Rest day' : 'All caught up'));
         caught.appendChild(h('p', 'mc-empty-line', stats.restToday
           ? 'Nothing needs you today. Rest is part of the plan.'
           : 'Every goal is met and nothing is waiting on you. Enjoy the rest of your day.'));
         wrapEl.appendChild(caught);
+        if (hadFocus) caught.focus({ preventScroll: true });
         return;
       }
       const list = h('ol', 'mc-q-list');
@@ -1753,6 +1810,10 @@
       });
       wrapEl.appendChild(list);
       if (q.more) wrapEl.appendChild(h('p', 'mc-note', q.more === 1 ? 'One more after these.' : q.more + ' more after these.'));
+      if (hadFocus) {
+        const target = (refocus && wrapEl.querySelector(refocus)) || wrapEl.querySelector('.mc-q-btn');
+        if (target) target.focus({ preventScroll: true });
+      }
     });
   }
 
@@ -1765,6 +1826,8 @@
 
   // ----- Registration (load time) ---------------------------------------------
   Lit.registerCard('continueRow', {
+    icon: '<rect x="1.5" y="3" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="7" y="3" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M12.5 4v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>',
+    enabled: () => isOn(),
     name: 'Pick up where you left off',
     description: 'Recent applications as a row of posters, with how far each has moved and a nudge when one is ready for a follow-up.',
     defaultSize: 'expanded',
@@ -1773,6 +1836,8 @@
   }, renderContinue);
 
   Lit.registerCard('top10', {
+    icon: '<path d="M2.5 11.5V4.5l-1 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><rect x="5.5" y="2.5" width="7" height="9" rx="1.2" stroke="currentColor" stroke-width="1.2"/>',
+    enabled: () => isOn(),
     name: 'Your top 10',
     description: 'Your best days this month, the companies you apply to most, or your most common role words, ranked.',
     defaultSize: 'expanded',
@@ -1781,6 +1846,8 @@
   }, renderTop10);
 
   Lit.registerCard('spotlight', {
+    icon: '<rect x="1.5" y="2.5" width="11" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="11.8" r=".8" fill="currentColor"/><circle cx="7" cy="11.8" r=".8" fill="currentColor"/><circle cx="9" cy="11.8" r=".8" fill="currentColor"/>',
+    enabled: () => isOn(),
     name: 'Spotlight',
     description: 'A rotating billboard: your next milestone, a company to try today, your streak, and your record day.',
     defaultSize: 'expanded',
@@ -1788,6 +1855,8 @@
   }, renderSpotlight);
 
   Lit.registerCard('upNext', {
+    icon: '<path d="M2 3.5h7M2 7h7M2 10.5h4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M10.5 8.5l2 2-2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    enabled: () => isOn(),
     name: 'Up next',
     description: 'A short queue of what to do next: goals to finish today, follow-ups due, and companies to try.',
     defaultSize: 'expanded',

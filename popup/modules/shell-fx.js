@@ -186,7 +186,7 @@ const LitShellFx = (() => {
     const st = focusStatus(state, now);
     const clock = formatClock(focusRemaining(state, now));
     if (st === 'running') return clock + ' left';
-    if (st === 'paused') return 'Paused, ' + clock + ' left';
+    if (st === 'paused') return 'Paused, ' + clock;
     if (st === 'done') return 'Session done';
     return clampLength(state && state.length) + ' min focus';
   }
@@ -860,8 +860,9 @@ const LitShellFx = (() => {
       if (!island.el || !island.host) return;
       const layer = island.el.dataset.mode === 'live' ? island.live : island.rest;
       const avail = Math.max(30, island.host.clientWidth);
+      // offsetWidth ignores the layer's entrance scale; +1 covers rounding.
       layer.style.width = 'max-content';
-      const natural = Math.ceil(layer.getBoundingClientRect().width);
+      const natural = layer.offsetWidth + 1;
       layer.style.width = '';
       island.el.style.width = Math.min(avail, Math.max(30, natural)) + 'px';
     }
@@ -1125,7 +1126,9 @@ const LitShellFx = (() => {
         player.art.innerHTML = api.iconFor(m) || '';
       }
       player.title.textContent = m.name || '';
-      player.sub.textContent = playerSub({ count: api.todayFor(m), goal: api.goalFor(m) }, focus, now);
+      const subText = playerSub({ count: api.todayFor(m), goal: api.goalFor(m) }, focus, now);
+      player.sub.textContent = subText;
+      player.sub.title = subText;
       const pb = playButton(focus, now);
       if (pb.icon !== player.playIcon) {
         player.playIcon = pb.icon;

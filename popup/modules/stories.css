@@ -47,9 +47,9 @@
 }
 .lst-face-num { font-size: var(--fs-md); font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
 .lst-face-of { padding-top: 3px; font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2); }
-.lst-face-bars { align-items: flex-end; gap: 2px; padding: 0 9px 13px; }
-.lst-face-bars i { display: block; flex: 1; max-width: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text) 22%, transparent); }
-.lst-face-bars i.on { background: var(--tracker); }
+.lst-face-chart { display: flex; align-items: flex-end; gap: 2px; height: 22px; }
+.lst-face-chart i { display: block; width: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text) 22%, transparent); }
+.lst-face-chart i.on { background: var(--tracker); }
 .lst-face-flame { gap: 1px; color: var(--flame); }
 .lst-face-flame svg { width: 17px; height: 17px; }
 .lst-face-flame .lst-face-num { color: var(--text); font-size: var(--fs-base); }
@@ -115,13 +115,14 @@ body.pt-dark .lst-blob-b { background: radial-gradient(closest-side, color-mix(i
 .lst-icon-btn svg, .lst-nav svg { width: 14px; height: 14px; }
 .lst-icon-btn:hover, .lst-nav:hover { background: var(--surface); }
 .lst-icon-btn:focus-visible, .lst-nav:focus-visible, .lst-share:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.lst-nav { position: absolute; top: 50%; z-index: 3; width: 30px; height: 30px; margin-top: -2px; opacity: 0; transition: opacity 0.2s var(--ease); }
-.lst-nav-prev { left: 6px; }
-.lst-nav-next { right: 6px; }
+.lst-nav { position: absolute; top: 50%; z-index: 3; width: 26px; height: 26px; margin-top: -2px; opacity: 0; transition: opacity 0.2s var(--ease); }
+.lst-nav svg { width: 12px; height: 12px; }
+.lst-nav-prev { left: 5px; }
+.lst-nav-next { right: 5px; }
 .lst-viewer:hover .lst-nav, .lst-nav:focus-visible { opacity: 1; }
 
 .lst-stage { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; cursor: pointer; touch-action: none; }
-.lst-slide { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 24px 18px; overflow: hidden; }
+.lst-slide { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 36px 18px; overflow: hidden; }
 .lst-slide-top { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .lst-kicker {
   margin: 0; padding: 4px 10px; border-radius: var(--radius-pill);
@@ -205,7 +206,7 @@ body.pt-dark .lst-blob-b { background: radial-gradient(closest-side, color-mix(i
   display: flex; flex-direction: column; gap: 9px; padding: 12px 14px;
   border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface);
 }
-.lst-stage { display: grid; grid-template-columns: 82px 1fr 30px; align-items: center; gap: 10px; }
+.lst-stage-row { display: grid; grid-template-columns: 98px 1fr 26px; align-items: center; gap: 8px; }
 .lst-stage-l { font-size: var(--fs-sm); font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lst-stage-track { height: 10px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
 .lst-stage-fill {
@@ -264,7 +265,7 @@ body.pt-dark .lst-blob-b { background: radial-gradient(closest-side, color-mix(i
 
 /* Share */
 .lst-share {
-  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; margin-left: auto;
+  display: inline-flex; align-items: center; align-self: flex-start; gap: 8px; height: 40px; padding: 0 18px; margin-top: 4px;
   border: 0; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent);
   font: inherit; font-size: var(--fs-base); font-weight: 800; cursor: pointer; box-shadow: var(--shadow-lg);
 }

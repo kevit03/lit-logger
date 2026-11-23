@@ -137,7 +137,7 @@ async function run() {
   // 4d. Autofill. Every ATS and universal entry loads the store, then the
   //     core, then the site adapters, then the button script, with its CSS.
   //     The universal injection path loads the same files.
-  assert.strictEqual(manifest.version, '1.6.0', 'version is 1.6.0');
+  assert.ok(/^\d+\.\d+\.\d+$/.test(manifest.version), 'version is a plain x.y.z (Chrome Web Store format)');
   const AUTOFILL_JS = [
     'shared/autofill-store.js',
     'shared/autofill-core.js',

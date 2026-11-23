@@ -20,7 +20,10 @@ const LitStories = (() => {
   const SLIDE_MS_REDUCED = 8000;
   const COUNT_MS = 900;
   const SEEN_LIMIT = 60;
-  const MILESTONES = [1, 10, 25, 50, 100, 250, 500, 1000];
+  // Storage's own list when available, so the ring and the trophy shelf agree.
+  const MILESTONES = typeof TrackerStorage !== 'undefined' && Array.isArray(TrackerStorage.MILESTONE_THRESHOLDS)
+    ? TrackerStorage.MILESTONE_THRESHOLDS.slice()
+    : [1, 10, 25, 50, 100, 250, 500, 1000];
   const STAGES = ['applied', 'review', 'interviewing', 'offer', 'rejected'];
   const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -419,7 +422,7 @@ const LitStories = (() => {
       id: 'today-ring', tone: 'tracker', layout: 'ring', kicker: 'Today',
       big: count, bigLabel: unitOf(ctx, count) + ' today',
       ring: { count, goal },
-      title: count >= goal ? 'Goal of ' + goal + ' met' : count + ' of ' + goal + ' for today',
+      title: count >= goal ? 'Goal of ' + goal + ' met' : '',
       line: callCopy(ctx, 'headline', [{ count, goal, voice: ctx.voice }], 'Nice work today.')
     }];
     // A positive comparison with the last four weeks, only when there is one.
@@ -463,7 +466,9 @@ const LitStories = (() => {
       id: 'week-bars', tone: 'accent', layout: 'bars', kicker: label,
       big: wk.total, bigLabel: unitOf(ctx, wk.total) + (wk.mode === 'this' ? ' this week' : ' last week'),
       bars: wk.days.map(d => ({ label: d.letter, count: d.count, future: d.future, isToday: d.isToday, best: !!best && d.date === best.date })),
-      line: best ? DAY_NAMES[weekdayOf(best.date)] + ' was your strongest day' + (best.count > 1 ? ', with ' + best.count + '.' : '.') : ''
+      line: !best ? '' : wk.activeDays === 1
+        ? (wk.mode === 'this' ? 'A strong start to the week.' : 'One focused day. It counts.')
+        : DAY_NAMES[weekdayOf(best.date)] + ' was your strongest day' + (best.count > 1 ? ', with ' + best.count + '.' : '.')
     }];
     const more = wk.priorTotal > 0 && wk.total > wk.priorTotal ? wk.total - wk.priorTotal : 0;
     slides.push({
@@ -569,7 +574,9 @@ const LitStories = (() => {
         id: 'month-weekday', tone: 'flame', layout: 'weekbars', kicker: 'Most active weekday',
         big: r.topWeekday.name + 's', bigLabel: '',
         bars: r.weekdayTotals.map((n, i) => ({ label: DAY_LETTERS[i], count: n, best: i === r.topWeekday.monFirst })),
-        line: r.topWeekday.share + '% of your month happened on a ' + r.topWeekday.name + '.'
+        line: r.topWeekday.share >= 25
+          ? r.topWeekday.share + '% of your month happened on a ' + r.topWeekday.name + '.'
+          : 'You spread the work across the week, and ' + r.topWeekday.name + 's edged ahead.'
       });
     }
     slides.push({
@@ -584,7 +591,7 @@ const LitStories = (() => {
         id: 'month-companies', tone: 'success', layout: 'names', kicker: 'Companies',
         big: r.companies.count, bigLabel: plural(r.companies.count, 'company you applied to', 'companies you applied to'),
         names: r.companies.names,
-        line: extraN > 0 ? 'and ' + extraN + ' more. That is a lot of doors knocked on.' : 'Each one is a real door you knocked on.'
+        line: extraN > 0 ? 'Plus ' + extraN + ' more. That is a lot of doors knocked on.' : 'Each one is a real door you knocked on.'
       });
     }
     if (r.stages && r.jobsTotal > 0) {
@@ -955,12 +962,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof L
         face.innerHTML = ICONS.moon;
       } else if (f.type === 'bars') {
         const max = Math.max(1, Math.max.apply(null, f.values));
+        const chart = make('span', 'lst-face-chart');
         f.values.forEach(v => {
-          const b = make('i');
-          b.style.height = Math.round(18 + (v / max) * 82) * (v > 0 ? 1 : 0.18) + '%';
-          if (v > 0) b.className = 'on';
-          face.appendChild(b);
+          const bar = make('i');
+          bar.style.height = (v > 0 ? Math.round(5 + (v / max) * 17) : 2) + 'px';
+          if (v > 0) bar.className = 'on';
+          chart.appendChild(bar);
         });
+        face.appendChild(chart);
       } else if (f.type === 'flame') {
         face.innerHTML = ICONS.flame;
         if (f.value > 0) face.appendChild(make('span', 'lst-face-num', f.value));
@@ -1119,7 +1128,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof L
       const box = make('div', 'lst-stages');
       const max = Math.max(1, Math.max.apply(null, slide.stages.map(s => s.count)));
       slide.stages.forEach(s => {
-        const row = make('div', 'lst-stage');
+        const row = make('div', 'lst-stage-row');
         row.style.setProperty('--stage', 'var(--stage-' + s.id + ', var(--accent))');
         row.appendChild(make('span', 'lst-stage-l', s.label));
         const track = make('span', 'lst-stage-track');
@@ -1197,13 +1206,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof L
       }
       if (slide.line) main.appendChild(make('p', 'lst-line', slide.line));
       if (slide.note) main.appendChild(make('p', 'lst-note', slide.note));
-      node.appendChild(main);
-
-      const foot = make('div', 'lst-slide-foot');
-      if (slide.buddy) {
-        const b = buddyNode();
-        if (b) foot.appendChild(b);
-      }
       if (slide.share) {
         const share = make('button', 'lst-share');
         share.type = 'button';
@@ -1214,7 +1216,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof L
           e.stopPropagation();
           opts.onShare(slide.share);
         });
-        foot.appendChild(share);
+        main.appendChild(share);
+      }
+      node.appendChild(main);
+
+      const foot = make('div', 'lst-slide-foot');
+      if (slide.buddy) {
+        const b = buddyNode();
+        if (b) foot.appendChild(b);
       }
       if (foot.firstChild) node.appendChild(foot);
       return node;

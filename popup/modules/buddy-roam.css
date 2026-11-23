@@ -1,1 +1,223 @@
-/* LIT popup module: buddy-roam. Placeholder. */
+/* LIT popup module: buddy-roam (popup/modules/buddy-roam.js).
+   The buddy roams the board. Everything here is scoped to .buddy.roam, which
+   the module sets only while the buddy lives in #buddy-layer; the seated
+   buddy beside the counter keeps popup.css's look and mood styles.
+   The module sets on #buddy: data-action (a pose), data-gaze (front | side |
+   down), data-facing, data-bubble (show | hide), data-bubble-side (left |
+   right), data-bubble-vert (above | below), data-dragging, data-away. */
+
+/* Clip to the board so a roaming or flung buddy never adds a scrollbar. */
+.buddy-layer { overflow: clip; }
+
+.buddy-layer > .buddy.roam {
+  position: absolute; left: 0; top: 0;
+  display: block; width: 36px; height: 40px; margin: 0;
+  will-change: transform;
+  transition: opacity 0.2s var(--ease), visibility 0s linear 0s;
+}
+/* Customize mode or a full-popup viewer: step out of the way. */
+.buddy.roam[data-away] {
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.2s var(--ease), visibility 0s linear 0.2s;
+}
+
+.buddy.roam .buddy-btn {
+  display: block; width: 36px; height: 40px;
+  touch-action: none; cursor: grab; -webkit-tap-highlight-color: transparent;
+}
+.buddy.roam[data-dragging] .buddy-btn { cursor: grabbing; }
+.buddy.roam .buddy-btn:focus-visible { outline-offset: 1px; }
+/* The module mirrors (facing) and rotates (laps, tumbles) the drawing around its feet. */
+.buddy.roam .buddy-svg { transform-origin: 50% 97%; }
+
+/* ----- The rig: legs, arms, face ----------------------------------------- */
+.buddy.roam .buddy-legs, .buddy.roam .buddy-arms { display: inline; }
+.buddy.roam .buddy-foot-still { display: none; }
+.buddy.roam .buddy-shin { stroke: color-mix(in srgb, var(--accent) 75%, var(--ink)); }
+.buddy.roam .buddy-arm { stroke: color-mix(in srgb, var(--accent) 70%, var(--ink)); }
+.buddy.roam .buddy-mouth-o { fill: #241F1B; }
+
+.buddy.roam .buddy-rig { transform-origin: 22px 47px; transition: transform 0.14s var(--ease); }
+.buddy.roam .buddy-body-g { transform-origin: 22px 41.5px; }
+.buddy.roam .buddy-leg-l { transform-origin: 15px 37.5px; }
+.buddy.roam .buddy-leg-r { transform-origin: 29px 37.5px; }
+.buddy.roam .buddy-arm-l { transform-origin: 8.6px 29.6px; }
+.buddy.roam .buddy-arm-r { transform-origin: 35.4px 29.6px; }
+.buddy.roam .buddy-leg, .buddy.roam .buddy-arm { transition: transform 0.16s var(--ease); }
+
+/* Gaze: the face slides toward where it is going (the drawing is mirrored
+   when it faces left, so one direction covers both). */
+.buddy.roam .buddy-face { transition: transform 0.18s var(--ease); }
+.buddy.roam[data-gaze="side"] .buddy-face { transform: translateX(1.8px); }
+.buddy.roam[data-gaze="down"] .buddy-face { transform: translate(1.8px, 1.4px); }
+
+/* ----- Walk: a waddling stride, arms swinging, a bob on every step ------- */
+.buddy.roam[data-action="walk"] .buddy-rig { transform: rotate(3deg); }
+.buddy.roam[data-action="walk"] .buddy-leg-l { animation: roam-stride 0.46s linear infinite; }
+.buddy.roam[data-action="walk"] .buddy-leg-r { animation: roam-stride 0.46s linear -0.23s infinite; }
+.buddy.roam[data-action="walk"] .buddy-arm-l { animation: roam-swing 0.46s ease-in-out -0.23s infinite; }
+.buddy.roam[data-action="walk"] .buddy-arm-r { animation: roam-swing 0.46s ease-in-out infinite; }
+.buddy.roam[data-action="walk"] .buddy-body-g { animation: roam-bob 0.23s ease-in-out infinite alternate; }
+
+/* ----- Run: faster, bigger strides, a forward lean, arms pumping --------- */
+.buddy.roam[data-action="run"] .buddy-rig { transform: rotate(10deg); }
+.buddy.roam[data-action="run"] .buddy-leg-l { animation: roam-sprint 0.26s linear infinite; }
+.buddy.roam[data-action="run"] .buddy-leg-r { animation: roam-sprint 0.26s linear -0.13s infinite; }
+.buddy.roam[data-action="run"] .buddy-arm-l { animation: roam-pump 0.26s ease-in-out -0.13s infinite; }
+.buddy.roam[data-action="run"] .buddy-arm-r { animation: roam-pump 0.26s ease-in-out infinite; }
+.buddy.roam[data-action="run"] .buddy-body-g { animation: roam-bob-run 0.13s ease-in-out infinite alternate; }
+
+/* ----- Hop: crouch, stretch in the air, squash on landing ---------------- */
+.buddy.roam[data-action="crouch"] .buddy-rig { transform: scale(1.14, 0.82); transition-duration: 0.07s; }
+.buddy.roam[data-action="crouch"] .buddy-arm-l { transform: rotate(-20deg); }
+.buddy.roam[data-action="crouch"] .buddy-arm-r { transform: rotate(20deg); }
+.buddy.roam[data-action="hop"] .buddy-rig { transform: scale(0.9, 1.12); }
+.buddy.roam[data-action="hop"] .buddy-leg-l { transform: rotate(16deg); }
+.buddy.roam[data-action="hop"] .buddy-leg-r { transform: rotate(-12deg); }
+.buddy.roam[data-action="hop"] .buddy-arm-l { transform: rotate(60deg); }
+.buddy.roam[data-action="hop"] .buddy-arm-r { transform: rotate(-60deg); }
+.buddy.roam[data-action="land"] .buddy-rig { animation: roam-land 0.16s ease-out; }
+
+/* ----- Sit, and nap (sitting, eyes shut, breathing slowly) --------------- */
+.buddy.roam[data-action="sit"] .buddy-rig,
+.buddy.roam[data-action="nap"] .buddy-rig { transform: translateY(5px) scale(1.04, 0.96); transition-duration: 0.3s; }
+.buddy.roam[data-action="sit"] .buddy-leg-l,
+.buddy.roam[data-action="nap"] .buddy-leg-l { transform: rotate(70deg); }
+.buddy.roam[data-action="sit"] .buddy-leg-r,
+.buddy.roam[data-action="nap"] .buddy-leg-r { transform: rotate(-70deg); }
+.buddy.roam[data-action="nap"] .buddy-body-g { animation: roam-breathe 3.2s ease-in-out infinite; }
+.buddy.roam[data-action="yawn"] .buddy-eyes-open, .buddy.roam[data-action="yawn"] .buddy-eyes-happy,
+.buddy.roam[data-action="nap"] .buddy-eyes-open, .buddy.roam[data-action="nap"] .buddy-eyes-happy { display: none; }
+.buddy.roam[data-action="yawn"] .buddy-eyes-closed,
+.buddy.roam[data-action="nap"] .buddy-eyes-closed { display: inline; }
+.buddy.roam[data-action="nap"] .buddy-zz { display: inline; animation: roam-zz 2.4s ease-in-out infinite; }
+.buddy.roam[data-action="nap"] .buddy-sparkles { display: none; }
+
+/* ----- Yawn and stretch -------------------------------------------------- */
+.buddy.roam[data-action="yawn"] .buddy-mouth { display: none; }
+.buddy.roam[data-action="yawn"] .buddy-mouth-o {
+  display: inline; transform-box: fill-box; transform-origin: center;
+  animation: roam-yawn 1.7s ease-in-out;
+}
+.buddy.roam[data-action="yawn"] .buddy-rig { transform: scale(0.96, 1.06); transition-duration: 0.6s; }
+.buddy.roam[data-action="yawn"] .buddy-arm-l { transform: rotate(100deg); transition-duration: 0.5s; }
+.buddy.roam[data-action="yawn"] .buddy-arm-r { transform: rotate(-100deg); transition-duration: 0.5s; }
+.buddy.roam[data-action="stretch"] .buddy-rig { transform: scale(0.95, 1.08); }
+.buddy.roam[data-action="stretch"] .buddy-arm-l { transform: rotate(105deg); }
+.buddy.roam[data-action="stretch"] .buddy-arm-r { transform: rotate(-105deg); }
+
+/* ----- Look around, wave, cheer, shrug, peek ----------------------------- */
+.buddy.roam[data-action="look"] .buddy-rig { transform: rotate(-3deg); }
+.buddy.roam[data-action="wave"] .buddy-rig { transform: rotate(-3deg); }
+.buddy.roam[data-action="wave"] .buddy-arm-r { animation: roam-wave 0.5s ease-in-out infinite alternate; }
+.buddy.roam[data-action="cheer"] .buddy-arm-l { animation: roam-cheer-l 0.36s ease-in-out infinite alternate; }
+.buddy.roam[data-action="cheer"] .buddy-arm-r { animation: roam-cheer-r 0.36s ease-in-out infinite alternate; }
+.buddy.roam[data-action="shrug"] .buddy-arm-l { transform: rotate(58deg); }
+.buddy.roam[data-action="shrug"] .buddy-arm-r { transform: rotate(-58deg); }
+.buddy.roam[data-action="shrug"] .buddy-rig { animation: roam-shrug 1s var(--ease); }
+.buddy.roam[data-action="peek"] .buddy-rig { transform: rotate(16deg); transition-duration: 0.3s; }
+.buddy.roam[data-action="peek"] .buddy-arm-r { transform: rotate(-30deg); }
+
+/* ----- Picked up, flung, and a little dizzy after ------------------------ */
+.buddy.roam[data-action="dangle"] .buddy-rig { transform: scale(0.94, 1.08); }
+.buddy.roam[data-action="dangle"] .buddy-arm-l { transform: rotate(110deg); }
+.buddy.roam[data-action="dangle"] .buddy-arm-r { transform: rotate(-110deg); }
+.buddy.roam[data-action="dangle"] .buddy-leg-l { animation: roam-dangle 0.9s ease-in-out infinite alternate; }
+.buddy.roam[data-action="dangle"] .buddy-leg-r { animation: roam-dangle 0.9s ease-in-out infinite alternate-reverse; }
+.buddy.roam[data-action="tumble"] .buddy-arm-l { transform: rotate(80deg); }
+.buddy.roam[data-action="tumble"] .buddy-arm-r { transform: rotate(-80deg); }
+.buddy.roam[data-action="tumble"] .buddy-leg-l { transform: rotate(35deg); }
+.buddy.roam[data-action="tumble"] .buddy-leg-r { transform: rotate(-35deg); }
+.buddy.roam[data-action="dizzy"] .buddy-rig { animation: roam-wobble 0.9s ease-in-out; }
+
+@keyframes roam-stride {
+  0%, 100% { transform: rotate(24deg); }
+  25% { transform: translateY(-1.6px) rotate(0deg); }
+  50% { transform: rotate(-24deg); }
+  75% { transform: rotate(0deg); }
+}
+@keyframes roam-sprint {
+  0%, 100% { transform: rotate(40deg); }
+  25% { transform: translateY(-2.6px) rotate(0deg); }
+  50% { transform: rotate(-42deg); }
+  75% { transform: translateY(-0.6px) rotate(0deg); }
+}
+@keyframes roam-swing { 0%, 100% { transform: rotate(-16deg); } 50% { transform: rotate(16deg); } }
+@keyframes roam-pump { 0%, 100% { transform: rotate(-38deg); } 50% { transform: rotate(30deg); } }
+@keyframes roam-bob { from { transform: translateY(0); } to { transform: translateY(-1.4px); } }
+@keyframes roam-bob-run { from { transform: translateY(0.4px); } to { transform: translateY(-2.2px); } }
+@keyframes roam-land { 0% { transform: scale(1.18, 0.8); } 100% { transform: scale(1, 1); } }
+@keyframes roam-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.03, 0.97); } }
+@keyframes roam-zz { 0%, 100% { opacity: 0.5; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-1.5px); } }
+@keyframes roam-yawn { 0% { transform: scale(0.3); } 35%, 70% { transform: scale(1.1); } 100% { transform: scale(0.6); } }
+@keyframes roam-wave { from { transform: rotate(-78deg); } to { transform: rotate(-115deg); } }
+@keyframes roam-cheer-l { from { transform: rotate(82deg); } to { transform: rotate(106deg); } }
+@keyframes roam-cheer-r { from { transform: rotate(-82deg); } to { transform: rotate(-106deg); } }
+@keyframes roam-shrug {
+  0%, 100% { transform: none; }
+  25% { transform: translateY(-1.2px) rotate(-5deg); }
+  55% { transform: translateY(-1.2px) rotate(5deg); }
+  80% { transform: none; }
+}
+@keyframes roam-dangle { from { transform: rotate(-14deg); } to { transform: rotate(14deg); } }
+@keyframes roam-wobble {
+  0%, 100% { transform: none; }
+  20% { transform: rotate(-8deg); }
+  45% { transform: rotate(7deg); }
+  70% { transform: rotate(-4deg); }
+}
+
+/* ----- Dust puffs behind a running buddy --------------------------------- */
+.buddy-layer > .buddy-dust {
+  position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 50%;
+  background: color-mix(in srgb, var(--text-3) 45%, transparent);
+  pointer-events: none;
+  animation: roam-dust 0.5s var(--ease) forwards;
+}
+@keyframes roam-dust {
+  from { opacity: 0.8; scale: 0.4; }
+  to { opacity: 0; scale: 1.6; translate: var(--drift, -8px) -6px; }
+}
+
+/* ----- The speech bubble rides along, opening away from the edges -------- */
+.buddy.roam .buddy-bubble {
+  position: absolute; bottom: calc(100% - 2px); left: 62%;
+  width: max-content; max-width: 188px; flex: none;
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+  border-radius: 12px 12px 12px 4px;
+  transform-origin: 0 100%;
+  transition: opacity 0.18s var(--ease), transform 0.22s var(--spring);
+}
+.buddy.roam[data-bubble-side="left"] .buddy-bubble {
+  left: auto; right: 62%; border-radius: 12px 12px 4px 12px; transform-origin: 100% 100%;
+}
+.buddy.roam[data-bubble-vert="below"] .buddy-bubble {
+  bottom: auto; top: calc(100% + 2px); border-radius: 4px 12px 12px 12px; transform-origin: 0 0;
+}
+.buddy.roam[data-bubble-vert="below"][data-bubble-side="left"] .buddy-bubble {
+  border-radius: 12px 4px 12px 12px; transform-origin: 100% 0;
+}
+/* Collapsed, it stays in the accessibility tree so the live region still speaks. */
+.buddy.roam[data-bubble="hide"] .buddy-bubble,
+.buddy.roam[data-dragging] .buddy-bubble { opacity: 0; transform: scale(0.85); pointer-events: none; }
+
+:root[data-motion="reduce"] .buddy.roam *, :root[data-motion="reduce"] .buddy-dust { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .buddy.roam *, .buddy-dust { animation: none !important; transition: none !important; }
+}
+
+/* The bubble never blocks a click on the board underneath; only its action
+   button (a break or water nudge) takes clicks. */
+.buddy.roam .buddy-bubble { pointer-events: none; }
+.buddy.roam .buddy-action:not(.hidden) { pointer-events: auto; }
+
+/* Beside: level with the buddy, used at the counter seat where a label sits
+   above and the buttons below. */
+.buddy.roam[data-bubble-vert="beside"] .buddy-bubble {
+  top: 0; bottom: 0; margin: auto 0; height: max-content;
+  left: calc(100% + 4px); border-radius: 4px 12px 12px 12px; transform-origin: 0 50%;
+  max-width: var(--bubble-beside-w, 188px);
+}
+.buddy.roam[data-bubble-vert="beside"][data-bubble-side="left"] .buddy-bubble {
+  left: auto; right: calc(100% + 4px); border-radius: 12px 4px 12px 12px; transform-origin: 100% 50%;
+}

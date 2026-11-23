@@ -26,7 +26,8 @@
 //   'goal-met' { metric }                  today's goal was just met (once a day)
 //   'tab'      { metric }                  a different goal tab was picked
 //   'modal'    { open, id }                a dialog opened or closed
-//   'settings' {}                          the settings sheet opened
+//   'customize' { on }                     customize mode (wiggling cards) on/off
+//   'search'   { open }                    the search panel opened or closed
 //
 // A module that throws never breaks the popup: every listener is isolated.
 const LitPopup = (() => {

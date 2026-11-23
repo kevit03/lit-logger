@@ -71,7 +71,7 @@ body.pt-dark .mc-root {
   scrollbar-width: none;
   overscroll-behavior-x: contain;
   margin: 0 calc(var(--card-pad) * -1);
-  padding: 3px var(--card-pad) 6px;
+  padding: 5px var(--card-pad) 6px;
   scroll-padding-inline: var(--card-pad);
 }
 .mc-row::-webkit-scrollbar { display: none; }
@@ -471,11 +471,14 @@ body.pt-dark .mc-root {
 .mc-q-btn:hover { background: var(--surface-2); border-color: var(--text-3); }
 .mc-q-btn:active { transform: scale(0.95); }
 .mc-q-btn:focus-visible { border-radius: var(--radius-pill); }
+.mc-q-btn[aria-disabled="true"], .mc-cta[data-busy="1"] { cursor: progress; }
+.mc-caught:focus { outline: none; }
+.mc-caught:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius); }
 .mc-q-plus { background: var(--accent-fill); color: var(--on-accent); border-color: transparent; }
 .mc-q-plus:hover { background: var(--accent-fill); border-color: transparent; filter: brightness(1.07); }
 .mc-q-check { opacity: 0; transform: scale(0.6); }
 .mc-q-check svg { width: 16px; height: 16px; }
-.mc-q-btn.is-done, .mc-q-btn.is-done:disabled { opacity: 1; background: var(--success); border-color: transparent; color: var(--surface); }
+.mc-q-btn.is-done { opacity: 1; background: var(--success); border-color: transparent; color: var(--surface); }
 .mc-q-btn.is-done .mc-q-btn-text { opacity: 0; }
 .mc-q-btn.is-done .mc-q-check { opacity: 1; transform: scale(1); transition: transform 0.35s var(--spring), opacity 0.2s var(--ease); }
 .mc-q-btn.is-done .mc-check-path,

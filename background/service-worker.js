@@ -1448,3 +1448,163 @@ if (typeof module !== 'undefined' && module.exports) {
   });
 }
 // --- end Follow-ups and the Applications page ---
+
+// ---------------------------------------------------------------------------
+// --- BEGIN Focus sessions (popup/modules/shell-fx.js mini player) ---
+// ---------------------------------------------------------------------------
+// The popup's focus player keeps one record in chrome.storage.local:
+//
+//   lit_focus = { status: 'idle' | 'running' | 'paused' | 'done',
+//                 length: minutes, startedAt: epoch ms | null,
+//                 endsAt: epoch ms | null (the deadline while running),
+//                 remaining: ms left (authoritative while paused) }
+//
+// Like the solve timer, a running session is a deadline, so it survives the
+// popup closing. This section only mirrors it into the 'lit-focus' alarm
+// (cleared on pause or stop) and, at the deadline, marks it done and shows one
+// notification in the buddy's name. "Start another" begins a new session of
+// the same length; a click on the body just clears it. It never touches the
+// solve-timer alarms, and it uses its own listeners.
+const LIT_FOCUS_KEY = 'lit_focus';
+const LIT_FOCUS_ALARM = 'lit-focus';
+const LIT_FOCUS_NOTIFICATION = 'lit-focus';
+const LIT_FOCUS_MINUTE = 60000;
+// A session that ended this long ago (browser was closed) closes quietly.
+const LIT_FOCUS_STALE_MS = 10 * LIT_FOCUS_MINUTE;
+
+function litFocusNormalize(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const status = raw.status;
+  if (status !== 'idle' && status !== 'running' && status !== 'paused' && status !== 'done') return null;
+  const length = Math.min(180, Math.max(1, parseInt(raw.length, 10) || 25));
+  const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const endsAt = num(raw.endsAt);
+  if (status === 'running' && endsAt === null) return null;
+  return { status, length, startedAt: num(raw.startedAt), endsAt, remaining: Math.max(0, num(raw.remaining) || 0) };
+}
+
+function litFocusRead() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get([LIT_FOCUS_KEY], r => {
+        if (chrome.runtime.lastError) { resolve(null); return; }
+        resolve(litFocusNormalize(r && r[LIT_FOCUS_KEY]));
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+function litFocusWrite(state) {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.set({ [LIT_FOCUS_KEY]: state }, () => resolve(!chrome.runtime.lastError));
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+function litFocusClearNotification() {
+  try { chrome.notifications.clear(LIT_FOCUS_NOTIFICATION, () => { void chrome.runtime.lastError; }); } catch (e) { /* gone */ }
+}
+
+// One alarm per running session; create() replaces an older one of the
+// same name, so a restart or a new length cannot leave two racing.
+async function litFocusSync(state) {
+  if (!chrome.alarms) return;
+  if (!state || state.status !== 'running') {
+    await chrome.alarms.clear(LIT_FOCUS_ALARM);
+    return;
+  }
+  if (state.endsAt <= Date.now()) {
+    await chrome.alarms.clear(LIT_FOCUS_ALARM);
+    await litFocusSettle();
+    return;
+  }
+  await chrome.alarms.create(LIT_FOCUS_ALARM, { when: state.endsAt });
+}
+
+async function litFocusNotify() {
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') return;
+  let prefs = null;
+  try { prefs = await TrackerStorage.getPrefs(); } catch (e) { prefs = null; }
+  // The buddy's name, or plain LIT when the buddy is switched off.
+  const title = prefs && prefs.buddyEnabled === false ? 'LIT' : ((prefs && prefs.buddyName) || 'Lockie');
+  try {
+    chrome.notifications.create(LIT_FOCUS_NOTIFICATION, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title,
+      message: 'Focus session done. Stretch and grab some water.',
+      buttons: [{ title: 'Start another' }],
+      priority: 1
+    }, () => { void chrome.runtime.lastError; });
+  } catch (e) { /* notifications unavailable */ }
+}
+
+// Closes out a session whose deadline has passed. Idempotent: a session
+// already marked done is left alone, so a duplicate alarm or a revival
+// reconcile cannot announce one session twice.
+let litFocusChain = Promise.resolve(false);
+function litFocusSettle() {
+  litFocusChain = litFocusChain.then(async () => {
+    const state = await litFocusRead();
+    if (!state || state.status !== 'running' || state.endsAt > Date.now() + 1000) return false;
+    await litFocusWrite({ status: 'done', length: state.length, startedAt: state.startedAt, endsAt: state.endsAt, remaining: 0 });
+    if (Date.now() - state.endsAt < LIT_FOCUS_STALE_MS) await litFocusNotify();
+    return true;
+  }).catch(e => {
+    console.warn('[LIT] focus session close-out failed', e);
+    return false;
+  });
+  return litFocusChain;
+}
+
+async function litFocusStartAnother() {
+  litFocusClearNotification();
+  const state = await litFocusRead();
+  const length = state ? state.length : 25;
+  const now = Date.now();
+  const next = { status: 'running', length, startedAt: now, endsAt: now + length * LIT_FOCUS_MINUTE, remaining: length * LIT_FOCUS_MINUTE };
+  await litFocusWrite(next);
+  await litFocusSync(next);
+  return next;
+}
+
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener(alarm => {
+    if (alarm && alarm.name === LIT_FOCUS_ALARM) litFocusSettle();
+  });
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes || !changes[LIT_FOCUS_KEY]) return;
+  litFocusSync(litFocusNormalize(changes[LIT_FOCUS_KEY].newValue)).catch(() => {});
+});
+if (chrome.notifications && chrome.notifications.onClicked) {
+  chrome.notifications.onClicked.addListener(id => {
+    if (id === LIT_FOCUS_NOTIFICATION) litFocusClearNotification();
+  });
+}
+if (chrome.notifications && chrome.notifications.onButtonClicked) {
+  chrome.notifications.onButtonClicked.addListener((id, index) => {
+    if (id === LIT_FOCUS_NOTIFICATION && index === 0) litFocusStartAnother().catch(() => {});
+  });
+}
+// Alarms do not survive a browser restart: every revival re-arms a running
+// session, or closes one whose deadline passed while the worker slept.
+litFocusRead().then(litFocusSync).catch(() => {});
+
+if (typeof module !== 'undefined' && module.exports) {
+  Object.assign(module.exports, {
+    litFocusNormalize,
+    litFocusSync,
+    litFocusSettle,
+    litFocusStartAnother,
+    LIT_FOCUS_KEY,
+    LIT_FOCUS_ALARM,
+    LIT_FOCUS_NOTIFICATION
+  });
+}
+// --- END Focus sessions (popup/modules/shell-fx.js mini player) ---

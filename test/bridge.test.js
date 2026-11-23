@@ -83,6 +83,15 @@ async function run() {
     let items = await W.load();
     items = await W.add('top10', { rankBy: 'companies' });
     assert.strictEqual(items[items.length - 1].options.rankBy, 'companies');
+    // A module switched off takes its types out of the picker and its cards
+    // off the board; its icon shows in the picker while on.
+    let on = true;
+    B.registerCard('upNext', { name: 'Up next', description: 'Queue.', icon: '<path d="M2 3h7"/>', enabled: () => on, defaults: {} }, () => {});
+    assert.strictEqual(W.availableTypes([]).find(t => t.type === 'upNext').icon, '<path d="M2 3h7"/>');
+    assert.strictEqual(W.isVisible({ type: 'upNext' }, 'jobs'), true);
+    on = false;
+    assert.ok(!W.availableTypes([]).some(t => t.type === 'upNext'), 'off: not offered');
+    assert.strictEqual(W.isVisible({ type: 'upNext' }, 'jobs'), false, 'off: not drawn');
     console.log('[PASS] Module card types register, normalize, and persist');
   }
 

@@ -176,8 +176,8 @@ const LitBuddy = (() => {
     feetY: 47.1,          // where the roaming feet touch the ground
     hipL: [15, 37.5],
     hipR: [29, 37.5],
-    shoulderL: [9, 29.5],
-    shoulderR: [35, 29.5]
+    shoulderL: [8.6, 29.6],
+    shoulderR: [35.4, 29.6]
   };
 
   function svg() {
@@ -188,8 +188,8 @@ const LitBuddy = (() => {
         '<g class="buddy-leg buddy-leg-r"><path class="buddy-shin" d="M29 37.5v6" fill="none" stroke-width="2.8" stroke-linecap="round"/><ellipse class="buddy-foot" cx="29.4" cy="44.9" rx="3.9" ry="2.2"/></g>' +
       '</g>' +
       '<g class="buddy-arms" display="none" fill="none" stroke-width="2.6" stroke-linecap="round">' +
-        '<path class="buddy-arm buddy-arm-l" d="M9 29.5q-3.4 1.4-4.3 5.4"/>' +
-        '<path class="buddy-arm buddy-arm-r" d="M35 29.5q3.4 1.4 4.3 5.4"/>' +
+        '<path class="buddy-arm buddy-arm-l" d="M8.6 29.6q-3.6 1.4-4.7 5.6"/>' +
+        '<path class="buddy-arm buddy-arm-r" d="M35.4 29.6q3.6 1.4 4.7 5.6"/>' +
       '</g>' +
       '<g class="buddy-body-g">' +
         '<path class="buddy-shackle" d="M14.5 19v-5a7.5 7.5 0 0 1 15 0v5" fill="none" stroke-width="3.2" stroke-linecap="round"/>' +
