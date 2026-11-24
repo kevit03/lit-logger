@@ -304,10 +304,10 @@ const LitCopy = (() => {
     const what = !u || u === 'applications' || u === 'application'
       ? 'You sent ' + total + (u ? ' ' + u : '')
       : 'You put in ' + total + ' ' + u;
-    parts.push(what + ' this week' + (active > 0 ? ' across ' + active + (active === 1 ? ' day.' : ' days.') : '.'));
+    parts.push(what + (o.past ? ' last week' : ' this week') + (active > 0 ? ' across ' + active + (active === 1 ? ' day.' : ' days.') : '.'));
     if (bestName && bestCount > 1) parts.push(bestName + ' was your strongest day with ' + bestCount + '.');
     else if (bestName) parts.push(bestName + ' was your strongest day.');
-    if (last > 0 && total > last) parts.push('That is ' + (total - last) + ' more than last week.');
+    if (last > 0 && total > last) parts.push('That is ' + (total - last) + ' more than ' + (o.past ? 'the week before.' : 'last week.'));
     else if (active >= 5) parts.push('That kind of consistency is what gets results.');
     else parts.push('Every one of these is a real chance.');
     return parts.slice(0, 3).join(' ');

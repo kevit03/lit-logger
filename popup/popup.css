@@ -229,7 +229,7 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-3) var(--space-3) var(--gutter);
+  padding: var(--space-3) var(--gutter);
   background: color-mix(in srgb, var(--bg) 86%, transparent);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
   backdrop-filter: saturate(180%) blur(12px);
@@ -337,6 +337,8 @@ body.pt-dark .icon-moon { display: none; }
 .menu-email { font-weight: 600; font-size: var(--fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-status { font-size: var(--fs-xs); color: var(--text-2); }
 .menu-sep { height: 1px; margin: 4px 2px; background: var(--border-soft); }
+/* Signed out there is no Sign out below the last line. */
+.menu-sep:has(+ .menu-item.hidden:last-child) { display: none; }
 .menu-item {
   width: 100%;
   display: flex;
@@ -395,7 +397,7 @@ body.pt-dark mark { background: color-mix(in srgb, var(--accent) 30%, transparen
 /* ===== Main ===== */
 .main-view { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--gutter) var(--space-4); }
 
-.subhead { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); padding: 0 var(--space-1); }
+.subhead { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); padding: 0 0 0 var(--space-1); }
 .date-text { font-size: var(--fs-xs); font-weight: 650; color: var(--text-2); letter-spacing: 0.3px; text-transform: uppercase; }
 .streak-pill {
   flex-shrink: 0;
@@ -756,6 +758,8 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
   border: 2px solid var(--surface-3);
   transition: border-color 0.4s var(--ease), background 0.4s var(--ease), transform 0.4s var(--ease);
 }
+/* The 100% mark ends with the bar instead of hanging off it. */
+.milestone[data-m="100"] { margin-left: -10px; }
 .milestone.reached { border-color: var(--tracker); background: var(--tracker); transform: scale(1.1); }
 .goal-bar.met .milestone.reached { border-color: var(--success-text); background: var(--success); }
 .milestone-labels { position: relative; height: 14px; font-size: var(--fs-2xs); color: var(--text-3); font-weight: 600; }
@@ -774,7 +778,8 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
 /* Activity chart */
 .chart { position: relative; height: 72px; margin-top: 2px; }
 .bars { display: flex; align-items: flex-end; gap: 2px; height: 100%; }
-.bar-col { position: relative; flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.bars.dense { gap: 1px; }
+.bar-col { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; }
 .bar {
   width: 100%;
   min-height: 3px;
@@ -808,11 +813,14 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
 .bar-col:first-child:hover .tip, .bar-col:nth-child(2):hover .tip { transform: none; }
 .bar-col:last-child .tip, .bar-col:nth-last-child(2) .tip { left: auto; right: 0; transform: translate(0, 4px); }
 .bar-col:last-child:hover .tip, .bar-col:nth-last-child(2):hover .tip { transform: none; }
+.bar-col.tip-start .tip { left: 0; right: auto; transform: translate(0, 4px); }
+.bar-col.tip-end .tip { left: auto; right: 0; transform: translate(0, 4px); }
+.bar-col.tip-start:hover .tip, .bar-col.tip-end:hover .tip { transform: none; }
 .area-svg { width: 100%; height: 100%; overflow: visible; }
 .area-fill { opacity: 0.18; }
 .area-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .area-dot { stroke: var(--surface); stroke-width: 2; }
-.chart .overlay { position: absolute; inset: 0; }
+.chart .overlay { position: absolute; inset: 0; gap: 0; }
 .area-end {
   position: absolute;
   width: 8px; height: 8px;
@@ -824,12 +832,17 @@ body.pt-dark .segmented button[aria-checked="true"], body.pt-dark .segmented but
 }
 .heat {
   display: grid;
-  grid-template-rows: repeat(7, 13px);
+  grid-template-rows: repeat(7, var(--heat, 13px));
   grid-auto-flow: column;
-  grid-auto-columns: 13px;
-  gap: 3px;
+  grid-auto-columns: var(--heat, 13px);
+  gap: var(--heat-gap, 3px);
   justify-content: center;
 }
+/* Too many weeks to shrink any further: scroll, newest in view. */
+.heat.scrolls { justify-content: start; overflow-x: auto; scrollbar-width: none; }
+.heat.scrolls::-webkit-scrollbar { display: none; }
+.heat.scrolls .tip { display: none; }
+.heat.small .heat-cell { border-radius: 2px; }
 .heat-cell { position: relative; border-radius: var(--radius-2xs); background: var(--surface-3); }
 .heat-cell.pad { visibility: hidden; }
 .heat-cell.today { box-shadow: inset 0 0 0 1.5px var(--text-2); }
@@ -998,7 +1011,7 @@ input::placeholder { color: var(--text-3); }
 .funnel { display: flex; flex-direction: column; gap: 4px; }
 .stage {
   display: grid;
-  grid-template-columns: 148px 1fr 30px;
+  grid-template-columns: 148px 1fr minmax(36px, max-content);
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
@@ -1174,12 +1187,15 @@ input::placeholder { color: var(--text-3); }
 .footer-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
   gap: 6px;
   height: var(--control-h);
-  padding: 0 12px;
+  padding: 0 10px;
   border-radius: var(--radius-pill);
   font-size: var(--fs-sm);
   font-weight: 600;
+  white-space: nowrap;
   color: var(--text-2);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -1233,6 +1249,7 @@ input::placeholder { color: var(--text-3); }
 .close-btn:hover { background: var(--surface-2); color: var(--text); }
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--space-3); }
 .form-group label, .form-group .form-label { font-size: var(--fs-sm); font-weight: 650; color: var(--text); }
+.modal-actions .btn { white-space: nowrap; }
 .modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
 .danger-left { margin-right: auto; }
 .color-palette { display: flex; gap: 8px; }
@@ -1958,6 +1975,12 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
 :root[data-comfort="on"] .stage { min-height: 44px; }
 :root[data-comfort="on"] .split-btn { height: 52px; }
 :root[data-comfort="on"] .profile-chip { height: 44px; }
+:root[data-comfort="on"] .profile-chip .sync-dot { bottom: 9px; }
+:root[data-comfort="on"] .goal-row-actions { gap: 0; }
+:root[data-comfort="on"] .goal-row-actions .tool-btn { min-width: 36px; }
+:root[data-comfort="on"] #accent-row { flex-wrap: wrap; }
+:root[data-comfort="on"] #accent-row .setting-label { flex-basis: 100%; }
+:root[data-comfort="on"] #accent-row .swatches { width: 100%; justify-content: space-between; }
 :root[data-comfort="on"] .switch { width: 52px; height: 32px; }
 :root[data-comfort="on"] .switch span { width: 26px; height: 26px; }
 :root[data-comfort="on"] .switch[aria-checked="true"] span { transform: translateX(20px); }
@@ -1988,7 +2011,6 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
 /* ---------------------------------------------------------------------------
    Goals: starter ideas, icon picker, edit dialog, Settings > Your goals
    --------------------------------------------------------------------------- */
-.goal-templates { display: flex; flex-wrap: wrap; gap: 6px; }
 .goal-template { display: inline-flex; align-items: center; gap: 6px; }
 .goal-template-icon { display: inline-flex; width: 14px; height: 14px; }
 .goal-template-icon svg { width: 14px; height: 14px; }
@@ -2020,11 +2042,18 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
 .goal-row-name { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .goal-row-meta { font-size: var(--fs-xs); color: var(--text-2); }
 .goal-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.goal-row-actions .tool-btn {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-xs);
+  color: var(--text-2);
+}
 .goal-row-actions .tool-btn[disabled] { opacity: 0.35; cursor: default; }
 .goal-row.is-hidden .goal-row-icon,
 .goal-row.is-hidden .goal-row-name { opacity: 0.55; }
 .goal-manager-foot { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-2); }
 .goal-manager-foot .form-hint { margin: 0; }
+.goal-manager-foot .btn { flex-shrink: 0; white-space: nowrap; }
 .goal-manager-note:empty { display: none; }
 [data-comfort="on"] .icon-option { width: 44px; height: 44px; }
 
@@ -2254,14 +2283,23 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
   height: var(--control-h-sm); padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm); max-width: 140px;
 }
+/* The native arrow sits on the border; draw one with room around it. */
+.setting-select {
+  appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%238A8078' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  text-overflow: ellipsis;
+}
 .setting-select:disabled, .setting-input:disabled { opacity: 0.5; }
 .goal-templates { display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; padding-right: 2px; }
 .goal-template-group { font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); margin-top: 4px; }
 .goal-template-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.export-box { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0; }
+.export-box { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-3) var(--space-3) 14px; }
 .export-filters { display: flex; gap: var(--space-2); }
-.export-filters .setting-select { flex: 1; max-width: none; }
+.export-filters .setting-select { flex: 1 1 0; min-width: 0; max-width: none; }
 .export-actions { flex-wrap: wrap; }
 .export-hint { margin: 0; }
 
@@ -2275,3 +2313,59 @@ body.pt-dark .swatch[data-accent-value="slate"] { background: #A9B6C8; }
 .buddy-layer { position: absolute; inset: 0; pointer-events: none; z-index: 20; overflow: visible; }
 .buddy-layer > * { pointer-events: auto; }
 .overlay-host { position: fixed; inset: 0; z-index: 90; }
+
+/* ---------------------------------------------------------------------------
+   Half-width cards: the same content, laid out for about 134px. A half-width
+   card alone on its row (.solo) is full width and keeps the normal layout.
+   --------------------------------------------------------------------------- */
+.widget-grid:not(.customizing) .widget:not(:hover):not(:focus-within) .widget-tools .segmented { margin-right: var(--space-2); }
+
+.size-compact:not(.solo) .activity-stats,
+.size-compact:not(.solo) #leetcode-time-stats { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; }
+.size-compact:not(.solo) .goal-top,
+.size-compact:not(.solo) .funnel-foot,
+.size-compact:not(.solo) .compare-legend { flex-wrap: wrap; gap: 2px 8px; }
+.size-compact:not(.solo) .big-stat { white-space: nowrap; }
+.size-compact:not(.solo) .goal-edit,
+.size-compact:not(.solo) .pipeline-edit-btn { white-space: nowrap; margin-left: -6px; }
+.size-compact:not(.solo) .compare-key { white-space: nowrap; }
+.size-compact:not(.solo) .milestone-labels span:nth-child(odd) { display: none; }
+
+/* Activity: the title keeps its row, the chart switch gets the next one. */
+.widget-activity.size-compact:not(.solo) .widget-head { position: relative; flex-wrap: wrap; padding-right: var(--card-pad); }
+.widget-activity.size-compact:not(.solo) .widget-collapse { flex: 1 1 100%; }
+.widget-activity.size-compact:not(.solo) .widget-tools { width: 100%; }
+.widget-activity.size-compact:not(.solo) .widget-tools .segmented { display: flex; flex: 1; margin-right: 0 !important; }
+.widget-activity.size-compact:not(.solo) .widget-tools .segmented button { flex: 1; padding: 3px 4px; }
+.widget-activity.size-compact:not(.solo) .widget-tools .tool-btn { position: absolute; top: 12px; right: 6px; background: var(--surface); }
+.widget-activity.size-compact:not(.solo) .widget-tools .widget-drag-handle { right: 32px; }
+.widget-activity.size-compact.collapsed:not(.solo) .widget-tools .segmented { display: none; }
+
+/* Recent applications: who, then when and where it stands. */
+.size-compact:not(.solo) .recent-list .entry { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.size-compact:not(.solo) .recent-list .entry-mono { display: none; }
+.size-compact:not(.solo) .recent-list .entry-head { flex-direction: column; align-items: stretch; gap: 0; }
+.size-compact:not(.solo) .recent-list .entry-date { margin-left: 0; order: -1; font-size: var(--fs-2xs); }
+.size-compact:not(.solo) .recent-list .status-pill { width: 100%; }
+.size-compact:not(.solo) .recent-list .entry-side { width: 100%; }
+
+/* Stages: name and count on one line, the bar under them. */
+.size-compact:not(.solo) .stage { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; padding: 4px 0; }
+.size-compact:not(.solo) .stage-name { white-space: normal; line-height: 1.25; }
+.size-compact:not(.solo) .stage-bar { order: 3; grid-column: 1 / -1; height: 5px; }
+.size-compact:not(.solo) .pipeline-editor .stage { grid-template-columns: minmax(0, 1fr); }
+.size-compact:not(.solo) .pipeline-editor .stage-hint,
+.size-compact:not(.solo) .pipeline-editor .pipeline-applied { justify-self: start; }
+
+.size-compact:not(.solo) .story-foot { flex-direction: column; align-items: flex-start; }
+.size-compact:not(.solo) .watch-add { flex-direction: column; }
+.size-compact:not(.solo) .timer-row,
+.size-compact:not(.solo) .timer-presets { flex-wrap: wrap; }
+.size-compact:not(.solo) .timer-actions { grid-template-columns: 1fr 1fr; }
+.size-compact:not(.solo) .timer-actions .timer-toggle { grid-column: 1 / -1; order: -1; }
+.size-compact:not(.solo) .timer-input { font-size: 32px; }
+.size-compact:not(.solo) .spark-legend { flex-wrap: wrap; gap: 2px 8px; }
+
+/* Examples and values longer than their box end in an ellipsis. */
+input:placeholder-shown, input:not(:focus) { text-overflow: ellipsis; }
+.size-compact:not(.solo) .watch-input { flex: none; width: 100%; }

@@ -1,9 +1,12 @@
 // LIT popup module: buddy-roam.
 //
 // The buddy leaves its seat beside the counter and roams the board like a
-// little desktop pet. It walks along the top edges of the cards, hops between
-// them, runs when something good happens, waves when a break is due, and naps
-// when things go quiet. It can be picked up and dropped anywhere.
+// little desktop pet. It walks along the top edges of the cards, hops up and
+// down between them, runs when something good happens, waves when a break is
+// due, and naps when things go quiet. It can be picked up (it swings from the
+// pointer), dropped, or thrown: a thrown buddy is a rigid body that bounces off
+// the walls, the top bar and the cards, trades spin for speed where it rubs,
+// and rocks back onto its feet.
 //
 // The parts that decide where to go (edges from rectangles, routes, hop arcs,
 // facing, bubble side, idle choices, falling) are pure and exported for
@@ -19,17 +22,41 @@ const BuddyRoam = (() => {
   const PACE = { walk: 52, run: 175 };     // px per second
   const GRAVITY = 1500;                     // px per second squared
   const NAP_AFTER = 60000;                  // quiet time before a nap
-  const IDLE_MIN = 8000;
-  const IDLE_SPAN = 7000;
-  const MAX_UP = 150;                       // taller climbs go edge by edge
+  const IDLE_MIN = 5000;
+  const IDLE_SPAN = 5000;
+  const MAX_UP = 210;                       // taller climbs go edge by edge
   const MAX_DOWN = 230;
   const MAX_HOP_DX = 130;                   // walk first so hops stay short
   const EDGE_INSET = 10;                    // keep off the rounded corners
   const BUBBLE_MS = 4500;
-  const FLING_SPEED = 520;
+  // A release faster than this is a throw; slower is a drop.
+  const THROW_SPEED = 180;
+  const THROW_MAX = 2000;
+
+  // The thrown body: a disc of radius R around the buddy's middle, unit mass.
+  // Units are px, seconds and radians; rotation is clockwise, as CSS draws it.
+  const BODY = {
+    R: 19,
+    inertia: 0.5 * 19 * 19,   // solid disc, (1/2) m R^2
+    wall: 0.74,               // restitution: how much speed a bounce keeps
+    ceiling: 0.6,
+    ground: 0.5,
+    mu: 0.34,                 // friction at contact
+    air: 0.12,                // drag, per second
+    spinAir: 0.25,
+    rest: 95,                 // a landing slower than this does not bounce
+    roll: 1.5,                // rolling resistance, per second
+    right: 210,               // pull back onto the feet, like a weighted toy
+    rock: 5.2,                // how fast the rocking dies down, per second
+    maxSpin: 26,
+    step: 1 / 240
+  };
+  // Hanging from the pointer by the shackle.
+  const SWING = { L: 26, damp: 3.2, max: 2.2, com: 16 };
+  const DEG = 180 / Math.PI;
   // Every pose the module puts in data-action; buddy-roam.css styles them.
   const ACTIONS = ['stand', 'walk', 'run', 'crouch', 'hop', 'land', 'sit', 'look', 'wave', 'cheer',
-    'shrug', 'peek', 'yawn', 'nap', 'stretch', 'dangle', 'tumble', 'dizzy'];
+    'shrug', 'peek', 'yawn', 'nap', 'stretch', 'dangle', 'tumble', 'dizzy', 'leap', 'ready', 'rock'];
 
   // ---------------------------------------------------------------------------
   // Pure helpers
@@ -259,16 +286,17 @@ const BuddyRoam = (() => {
       }
       return { w, h: o.bubbleH * Math.max(1, Math.ceil(o.bubbleW / w - 0.05)) };
     };
-    const boxFor = (sd, vt) => {
+    const boxFor = (sd, vt, dy) => {
       const off = vt === 'beside' ? besideGap : anchor;
       const { w, h } = sizeFor(sd, vt);
       const left = sd === 'right' ? o.x + off : o.x - off - w;
       const top = vt === 'above' ? headTop - 2 - h
-        : (vt === 'below' ? o.y + 4 : o.y - s.foot / 2 - h / 2);
+        : (vt === 'below' ? o.y + 4 : o.y - s.foot / 2 - h / 2 + (dy || 0));
       return { left, right: left + w, top, bottom: top + h };
     };
     // Beside may wrap narrower (down to BESIDE_MIN px) and grow a line or two.
     const BESIDE_MIN = 120;
+    const BESIDE_SHIFTS = [0, 6, 12, 18];
     const besideRoom = sd => (sd === 'left' ? (o.x - besideGap) - pad : o.width - pad - (o.x + besideGap));
     const fitsBeside = sd => besideRoom(sd) >= Math.min(o.bubbleW, BESIDE_MIN);
     // Overlap area with the protected rectangles; a rectangle marked
@@ -287,12 +315,18 @@ const BuddyRoam = (() => {
     // that covers the least.
     let best = null;
     options.forEach(([sd, vt]) => {
-      const cost = overlap(boxFor(sd, vt));
-      if (!best || cost < best.cost) best = { side: sd, vert: vt, cost };
+      // Beside may slide down a little to clear a label just above it.
+      (vt === 'beside' ? BESIDE_SHIFTS : [0]).forEach(dy => {
+        const cost = overlap(boxFor(sd, vt, dy));
+        if (!best || cost < best.cost) best = { side: sd, vert: vt, cost, dy };
+      });
     });
     if (!best) return { side, vert };
     const out = { side: best.side, vert: best.vert };
-    if (best.vert === 'beside') out.maxWidth = Math.round(sizeFor(best.side, 'beside').w);
+    if (best.vert === 'beside') {
+      out.maxWidth = Math.round(sizeFor(best.side, 'beside').w);
+      if (best.dy) out.dy = best.dy;
+    }
     return out;
   }
 
@@ -302,12 +336,12 @@ const BuddyRoam = (() => {
     if (o.nudge) return 'wave';
     if (o.now - (o.lastInteraction || 0) >= NAP_AFTER) return 'nap';
     const r = rand();
-    let kind = r < 0.42 ? 'wander' : (r < 0.64 ? 'look' : (r < 0.82 ? 'sit' : 'wave'));
+    let kind = r < 0.55 ? 'wander' : (r < 0.72 ? 'look' : (r < 0.87 ? 'sit' : 'wave'));
     if (kind !== 'wander' && kind === o.last) kind = 'wander';
     return kind;
   }
 
-  // Milliseconds until the next idle beat: 8 to 15 seconds, but never later
+  // Milliseconds until the next idle beat: 5 to 10 seconds, but never later
   // than the moment a nap is due.
   function idleDelay(o) {
     const rand = o.rand || Math.random;
@@ -335,18 +369,27 @@ const BuddyRoam = (() => {
     return null;
   }
 
-  // A place to wander to: often a new spot on the same edge, otherwise
+  // A place to wander to: sometimes a new spot on the same edge, otherwise
   // another edge (closer ones likelier, the counter card and seat favorites).
+  // cur.last ('up' | 'down') is the way it last went: the other way is likelier
+  // next, so climbs and drops stay even.
   function pickWander(perches, cur, rand) {
     const rnd = rand || Math.random;
     const spots = (perches || []).filter(p => p.kind !== 'floor' && p.free && p.free.length);
     if (!spots.length) return null;
     const here = spots.find(p => p.key === cur.key) || null;
-    if (here && rnd() < 0.5) {
+    if (here && rnd() < 0.3) {
       const x = randomFreeX(here, rnd, cur.x, 36);
       if (x !== null) return { key: here.key, x };
     }
-    const others = spots.filter(p => p !== here);
+    let others = spots.filter(p => p !== here);
+    const above = others.filter(p => p.y < cur.y - 12);
+    const below = others.filter(p => p.y > cur.y + 12);
+    if (above.length && below.length) {
+      const upOdds = cur.last === 'up' ? 0.35 : (cur.last === 'down' ? 0.75 : 0.55);
+      const up = rnd() < upOdds;
+      others = (up ? above : below).concat(spots.filter(p => p !== here && Math.abs(p.y - cur.y) <= 12));
+    }
     if (!others.length) {
       const x = here ? randomFreeX(here, rnd, cur.x, 24) : null;
       return x === null ? null : { key: here.key, x };
@@ -385,7 +428,113 @@ const BuddyRoam = (() => {
     return best;
   }
 
-  // One physics step for a dropped or flung buddy. bounds: { left, right, top }
+  // The free spot to jump up to from here: the nearest edge above, or null.
+  function climbTarget(perches, cur, maxUp) {
+    let best = null;
+    let score = Infinity;
+    (perches || []).forEach(p => {
+      if (p.kind === 'floor' || p.key === cur.key) return;
+      const rise = cur.y - p.y;
+      if (rise < 16 || rise > (maxUp || 420)) return;
+      const x = bestX(p, cur.x);
+      if (x === null) return;
+      const sc = rise + Math.abs(x - cur.x) * 0.6;
+      if (sc < score) { score = sc; best = { key: p.key, x }; }
+    });
+    return best;
+  }
+
+  // A contact between the spinning body and a surface with outward normal
+  // (nx, ny): the normal speed bounces by `e`, and friction (at most mu times
+  // the normal impulse) trades sliding speed for spin. Returns the hit speed.
+  function collide(b, nx, ny, e, o) {
+    const B = o || BODY;
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn >= 0) return 0;
+    const jn = -(1 + e) * vn;
+    b.vx += jn * nx;
+    b.vy += jn * ny;
+    // Contact point is at -n R; with clockwise spin w (y down) its velocity
+    // is v + w x r, and the tangent is (-ny, nx).
+    const tx = -ny;
+    const ty = nx;
+    const slip = b.vx * tx + b.vy * ty - b.w * B.R;
+    const jt = clamp(-slip / (1 + B.R * B.R / B.inertia), -B.mu * jn, B.mu * jn);
+    b.vx += jt * tx;
+    b.vy += jt * ty;
+    b.w = clamp(b.w - jt * B.R / B.inertia, -B.maxSpin, B.maxSpin);
+    return -vn;
+  }
+
+  // Shortest signed angle, so a body that spun twice rights itself by rocking
+  // rather than unwinding.
+  function wrapAngle(a) {
+    const t = Math.PI * 2;
+    return a - t * Math.round(a / t);
+  }
+
+  // One step of a thrown body: { x, y (feet), vx, vy, a (radians), w, on (the
+  // edge it rolls along), hits }. bounds: { left, right, top, bottom } for x
+  // and the feet. onHit(side, speed) fires on every bounce.
+  function stepThrown(b, dt, bounds, perches, onHit, o) {
+    const B = o || BODY;
+    const hit = (side, speed) => { if (speed > 0 && onHit) onHit(side, speed); };
+    if (b.on) {
+      const p = b.on;
+      b.y = p.y;
+      // Weighted bottom: pulled upright, rocking slower and slower, and
+      // rolling without slipping moves it along the edge.
+      b.a = wrapAngle(b.a);
+      b.w += (-B.right * Math.sin(b.a) - B.rock * b.w) * dt;
+      b.vx += (b.w * B.R - b.vx) * Math.min(1, 14 * dt);
+      b.vx *= Math.exp(-B.roll * dt);
+      b.a += b.w * dt;
+      b.x += b.vx * dt;
+      if (b.x < bounds.left) { b.x = bounds.left; hit('left', -b.vx); b.vx = Math.abs(b.vx) * B.wall; b.w = Math.abs(b.w) * B.wall; }
+      else if (b.x > bounds.right) { b.x = bounds.right; hit('right', b.vx); b.vx = -Math.abs(b.vx) * B.wall; b.w = -Math.abs(b.w) * B.wall; }
+      if (p.kind !== 'floor' && (b.x < p.x1 || b.x > p.x2)) { b.on = null; b.vy = 0; return b; }
+      b.still = Math.abs(b.w) < 0.35 && Math.abs(b.a) < 0.03 && Math.abs(b.vx) < 10;
+      return b;
+    }
+    b.vy += GRAVITY * dt;
+    const drag = Math.exp(-B.air * dt);
+    b.vx *= drag;
+    b.vy *= drag;
+    b.w *= Math.exp(-B.spinAir * dt);
+    const prevY = b.y;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.a += b.w * dt;
+    if (b.x < bounds.left) { b.x = bounds.left; hit('left', collide(b, 1, 0, B.wall, B)); }
+    else if (b.x > bounds.right) { b.x = bounds.right; hit('right', collide(b, -1, 0, B.wall, B)); }
+    if (b.y < bounds.top) { b.y = bounds.top; hit('top', collide(b, 0, 1, B.ceiling, B)); }
+    // Edges catch it from above only, so it can be thrown up past them.
+    let edge = landingFor(perches, b.x, prevY, b.y);
+    if (!edge && b.y >= bounds.bottom) edge = { key: 'floor', kind: 'floor', y: bounds.bottom, x1: -Infinity, x2: Infinity };
+    if (edge) {
+      b.y = edge.y;
+      const speed = collide(b, 0, -1, B.ground, B);
+      hit('ground', speed);
+      if (speed < B.rest) {
+        b.vy = 0;
+        b.on = edge;
+      }
+    }
+    return b;
+  }
+
+  // Swinging from a moving pivot: t is the angle (radians, clockwise), w its
+  // rate, ax / ay the pivot's acceleration (px/s^2).
+  function stepSwing(t, w, ax, ay, dt) {
+    const g = Math.max(200, GRAVITY - (ay || 0));
+    const acc = -(g / SWING.L) * Math.sin(t) + ((ax || 0) / SWING.L) * Math.cos(t) - SWING.damp * w;
+    let w2 = clamp(w + acc * dt, -22, 22);
+    let t2 = t + w2 * dt;
+    if (Math.abs(t2) > SWING.max) { t2 = clamp(t2, -SWING.max, SWING.max); w2 = -w2 * 0.3; }
+    return { t: t2, w: w2 };
+  }
+
+  // One physics step for a dropped buddy. bounds: { left, right, top }
   // limit where the feet may go; it bounces softly off the sides.
   function stepBody(b, dt, bounds, g) {
     let vx = b.vx || 0;
@@ -448,7 +597,7 @@ const BuddyRoam = (() => {
     perches: [], view: null, width: 0,
     tasks: [], cur: null, pending: null, raf: 0, taskTimer: 0, idleTimer: 0,
     bubbleTimer: 0, relayoutTimer: 0, scrollTimer: 0,
-    lastIdle: '', lastInteraction: 0, napping: false, nudge: false, celebrateUntil: 0,
+    lastIdle: '', lastWay: '', climbBack: false, swing: null, lastInteraction: 0, napping: false, nudge: false, celebrateUntil: 0,
     hover: false, focus: false, bubbleShown: false, bubbleUntil: 0, bubbleW: 160, bubbleH: 40,
     side: '', vert: '', lastText: '',
     press: null, drag: null, suppressClick: false, settles: 0, puffs: 0, lastPuff: 0,
@@ -539,6 +688,20 @@ const BuddyRoam = (() => {
     S.keyX1 = p ? p.x1 : 0;
   }
 
+  // Squash against whatever it just hit.
+  function bump(side, speed) {
+    if (!S.btn || typeof S.btn.animate !== 'function') return;
+    const k = clamp(speed / 1400, 0.05, 0.34);
+    const wide = (1 + k * 0.7).toFixed(3);
+    const thin = (1 - k).toFixed(3);
+    const tall = side === 'left' || side === 'right';
+    const origin = { left: '0% 50%', right: '100% 50%', top: '50% 0%', ground: '50% 100%' }[side];
+    const squash = tall ? 'scale(' + thin + ',' + wide + ')' : 'scale(' + wide + ',' + thin + ')';
+    try {
+      S.btn.animate([{ transform: squash, transformOrigin: origin }, { transform: 'none', transformOrigin: origin }], { duration: 170, easing: 'cubic-bezier(0.3, 1.6, 0.6, 1)' });
+    } catch (e) { /* cosmetic */ }
+  }
+
   function dust(dir) {
     const t = now();
     if (t - S.lastPuff < 110 || S.puffs >= 6) return;
@@ -622,8 +785,9 @@ const BuddyRoam = (() => {
       if (l.bottom < view.top - 60 || l.top > view.bottom + 60) return;
       obstacles.push(l);
     });
-    // Never sit on the counter's own words (label, going-for, week line).
-    document.querySelectorAll('#counter-card .counter-side > *').forEach(n => {
+    // Never sit on the headline or the counter's own words (label, going-for,
+    // week line).
+    document.querySelectorAll('#day-headline, #counter-card .counter-side > *').forEach(n => {
       if (n === S.box) return;
       const r = shownRect(n);
       if (r) obstacles.push(local(r, lr));
@@ -683,6 +847,7 @@ const BuddyRoam = (() => {
     clearTimeout(S.taskTimer);
     S.taskTimer = 0;
     if (S.raf) { cancelAnimationFrame(S.raf); S.raf = 0; }
+    if (S.box) delete S.box.dataset.spin;
   }
 
   function runNext() {
@@ -758,7 +923,8 @@ const BuddyRoam = (() => {
         const u = clamp(el / dur, 0, 1);
         const p = perchByKey(leg.key);
         if (!p) return true;
-        S.x = clamp(leg.x0 + dx * u, p.lo, p.hi);
+        // It may start half off the edge (after a throw): no snapping in.
+        S.x = clamp(leg.x0 + dx * u, Math.min(p.lo, leg.x0), Math.max(p.hi, leg.x0));
         S.y = p.y;
         if (run) dust(dx >= 0 ? 1 : -1);
         return u >= 1;
@@ -771,8 +937,8 @@ const BuddyRoam = (() => {
   function hopTasks(leg, opts) {
     const o = opts || {};
     const air = {
-      act: o.spin ? 'tumble' : 'hop',
-      gaze: o.spin ? 'front' : 'side',
+      act: o.spin ? 'tumble' : (o.leap ? 'leap' : 'hop'),
+      gaze: o.spin ? 'front' : (o.leap ? 'up' : 'side'),
       airborne: true,
       start(t) {
         t.x0 = S.x;
@@ -803,6 +969,10 @@ const BuddyRoam = (() => {
         return false;
       }
     };
+    if (o.leap) {
+      // A climb: look up at it, wind up, spring.
+      return [pose('ready', o.quick ? 110 : 260, { gaze: 'up' }), pose('crouch', o.quick ? 100 : 170), air, pose('land', 150)];
+    }
     return [pose('crouch', o.quick ? 60 : 90), air, pose('land', 150)];
   }
 
@@ -845,6 +1015,117 @@ const BuddyRoam = (() => {
     };
   }
 
+  // Thrown: a real rigid body until it has bounced, rolled and rocked itself
+  // still on an edge or on the bottom of the board.
+  function throwTask(vx, vy, w) {
+    return {
+      act: 'tumble',
+      gaze: 'front',
+      airborne: true,
+      start(t) {
+        S.key = null;
+        t.b = { x: S.x, y: S.y, vx, vy, a: S.rot / DEG, w, on: null, still: false };
+        t.acc = 0;
+        t.turns = 0;
+        S.box.dataset.spin = 'true';
+        if (Math.abs(vx) > 40) setFacing(facingFor(vx, S.facing));
+      },
+      step(el, dt, t) {
+        const v = S.view;
+        const b = t.b;
+        const bounds = { left: HALF + 1, right: S.width - HALF - 1, top: v.top + SIZE.foot, bottom: v.bottom - 1 };
+        const list = usable().filter(p => p.kind !== 'floor');
+        const a0 = b.a;
+        const onHit = (side, speed) => {
+          if (speed < 60) return;
+          bump(side, speed);
+          if (side === 'left' || side === 'right') {
+            // It turns around with the bounce.
+            setFacing(side === 'left' ? 'right' : 'left');
+          }
+          if (speed > 220) dust(b.vx >= 0 ? 1 : -1);
+        };
+        // Small fixed steps, so it behaves the same at any frame rate.
+        t.acc = Math.min(0.05, t.acc + dt);
+        while (t.acc >= BODY.step) {
+          t.acc -= BODY.step;
+          const wasOn = b.on;
+          // Layout can move under it.
+          if (b.on && b.on.kind !== 'floor') b.on = list.find(p => p.key === b.on.key) || null;
+          if (wasOn && !b.on) b.vy = 0;
+          stepThrown(b, BODY.step, bounds, list, onHit);
+        }
+        t.turns += Math.abs(b.a - a0) / (Math.PI * 2);
+        S.x = b.x;
+        S.y = b.y;
+        setAction(b.on ? 'rock' : 'tumble');
+        setRot(wrapAngle(b.a) * DEG);
+        if ((b.on && b.still) || el > 9000) {
+          const hit = b.on && b.on.kind !== 'floor' ? b.on : null;
+          setKey(hit ? hit.key : (perchByKey('floor') ? 'floor' : null));
+          if (!hit && !b.on) S.y = Math.min(b.y, v.bottom - 1);
+          setRot(0);
+          delete S.box.dataset.spin;
+          S.dizzyFor = t.turns > 1.2 ? 900 : 0;
+          return true;
+        }
+        return false;
+      }
+    };
+  }
+
+  // Held by the shackle: the body swings under the pointer as it moves.
+  function swingTask() {
+    return {
+      act: 'dangle',
+      gaze: 'front',
+      start() {
+        S.box.dataset.swing = 'true';
+        S.swing = { t: 0, w: 0, x: S.x, y: S.y, vx: 0, vy: 0, ax: 0, ay: 0 };
+      },
+      step(el, dt) {
+        const g = S.swing;
+        if (!S.drag || !g) return true;
+        if (dt > 0.002) {
+          const vx = (S.x - g.x) / dt;
+          const vy = (S.y - g.y) / dt;
+          const mix = Math.min(1, dt * 24);
+          g.ax += (clamp((vx - g.vx) / dt, -9000, 9000) - g.ax) * mix;
+          g.ay += (clamp((vy - g.vy) / dt, -9000, 9000) - g.ay) * mix;
+          g.x = S.x; g.y = S.y; g.vx = vx; g.vy = vy;
+          const n = Math.max(1, Math.ceil(dt / 0.004));
+          for (let i = 0; i < n; i++) {
+            const r = stepSwing(g.t, g.w, g.ax, g.ay, dt / n);
+            g.t = r.t;
+            g.w = r.w;
+          }
+          setRot(g.t * DEG);
+        }
+        return false;
+      }
+    };
+  }
+
+  // Let go: the body keeps the angle and the spin it had, now turning around
+  // its middle instead of the shackle.
+  function releaseSwing() {
+    const g = S.swing;
+    S.swing = null;
+    delete S.box.dataset.swing;
+    if (!g) return { w: 0, vx: 0, vy: 0 };
+    const dx = -SWING.com * Math.sin(g.t);
+    const dy = -SWING.com * (1 - Math.cos(g.t));
+    S.x = clamp(S.x + dx, HALF + 1, S.width - HALF - 1);
+    S.y = Math.max(S.view.top + SIZE.foot, S.y + dy);
+    return { w: g.w, vx: -SWING.com * Math.cos(g.t) * g.w, vy: -SWING.com * Math.sin(g.t) * g.w };
+  }
+
+  // After a fall or a throw it looks up and jumps back toward where it was.
+  function climbBackTasks() {
+    const spot = climbTarget(usable(), { x: S.x, y: S.y, key: S.key });
+    return spot ? routeTasks(spot, 'walk') : [];
+  }
+
   function orbitTask(cx, cy, r, ms) {
     return {
       act: 'run',
@@ -871,8 +1152,10 @@ const BuddyRoam = (() => {
     const out = [];
     legs.forEach(leg => {
       if (leg.type === 'walk') out.push(walkTask(leg, pace));
-      else out.push.apply(out, hopTasks(leg, { quick: pace === 'run' }));
+      else out.push.apply(out, hopTasks(leg, { quick: pace === 'run', leap: leg.y0 - leg.y1 > 24 }));
     });
+    const goal = perchByKey(target && target.key);
+    if (goal && Math.abs(goal.y - S.y) > 12) S.lastWay = goal.y < S.y ? 'up' : 'down';
     return out;
   }
 
@@ -891,11 +1174,24 @@ const BuddyRoam = (() => {
         place();
       } else if (S.settles++ < 4) {
         S.key = null;
+        S.climbBack = true;
         go([fallTask(0, 0, 0), pose('land', 150)]);
         return;
       }
     }
     if (!onScreen() && S.settles++ < 4) { relocate(); return; }
+    if (S.dizzyFor) {
+      const ms = S.dizzyFor;
+      S.dizzyFor = 0;
+      go([pose('dizzy', ms)]);
+      return;
+    }
+    if (S.climbBack) {
+      S.climbBack = false;
+      measure();
+      const back = climbBackTasks();
+      if (back.length) { go([pose('look', 500, { gaze: 'up' })].concat(back)); return; }
+    }
     const spot = settleSpot(usable(), { x: S.x, y: S.y, key: S.key });
     if (spot && S.settles++ < 4) { go(routeTasks(spot, 'walk')); return; }
     if (S.nudge) {
@@ -910,17 +1206,38 @@ const BuddyRoam = (() => {
     setGaze('front');
     if (S.napping) { go([hold('nap')]); return; }
     setAction('stand');
+    if (S.greet) { S.greet = false; flashBubble(3500); }
     scheduleIdle();
   }
 
-  // Off screen after a scroll: drop in from the top of what is visible.
+  // Off screen after a scroll: come back from the side it went off. Above the
+  // view it drops in; below (the board was scrolled up) it leaps up from the
+  // bottom edge.
   function relocate() {
+    const below = !!S.view && S.y > S.view.bottom;
     measure();
     S.key = null;
     S.x = clamp(S.x, HALF + 4, S.width - HALF - 4);
-    S.y = S.view.top + SIZE.foot + 2;
     setRot(0);
+    if (below) {
+      const spots = usable().filter(p => p.kind !== 'floor' && p.free && p.free.length);
+      const reach = spots.filter(p => S.view.bottom - p.y >= 30);
+      const list = reach.length ? reach : spots;
+      // A middling climb: not the lowest ledge, not the very top.
+      const goal = list.slice().sort((p, q) => Math.abs(S.view.bottom - p.y - 170) - Math.abs(S.view.bottom - q.y - 170))[0];
+      if (goal) {
+        const x = bestX(goal, S.x);
+        S.x = clamp(S.x, Math.max(HALF + 4, x - MAX_HOP_DX), Math.min(S.width - HALF - 4, x + MAX_HOP_DX));
+        S.y = S.view.bottom + SIZE.foot;
+        place();
+        S.lastWay = 'up';
+        go(hopTasks({ key: goal.key, x1: x }, { leap: true, quick: true, lift: 20 }));
+        return;
+      }
+    }
+    S.y = S.view.top + SIZE.foot + 2;
     place();
+    S.lastWay = 'down';
     go([fallTask(0, 80, 0), pose('land', 160)]);
   }
 
@@ -941,7 +1258,7 @@ const BuddyRoam = (() => {
       return;
     }
     if (kind === 'wander') {
-      const spot = pickWander(usable(), { x: S.x, y: S.y, key: S.key });
+      const spot = pickWander(usable(), { x: S.x, y: S.y, key: S.key, last: S.lastWay });
       const p = spot && perchByKey(spot.key);
       if (spot && p) {
         const far = Math.abs(spot.x - S.x) + Math.abs(p.y - S.y) > 170;
@@ -1067,12 +1384,29 @@ const BuddyRoam = (() => {
     }
   }
 
-  // Keyboard: arrows walk to the previous or next edge.
+  // Keyboard: left and right go to the previous or next edge, up and down jump
+  // to the edge above or below.
   function onKey(e) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const side = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+    const vert = e.key === 'ArrowUp' || e.key === 'ArrowDown';
+    if (!side && !vert) return;
     if (!S.on || S.blocked || e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     e.stopPropagation();
+    if (vert) {
+      interrupt(() => {
+        measure();
+        const cur = { x: S.x, y: S.y, key: S.key };
+        let spot = null;
+        if (e.key === 'ArrowUp') spot = climbTarget(usable(), cur);
+        else {
+          const under = usable().filter(p => p.kind !== 'floor' && p.y > S.y + 12 && bestX(p, S.x) !== null).sort((a, b) => a.y - b.y)[0];
+          if (under) spot = { key: under.key, x: bestX(under, S.x) };
+        }
+        go(spot ? routeTasks(spot, 'walk') : (e.key === 'ArrowUp' ? cheerHops() : [pose('shrug', 700)]));
+      });
+      return;
+    }
     const dir = e.key === 'ArrowRight' ? 1 : -1;
     interrupt(() => {
       measure();
@@ -1103,9 +1437,11 @@ const BuddyRoam = (() => {
       measure();
       S.box.dataset.dragging = 'true';
       S.key = null;
+      S.climbBack = false;
+      S.dizzyFor = 0;
+      delete S.box.dataset.spin;
       setRot(0);
-      setAction('dangle');
-      setGaze('front');
+      go([swingTask()]);
     }
     const v = S.view;
     const last = pr.samples[pr.samples.length - 1];
@@ -1131,27 +1467,30 @@ const BuddyRoam = (() => {
     try { S.btn.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
     S.lastInteraction = now();
     if (!S.on || S.blocked) return;
+    clearTasks();
     measure();
     const vel = e.type === 'pointercancel' ? { x: 0, y: 0 } : flingVelocity(pr.samples, now());
     const speed = Math.hypot(vel.x, vel.y);
-    // Let go with the feet just past an edge: step onto it.
+    const tilt = S.swing ? Math.abs(S.swing.t) : 0;
+    const rel = releaseSwing();
+    // Let go with the feet just past an edge, and steady: step onto it.
     const snap = landingFor(usable(), S.x, S.y - 14, S.y + 2);
-    if (speed < FLING_SPEED && snap) {
+    if (speed < THROW_SPEED && snap && tilt < 0.35) {
       S.x = clamp(S.x, snap.lo, snap.hi);
       S.y = snap.y;
       setKey(snap.key);
+      setRot(0);
       place();
       go([pose('land', 160)]);
       return;
     }
-    if (speed >= FLING_SPEED) {
-      const vx = clamp(vel.x, -1400, 1400);
-      const vy = clamp(vel.y, -1400, 1400);
-      const spin = clamp(vx * 1.1, -900, 900) || 540;
-      go([fallTask(vx, vy, spin), pose('land', 170), pose('dizzy', 900)]);
-      return;
-    }
-    go([fallTask(0, 0, 0), pose('land', 160)]);
+    // Thrown or simply let go: it leaves with the speed and spin it had. A
+    // throw also gets a little spin from the flick itself.
+    const thrown = speed >= THROW_SPEED;
+    const cap = thrown ? Math.min(1, THROW_MAX / speed) : 1;
+    const flick = thrown ? clamp(vel.x / 190, -8, 8) : 0;
+    S.climbBack = thrown;
+    go([throwTask(vel.x * cap + rel.vx, vel.y * cap + rel.vy, clamp(rel.w + flick, -BODY.maxSpin, BODY.maxSpin))]);
   }
 
   function onClickCapture(e) {
@@ -1190,11 +1529,20 @@ const BuddyRoam = (() => {
 
   function placeBubble() {
     if (!S.view) return;
-    const pl = bubblePlacement({ x: S.x, y: S.y, width: S.width, top: S.view.top, bubbleW: S.bubbleW, bubbleH: S.bubbleH, prev: S.side, avoid: protectedText(), measureAt: bubbleHeightAt });
+    const pl = bubblePlacement({ x: S.x, y: S.y, width: bubbleRight(), top: S.view.top, bubbleW: S.bubbleW, bubbleH: S.bubbleH, prev: S.side, avoid: protectedText(), measureAt: bubbleHeightAt });
     if (pl.side !== S.side) { S.side = pl.side; S.box.dataset.bubbleSide = pl.side; }
     if (pl.vert !== S.vert) { S.vert = pl.vert; S.box.dataset.bubbleVert = pl.vert; }
     if (pl.maxWidth) S.box.style.setProperty('--bubble-beside-w', pl.maxWidth + 'px');
     else S.box.style.removeProperty('--bubble-beside-w');
+    if (pl.dy) S.box.style.setProperty('--bubble-beside-dy', pl.dy + 'px');
+    else S.box.style.removeProperty('--bubble-beside-dy');
+  }
+
+  // On the counter seat the bubble stays inside the card.
+  function bubbleRight() {
+    if (S.key !== 'seat' || !S.layer) return S.width;
+    const card = shownRect($('counter-card'));
+    return card ? Math.min(S.width, card.right - S.layer.getBoundingClientRect().left) : S.width;
   }
 
   // Words and main controls the speech bubble steps around, in layer
@@ -1403,6 +1751,19 @@ const BuddyRoam = (() => {
     S.bubbleShown = false;
     S.nudge = !!(S.action && !S.action.classList.contains('hidden'));
     measureView();
+    // Taking it out of the card's layout moves the words it sat under, so
+    // start on a spot that is free now rather than where it used to be.
+    measure();
+    const ring = ringInfo();
+    const free = sp => !!sp && isFree(perchByKey(sp.key), sp.x);
+    let spot = counterSpot(ring ? ring.cx + ring.r + 40 : S.x, 220, 'seat');
+    if (!free(spot)) spot = settleSpot(usable(), { x: S.x, y: S.y, key: null });
+    if (free(spot)) {
+      const perch = perchByKey(spot.key);
+      S.x = spot.x;
+      S.y = perch.y;
+      setKey(spot.key);
+    }
     place();
 
     listen(S.btn, 'pointerdown', onPointerDown);
@@ -1435,7 +1796,8 @@ const BuddyRoam = (() => {
 
     S.blocked = isBlocked();
     if (customizing() || overlayOpen()) S.box.setAttribute('data-away', '');
-    flashBubble(3500);
+    // It says hello once it has found its spot, not on the way there.
+    S.greet = true;
     if (S.blocked) { S.needsEntrance = true; return; }
     entrance();
   }
@@ -1460,7 +1822,7 @@ const BuddyRoam = (() => {
     const b = S.box;
     if (!b) return;
     b.classList.remove('roam');
-    ['action', 'gaze', 'facing', 'bubble', 'bubbleSide', 'bubbleVert', 'dragging'].forEach(k => { delete b.dataset[k]; });
+    ['action', 'gaze', 'facing', 'bubble', 'bubbleSide', 'bubbleVert', 'dragging', 'spin', 'swing'].forEach(k => { delete b.dataset[k]; });
     b.removeAttribute('data-away');
     b.style.transform = '';
     const svg = svgEl();
@@ -1541,6 +1903,13 @@ const BuddyRoam = (() => {
     idleDelay,
     pickWander,
     settleSpot,
+    climbTarget,
+    collide,
+    wrapAngle,
+    stepThrown,
+    stepSwing,
+    BODY,
+    SWING,
     stepBody,
     landingFor,
     orbitPoint,

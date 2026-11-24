@@ -194,7 +194,7 @@ async function run() {
     assert.strictEqual(d13.style.top, '104px', 'on the date line');
     assert.strictEqual(d13.style.right, (1000 - 360 + 4) + 'px', 'right-aligned to the cell');
     assert.deepStrictEqual(pillsOf(d13), ['1 LeetCode'], 'a name that is not plural is left alone');
-    assert.strictEqual(d13.style.maxWidth, Math.round(180 * 0.6) + 'px', 'kept to the right part of the date line');
+    assert.strictEqual(d13.style.maxWidth, Math.round(180 / 2 - 16) + 'px', 'kept to the right part of the date line');
     const d12 = dayFor(doc, '2026-09-12');
     assert.deepStrictEqual(pillsOf(d12), [], 'an empty day shows no pills');
     assert.strictEqual(d12.querySelectorAll('.pt-quick-add-cell').length, 1, 'but still offers quick add');

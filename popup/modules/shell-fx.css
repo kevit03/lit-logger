@@ -287,6 +287,9 @@ body.pt-dark .island-host.fx-island-host {
 :root[data-comfort="on"] .fx-len { height: 44px; min-width: 44px; }
 :root[data-comfort="on"] .fx-menu button { height: 44px; }
 :root[data-comfort="on"] .fx-player-controls { gap: 0; }
+/* Bigger buttons take the art's place so the goal and count still fit. */
+:root[data-comfort="on"] .fx-player-art { display: none; }
+:root[data-comfort="on"] .fx-player-title, :root[data-comfort="on"] .fx-player-sub { white-space: normal; overflow-wrap: anywhere; }
 
 /* ===== Skeleton loading ================================================= */
 .fx-skel { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }

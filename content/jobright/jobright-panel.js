@@ -94,7 +94,8 @@
     signin: 'This site needs you to sign in, so it is not picked for you.',
     unsupported: "A company's own site. LIT fills what it can."
   };
-  const CAPS_SITES_TEXT = 'Turn on Detect applications on any career site in LIT settings so company sites can be filled.';
+  const CAPS_SITES_TEXT = 'Some of these are on company sites LIT is not allowed to fill yet.';
+  const CAPS_PROFILE_TEXT = 'Your Autofill profile is empty, so there is nothing to fill forms with.';
   const CAPS_AI_TEXT = 'Add a Claude API key in Autofill profile to write answers to open questions.';
   const STATUS_LABEL = {
     queued: 'Queued',
@@ -120,6 +121,10 @@
     'Submit is disabled': 'Filled in, but the site is not ready to submit yet.',
     'Submitted but no confirmation seen': 'LIT pressed Submit but saw no confirmation. Check the tab.',
     'No application form found': 'LIT could not find the application form.',
+    'No access to this site': 'LIT is not allowed to fill forms on this site yet. Allow it in LIT settings, then open this again.',
+    'Autofill profile is empty': 'Nothing was filled: your Autofill profile is empty. Add your details in LIT, then open this again.',
+    'Nothing on this form matched your profile': 'LIT found the form but had nothing saved that fits it.',
+    'Chrome was restarted': 'Chrome was restarted before this one finished.',
     'Timed out': 'This one took too long. Have a look in the tab.',
     'Tab closed': 'The tab was closed.',
     'Stopped': 'Stopped before it started.',
@@ -395,7 +400,8 @@
     startError: '',
     actionError: '',
     starting: false,
-    caps: null,            // { allSites, ai } from LIT_BATCH_CAPS, null until known
+    caps: null,            // { allSites, ai, profile } from LIT_BATCH_CAPS, null until known
+    needsAccess: false,    // the last Open landed on a site LIT may not fill
     opened: new Set()      // batch jobIds the user opened from here, for "Open next"
   };
   let ui = null;           // { host, shadow, wrap, panel, sub, body, foot, launcher, badge, dot, refreshBtn }
@@ -1005,17 +1011,23 @@
   async function loadCaps() {
     const response = await send({ type: 'LIT_BATCH_CAPS' });
     st.caps = response && typeof response.allSites === 'boolean'
-      ? { allSites: response.allSites, ai: !!response.ai }
+      ? { allSites: response.allSites, ai: !!response.ai, profile: response.profile !== false }
       : null;
     render();
     return st.caps;
   }
 
-  const openOptions = () => send({ type: 'LIT_OPEN_OPTIONS' });
+  const openOptions = section => send(Object.assign({ type: 'LIT_OPEN_OPTIONS' }, section ? { section } : {}));
   const stopBatch = () => action({ type: 'LIT_BATCH_STOP' });
-  const focusJob = jobId => {
+  const focusJob = async jobId => {
     st.opened.add(String(jobId));
-    return action({ type: 'LIT_BATCH_FOCUS', jobId });
+    st.needsAccess = false;
+    const response = await action({ type: 'LIT_BATCH_FOCUS', jobId });
+    if (response.ok && response.noAccess) {
+      st.needsAccess = true;
+      render();
+    }
+    return response;
   };
   // Off a running batch before it starts, and off the picker from then on.
   async function removeFromBatch(job) {
@@ -1068,12 +1080,16 @@
   // A finished job's tab is still there to open (the runner forgets a tab
   // once it is closed).
   function canOpen(job) {
-    return OPENABLE.has(job.status) && typeof job.tabId === 'number';
+    return OPENABLE.has(job.status) && (hasTab(job) || !!job.url);
+  }
+
+  function hasTab(job) {
+    return typeof job.tabId === 'number';
   }
 
   // Finished jobs waiting on the user, with their tab open for them.
   function waitingJobs(jobs) {
-    return (jobs || []).filter(j => (j.status === 'needs-you' || j.status === 'ready') && canOpen(j));
+    return (jobs || []).filter(j => (j.status === 'needs-you' || j.status === 'ready') && hasTab(j));
   }
 
   function progress(jobs) {
@@ -1335,7 +1351,12 @@
       : 'Forms are filled and left open for you to submit.'));
 
     if (st.caps && !st.caps.allSites && selectedJobs().some(j => classifyHost(j.host) === 'unsupported')) {
-      ui.foot.appendChild(h('p', 'caps caps-sites', CAPS_SITES_TEXT));
+      ui.foot.appendChild(sitesLine());
+    }
+    if (st.caps && st.caps.profile === false) {
+      const line = h('p', 'caps caps-profile', CAPS_PROFILE_TEXT + ' ');
+      line.appendChild(keyed(button('link open-profile', 'Fill in my profile', () => { openOptions(); }), 'open-profile'));
+      ui.foot.appendChild(line);
     }
     if (st.caps && !st.caps.ai) {
       const line = h('p', 'caps quiet caps-ai', CAPS_AI_TEXT + ' ');
@@ -1372,6 +1393,12 @@
     keyed(cta, 'start');
     actions.appendChild(cta);
     ui.foot.appendChild(actions);
+  }
+
+  function sitesLine() {
+    const line = h('p', 'caps caps-sites', CAPS_SITES_TEXT + ' ');
+    line.appendChild(keyed(button('link allow-sites', 'Allow company sites', () => { openOptions('settings'); }), 'allow-sites'));
+    return line;
   }
 
   function checkLine() {
@@ -1477,6 +1504,7 @@
     ui.body.appendChild(list);
 
     if (st.actionError) ui.foot.appendChild(h('p', 'error action-error', st.actionError));
+    if (st.needsAccess || b.jobs.some(j => j.reason === 'No access to this site' && OPENABLE.has(j.status))) ui.foot.appendChild(sitesLine());
     if (running) {
       ui.foot.appendChild(h('p', 'stop-hint', 'Stop opens nothing new and submits nothing more. Tabs that need you stay open.'));
     }
@@ -1505,7 +1533,7 @@
     const side = h('div', 'side');
     side.appendChild(h('span', 'pill pill-' + job.status, STATUS_LABEL[job.status] || clean(job.status)));
     if (canOpen(job)) {
-      const openBtn = button('btn btn-sm open-job', OPEN_LABEL[job.status], () => { focusJob(job.jobId); });
+      const openBtn = button('btn btn-sm open-job', hasTab(job) ? OPEN_LABEL[job.status] : 'Open again', () => { focusJob(job.jobId); });
       openBtn.setAttribute('aria-label', 'Open the tab for ' + titleText);
       openBtn.setAttribute('data-nav', '');
       keyed(openBtn, 'open-' + job.jobId);

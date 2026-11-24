@@ -286,6 +286,33 @@ test('reload with status submitting: checks for success only, never clicks', asy
   assertNoObservers('reload');
 });
 
+test('assist: fills an unfinished job, reports back, never submits', async () => {
+  let bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist' });
+  let p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg, plan: fillGreenhouse });
+  let clicks = m.counter(submitButton(p.doc));
+  await p.api.whenDone();
+  assert.strictEqual(p.ui.fills, 2, 'two fill passes');
+  assert.strictEqual(clicks.n, 0, 'Submit is the user\'s');
+  assert.deepStrictEqual(bg.updates, [], 'no batch status changes');
+  const done = bg.messages.find(x => x.type === 'LIT_BATCH_ASSISTED');
+  assert.ok(done && done.ready === true && done.filled >= 7, JSON.stringify(done));
+
+  // A reload after Submit was pressed is left alone.
+  bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist' });
+  p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg, session: m.makeSession({ lit_aa_clicked_job1: '1' }), plan: fillGreenhouse });
+  clicks = m.counter(submitButton(p.doc));
+  await p.api.whenDone();
+  assert.strictEqual(p.ui.fills, 0);
+  assert.strictEqual(clicks.n, 0);
+
+  // Nothing to fill with is said plainly.
+  bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist', caps: { allSites: false, ai: false, profile: false } });
+  p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg });
+  await p.api.whenDone();
+  assert.strictEqual(bg.messages.find(x => x.type === 'LIT_BATCH_ASSISTED').reason, 'Autofill profile is empty');
+  assertNoObservers('assist');
+});
+
 test('validation error after the click -> needs-you, one click', async () => {
   const p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, plan: fillGreenhouse });
   const submit = submitButton(p.doc);
