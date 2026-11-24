@@ -85,13 +85,13 @@ function fakeBackground(opts = {}) {
     handle(msg) {
       bg.messages.push(msg);
       if (msg.type === 'LIT_BATCH_HELLO') {
-        return bg.job ? { job: Object.assign({}, bg.job), mode: bg.mode } : { job: null };
+        return bg.job ? { job: Object.assign({}, bg.job), mode: bg.mode, hops: !!opts.submit, submit: !!opts.submit } : { job: null };
       }
       if (msg.type === 'LIT_BATCH_UPDATE') {
         bg.updates.push(msg);
         if (!bg.job) return { ok: false };
         if (msg.status === 'filling' && bg.refuseClaim) return { ok: false };
-        const next = ALLOWED[bg.job.status] || [];
+        const next = opts.submit && ['needs-you', 'ready'].includes(bg.job.status) ? ['submitting'] : ALLOWED[bg.job.status] || [];
         if (!next.includes(msg.status)) return { ok: false };
         bg.job.status = msg.status;
         return { ok: true };

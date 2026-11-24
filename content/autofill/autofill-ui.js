@@ -544,9 +544,62 @@
     }
   }
 
+  // --- one copy at a time -------------------------------------------------------
+  // LIT can be installed twice (the Web Store build and an unpacked one). Each
+  // copy keeps its own profile and draws its own button, so the two stack up
+  // and the empty one says there is nothing to fill. The newest copy stays on
+  // screen; at the same version, the unpacked one does. Builds from before
+  // this check carry no rank and always give way.
+  function copyRank() {
+    try {
+      const m = chrome.runtime.getManifest();
+      const v = String(m.version || '0').split('.').slice(0, 4).map(n => String(parseInt(n, 10) || 0).padStart(6, '0'));
+      while (v.length < 4) v.push('000000');
+      return v.join('.') + (m.update_url ? ':0:' : ':1:') + chrome.runtime.id;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function markCopy(host) {
+    host.setAttribute('data-lit-rank', copyRank());
+  }
+
+  // Hides other copies' hosts, or ours when a newer copy is on the page.
+  // Returns true while some other copy is here.
+  function settleCopies(host) {
+    const mine = copyRank();
+    if (!mine || !host) return false;
+    let others = false;
+    let yieldTo = false;
+    let all = [];
+    try { all = Array.from(document.querySelectorAll(HOST_TAG)); } catch (e) { all = []; }
+    all.forEach(el => {
+      if (el === host) return;
+      others = true;
+      const rank = el.getAttribute('data-lit-rank') || '';
+      if (rank > mine) yieldTo = true;
+      else if (el.style && typeof el.style.setProperty === 'function') el.style.setProperty('display', 'none', 'important');
+    });
+    if (host.style && typeof host.style.setProperty === 'function') {
+      if (yieldTo) host.style.setProperty('display', 'none', 'important');
+      else if (others && host.style.getPropertyValue('display') === 'none') host.setAttribute('style', HOST_STYLE);
+    }
+    return others;
+  }
+
+  // A host our own earlier load left behind (or one from before ranks).
+  function isStaleHost(el) {
+    const rank = (el && el.getAttribute('data-lit-rank')) || '';
+    let id = '';
+    try { id = chrome.runtime.id || ''; } catch (e) { id = ''; }
+    return !rank || rank.endsWith(':' + id);
+  }
+
   function attachHost(host) {
     if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
     raise(host);
+    settleCopies(host);
   }
 
   function swallow(event) {
@@ -610,10 +663,11 @@
     // A host left by an orphaned copy (extension reloaded under the page)
     // lives in a closed root we cannot reach; replace it.
     const stale = document.getElementById(HOST_ID);
-    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+    if (stale && stale.parentNode && isStaleHost(stale)) stale.parentNode.removeChild(stale);
 
     const host = document.createElement(HOST_TAG);
     host.id = HOST_ID;
+    markCopy(host);
     host.setAttribute('style', HOST_STYLE);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
@@ -1770,6 +1824,7 @@
     } else {
       setFabVisible(false);
     }
+    if (ui) settleCopies(ui.host);
   }
 
   // Runs CHECK_DELAY_MS after the first mutation of a burst rather than after

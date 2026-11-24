@@ -2,7 +2,8 @@
 //
 // Two kinds of account, so entries stay separate per person:
 //   provider 'google'  real Google sign-in, available once the owner configures
-//                      an OAuth client (see WEB_CLIENT_ID and the README).
+//                      an OAuth client (see WEB_CLIENT_ID and
+//                      docs/google-sign-in.md).
 //   provider 'local'   a profile kept on this computer only. No Google, no
 //                      password, no server; just a name that keys the data.
 const TrackerAuth = (() => {
@@ -62,7 +63,7 @@ const TrackerAuth = (() => {
   const OAUTH_SCOPES = ['openid', 'email', 'profile'];
 
   // Google sign-in is off until the owner configures an OAuth client. Two ways,
-  // either is enough (README, "Turning on Google sign-in"):
+  // either is enough (docs/google-sign-in.md):
   //
   //   1. An "oauth2" block in manifest.json with a Chrome Extension client ID.
   //      Uses chrome.identity.getAuthToken: the account Chrome is signed into,

@@ -734,9 +734,9 @@ async function run() {
     await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, from(t2, GH));
 
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' }), { ok: true });
-    assert.deepStrictEqual(asked.pop(), { id: t1, msg: { type: 'LIT_BATCH_ASSIST', jobId: 'job1' } });
+    assert.deepStrictEqual(asked.pop(), { id: t1, msg: { type: 'LIT_BATCH_ASSIST', jobId: 'job1', submit: true } });
 
-    // A new page in that tab (reload, discard) is told to fill, never submit.
+    // A new page in that tab (reload, discard) is told to fill.
     mock.tabs.onReplaced.emit(9001, t1);
     await env.settle();
     t1 = 9001;
@@ -746,9 +746,9 @@ async function run() {
     assert.strictEqual(hi.hops, true, 'just opened');
     env.now += env.LB.ASSIST_MS + 1;
     hi = await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, GH));
-    assert.deepStrictEqual([hi.mode, hi.hops], ['assist', false], 'a later reload fills but presses nothing');
+    assert.deepStrictEqual([hi.mode, hi.hops, hi.submit], ['assist', false, false], 'a later reload fills but presses nothing');
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, 'https://elsewhere.example.com/form')), { job: null }, 'a tab taken elsewhere is left alone');
-    assert.strictEqual((await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, from(t1, GH))).ok, false, 'an assisting page can never submit');
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, from(t1, GH))).ok, false, 'without a recent Open, an assisting page cannot submit');
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_ASSISTED', filled: 6, missing: [], ready: true, reason: 'Filled. Review and submit.' }, from(t1, GH)), { ok: true });
     assert.deepStrictEqual([env.job('job1').status, env.job('job1').filled], ['ready', 6]);
 
@@ -779,7 +779,7 @@ async function run() {
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_HELLO' }, from(t2, GH)), { job: null });
     await env.settle();
     uninstallMockChrome();
-    console.log('[PASS] Open fills unfinished jobs: asks the driver, survives discards, reloads and closed tabs, never submits');
+    console.log('[PASS] Open fills unfinished jobs: asks the driver, survives discards, reloads and closed tabs');
   }
 
   {
@@ -797,6 +797,48 @@ async function run() {
     await env.settle();
     uninstallMockChrome();
     console.log('[PASS] A site without access is reported as such');
+  }
+
+  // Open submits a complete form, once, when the batch was started to submit.
+  {
+    const open = async (mode, stopped) => {
+      const env = setup();
+      await env.boot();
+      await env.send({ type: 'LIT_BATCH_START', concurrency: 1, mode, jobs: jobs(1) });
+      await env.settle();
+      const t = env.job('job1').tabId;
+      const me = Object.assign(env.fromTab(t), { url: jobs(1)[0].url });
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, me);
+      if (stopped) await env.send({ type: 'LIT_BATCH_STOP' });
+      else await env.send({ type: 'LIT_BATCH_UPDATE', status: 'needs-you', reason: 'x' }, me);
+      assert.strictEqual((await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, me)).ok, false, 'not before Open');
+      env.now += 30 * 60 * 1000; // opened long after the batch ran
+      await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' });
+      const hi = await env.send({ type: 'LIT_BATCH_HELLO' }, me);
+      const sent = await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, Object.assign({}, me, { frameId: 3 }));
+      return { env, t, me, hi, sent };
+    };
+
+    let r = await open('submit');
+    assert.strictEqual(r.hi.submit, true);
+    assert.strictEqual(r.sent.ok, true);
+    await r.env.advance(1000);
+    assert.strictEqual(r.env.job('job1').status, 'submitting', 'the old start time does not time it out');
+    assert.strictEqual((await r.env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, r.me)).ok, false, 'once');
+    assert.strictEqual((await r.env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitted' }, Object.assign({}, r.me, { frameId: 3 }))).ok, true);
+    await r.env.advance(5000);
+    assert.strictEqual(r.env.job('job1').status, 'submitted');
+    assert.ok(r.env.mock.tabs.store.has(r.t), 'the opened tab stays on its confirmation');
+    assert.ok(r.env.mock.storage.local.store.lit_batch_done.job1);
+    uninstallMockChrome();
+
+    r = await open('fill-only');
+    assert.deepStrictEqual([r.hi.submit, r.sent.ok], [false, false], 'Submit automatically is off');
+    uninstallMockChrome();
+    r = await open('submit', true);
+    assert.deepStrictEqual([r.hi.submit, r.sent.ok], [false, false], 'Stop stays stopped');
+    uninstallMockChrome();
+    console.log('[PASS] Open submits a complete form once; never in fill-only or after Stop');
   }
 
   // Open shows one page: that tab alone moves beside the Jobright tab.

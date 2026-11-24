@@ -401,6 +401,7 @@
     actionError: '',
     starting: false,
     caps: null,            // { allSites, ai, profile } from LIT_BATCH_CAPS, null until known
+    otherCopy: false,      // another LIT install is on this page
     needsAccess: false,    // the last Open landed on a site LIT may not fill
     opened: new Set()      // batch jobIds the user opened from here, for "Open next"
   };
@@ -1154,14 +1155,67 @@
     return b;
   }
 
+  // --- one copy at a time -------------------------------------------------------
+  // LIT can be installed twice (the Web Store build and an unpacked one). Each
+  // copy keeps its own profile and draws its own button, so the two stack up
+  // and the empty one says there is nothing to fill. The newest copy stays on
+  // screen; at the same version, the unpacked one does. Builds from before
+  // this check carry no rank and always give way.
+  function copyRank() {
+    try {
+      const m = chrome.runtime.getManifest();
+      const v = String(m.version || '0').split('.').slice(0, 4).map(n => String(parseInt(n, 10) || 0).padStart(6, '0'));
+      while (v.length < 4) v.push('000000');
+      return v.join('.') + (m.update_url ? ':0:' : ':1:') + chrome.runtime.id;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function markCopy(host) {
+    host.setAttribute('data-lit-rank', copyRank());
+  }
+
+  // Hides other copies' hosts, or ours when a newer copy is on the page.
+  // Returns true while some other copy is here.
+  function settleCopies(host) {
+    const mine = copyRank();
+    if (!mine || !host) return false;
+    let others = false;
+    let yieldTo = false;
+    let all = [];
+    try { all = Array.from(document.querySelectorAll(HOST_TAG)); } catch (e) { all = []; }
+    all.forEach(el => {
+      if (el === host) return;
+      others = true;
+      const rank = el.getAttribute('data-lit-rank') || '';
+      if (rank > mine) yieldTo = true;
+      else if (el.style && typeof el.style.setProperty === 'function') el.style.setProperty('display', 'none', 'important');
+    });
+    if (host.style && typeof host.style.setProperty === 'function') {
+      if (yieldTo) host.style.setProperty('display', 'none', 'important');
+      else if (others && host.style.getPropertyValue('display') === 'none') host.setAttribute('style', HOST_STYLE);
+    }
+    return others;
+  }
+
+  // A host our own earlier load left behind (or one from before ranks).
+  function isStaleHost(el) {
+    const rank = (el && el.getAttribute('data-lit-rank')) || '';
+    let id = '';
+    try { id = chrome.runtime.id || ''; } catch (e) { id = ''; }
+    return !rank || rank.endsWith(':' + id);
+  }
+
   function ensureUi() {
     if (ui) return ui;
     // A host left by an orphaned copy (extension reloaded) is unreachable.
     const stale = document.getElementById(HOST_ID);
-    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+    if (stale && stale.parentNode && isStaleHost(stale)) stale.parentNode.removeChild(stale);
 
     const host = document.createElement(HOST_TAG);
     host.id = HOST_ID;
+    markCopy(host);
     host.setAttribute('style', HOST_STYLE);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
@@ -1321,6 +1375,7 @@
       else if (!st.exhausted) ui.body.appendChild(loadMoreRow());
     }
 
+    if (st.otherCopy) ui.foot.appendChild(copyLine());
     const count = h('div', 'ctl');
     count.appendChild(h('span', 'ctl-label', 'Jobs at a time'));
     const seg = h('div', 'seg');
@@ -1393,6 +1448,10 @@
     keyed(cta, 'start');
     actions.appendChild(cta);
     ui.foot.appendChild(actions);
+  }
+
+  function copyLine() {
+    return h('p', 'caps caps-copy', 'Another copy of LIT is also installed, with its own separate profile. Remove it at chrome://extensions so the two do not get in each other\'s way.');
   }
 
   function sitesLine() {
@@ -1489,10 +1548,11 @@
     // click away. Each row also has its own Open button.
     const waiting = waitingJobs(b.jobs);
     if (waiting.length) {
+      const sends = b.mode === 'submit' && b.status !== 'stopped';
       const callout = h('div', 'callout');
       callout.appendChild(h('span', 'callout-text', waiting.length === 1
-        ? '1 job needs you. Open it to finish, then press Submit yourself.'
-        : waiting.length + ' jobs need you. Open each one to finish, then press Submit yourself.'));
+        ? '1 job needs you. ' + (sends ? 'Open it: LIT fills the rest and submits if nothing is missing.' : 'Open it to finish, then press Submit yourself.')
+        : waiting.length + ' jobs need you. ' + (sends ? 'Open each one: LIT fills the rest and submits if nothing is missing.' : 'Open each one to finish, then press Submit yourself.')));
       const nextJob = waiting.find(j => !st.opened.has(String(j.jobId))) || waiting[0];
       const nextBtn = button('btn btn-sm open-next', waiting.length === 1 ? 'Open it' : 'Open next', () => { focusJob(nextJob.jobId); });
       callout.appendChild(keyed(nextBtn, 'open-next'));
@@ -1503,6 +1563,7 @@
     b.jobs.forEach(job => list.appendChild(batchRow(job)));
     ui.body.appendChild(list);
 
+    if (st.otherCopy) ui.foot.appendChild(copyLine());
     if (st.actionError) ui.foot.appendChild(h('p', 'error action-error', st.actionError));
     if (st.needsAccess || b.jobs.some(j => j.reason === 'No access to this site' && OPENABLE.has(j.status))) ui.foot.appendChild(sitesLine());
     if (running) {
@@ -1571,6 +1632,12 @@
 
   function check() {
     if (!alive()) { destroy(); return; }
+    if (ui) {
+      // Another copy clears hosts it does not know; come back.
+      if (ui.host.isConnected === false) (document.body || document.documentElement).appendChild(ui.host);
+      const others = settleCopies(ui.host);
+      if (others && !st.otherCopy) { st.otherCopy = true; render(); }
+    }
     const loc = currentLocation();
     if (loc.href === st.href && ui) return;
     st.href = loc.href;

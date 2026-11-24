@@ -259,6 +259,16 @@
     }
   }
 
+  // Ashby puts the optional SMS and WhatsApp consent choices inside the Phone
+  // entry: the title and its required mark are the phone's.
+  function titlesAnotherField(title, desc) {
+    if (!title || (desc.kind !== 'radio' && desc.kind !== 'checkbox')) return false;
+    const target = byId(docOf(desc.el), attr(title, 'for'));
+    if (!target || (desc.inputs || [desc.el]).includes(target)) return false;
+    return /^(input|textarea|select)$/.test(tagOf(target)) &&
+      !/^(radio|checkbox|hidden)$/.test(String(attr(target, 'type') || '').toLowerCase());
+  }
+
   function isGroup(desc) {
     return (desc.kind === 'radio' || desc.kind === 'checkbox') && Array.isArray(desc.inputs) && desc.inputs.length > 1;
   }
@@ -272,7 +282,8 @@
     if (desc.group) labelledBy(desc.group).forEach(push);
     labelledBy(el).forEach(push);
     if (!isGroup(desc)) labelsFor(el).forEach(push);
-    push(wrapperTitle(el));
+    const title = wrapperTitle(el);
+    if (!titlesAnotherField(title, desc)) push(title);
     return out;
   }
 
@@ -371,6 +382,13 @@
     return out;
   }
 
+  // Lever's invisible hCaptcha holder is as wide as the form and 0 px tall.
+  function hasArea(el) {
+    let r = null;
+    try { r = el.getBoundingClientRect ? el.getBoundingClientRect() : null; } catch (e) { r = null; }
+    return !r || (r.width > 1 && r.height > 1);
+  }
+
   // Name of a visible CAPTCHA the user has to solve, or null. Invisible
   // reCAPTCHA keeps its iframes in the page all the time; only a visible
   // challenge or checkbox counts.
@@ -384,11 +402,11 @@
       else if (/recaptcha\/(api2|enterprise)\/anchor/.test(src) && !/size=invisible/.test(src)) kind = 'reCAPTCHA';
       else if (/hcaptcha\.com/.test(src) || /hcaptcha/.test(title)) kind = 'hCaptcha';
       else if (/challenges\.cloudflare\.com/.test(src) || /cloudflare|turnstile/.test(title)) kind = 'Turnstile';
-      if (kind && isVisible(f)) return kind;
+      if (kind && isVisible(f) && hasArea(f)) return kind;
     }
     for (const w of qsa(root, '.h-captcha, .cf-turnstile, [data-hcaptcha-widget-id]')) {
       if (String(attr(w, 'data-size') || '').toLowerCase() === 'invisible') continue;
-      if (isVisible(w)) return w.classList && w.classList.contains('cf-turnstile') ? 'Turnstile' : 'hCaptcha';
+      if (isVisible(w) && hasArea(w)) return w.classList && w.classList.contains('cf-turnstile') ? 'Turnstile' : 'hCaptcha';
     }
     return null;
   }
@@ -1091,18 +1109,33 @@
     try { return c.scanFields(formRoot(), { includeFilled: true }).filter(d => d && d.el && isFilledLoose(d, c)).length; } catch (e) { return 0; }
   }
 
+  // Presses the one Submit button, once per job, and reports how it went. The
+  // background has the last word: no 'submitting', no click. Null when refused.
+  async function submitOnce(job, btn) {
+    const startUrl = currentUrl();
+    const baseline = { texts: successTexts(document), errors: errorSignals(document), url: startUrl ? startUrl.href : '' };
+    if (!await update('submitting', counts())) return null;
+    state.phase = 'submitting';
+    flag('clicked', job.jobId, 1);
+    state.submitClicks++;
+    try { btn.click(); } catch (e) { /* page handler threw; the wait decides */ }
+    return afterClick(baseline);
+  }
+
   // The batch is done with this job and the user is looking at it (or its
-  // page was reloaded): fill what can be filled and leave the rest, and
-  // Submit, to them. Presses apply buttons only right after Open.
-  async function assist(job, hops) {
+  // page was reloaded): fill what can be filled. Right after Open (hops), it
+  // also presses apply buttons, and with `submit` (Submit automatically is
+  // on) it sends a form that has nothing missing. The rest is the user's.
+  async function assist(job, hops, submit) {
     state.job = job;
     state.mode = 'assist';
     if (flag('clicked', job.jobId)) { state.phase = 'done'; return state; }
     // This page's earlier run is still on the form: nothing to redo.
-    if (state.filled > 0 && fieldsHoldingValues() > 0) { state.phase = 'done'; return state; }
+    const had = state.filled > 0 && fieldsHoldingValues() > 0;
+    if (had && !submit) { state.phase = 'done'; return state; }
     const url = currentUrl();
     const workday = !!url && HOSTS.workday.test(url.hostname.toLowerCase());
-    const fix = hops ? formUrlFix(url) : null;
+    const fix = hops && !had ? formUrlFix(url) : null;
     if (fix && !flag('nav', job.jobId)) {
       flag('nav', job.jobId, 1);
       state.phase = 'navigating';
@@ -1118,11 +1151,28 @@
     if (found === 'navigated') { state.phase = 'navigating'; return state; }
     if (!alive()) { state.phase = 'dead'; return state; }
     if (found !== 'form') { state.phase = found === 'finished' ? 'done' : 'no-form'; return state; }
-    if (!await fillForm(job)) return state;
+    if (had) {
+      // Answers learned since; what is filled, by LIT or the user, stays.
+      if (missingRequired(document).length) {
+        state.phase = 'filling';
+        state.filled += filledCount(await fillOnce());
+        await sleep(timing.settle);
+        if (!alive()) { state.phase = 'dead'; return state; }
+      }
+    } else if (!await fillForm(job)) {
+      return state;
+    }
     state.phase = 'verifying';
     const missing = missingRequired(document);
     state.missing = missing;
     const captcha = detectCaptcha(document);
+    if (submit && !missing.length && !captcha && !passwordVisible() && fieldsHoldingValues() > 0) {
+      const btn = findSubmit(document, currentUrl());
+      if (btn && !isDisabled(btn)) {
+        const sent = await submitOnce(job, btn);
+        if (sent) return sent;
+      }
+    }
     state.reason = !state.filled && !fieldsHoldingValues() ? await nothingFilledReason()
       : missing.length ? missingReason(missing)
         : captcha ? 'CAPTCHA' : 'Filled. Review and submit.';
@@ -1198,24 +1248,19 @@
     if (!btn) return end('needs-you', 'Could not find Submit', counts({ missing: [] }));
     if (isDisabled(btn)) return end('needs-you', 'Submit is disabled', counts({ missing: [] }));
 
-    const startUrl = currentUrl();
-    const baseline = { texts: successTexts(document), errors: errorSignals(document), url: startUrl ? startUrl.href : '' };
-    state.phase = 'submitting';
-    if (!await update('submitting', counts())) { state.phase = 'stopped'; return state; }
-    flag('clicked', job.jobId, 1);
-    state.submitClicks++;
-    try { btn.click(); } catch (e) { /* page handler threw; the wait decides */ }
-    return afterClick(baseline);
+    const sent = await submitOnce(job, btn);
+    if (!sent) state.phase = 'stopped';
+    return state;
   }
 
-  function run(job, mode, hops) {
+  function run(job, mode, hops, submit) {
     if (current) return current;
     if (!job || !job.jobId) return Promise.resolve(state);
     current = (async () => {
       try {
-        return mode === 'assist' ? await assist(job, !!hops) : await drive(job, mode);
+        return mode === 'assist' ? await assist(job, !!hops, !!submit) : await drive(job, mode);
       } catch (e) {
-        if (claimed && mode !== 'assist') await end('failed', clip('Error: ' + ((e && e.message) || 'unknown'), 80));
+        if ((claimed && mode !== 'assist') || state.status === 'submitting') await end('failed', clip('Error: ' + ((e && e.message) || 'unknown'), 80));
         else state.phase = 'stopped';
         return state;
       } finally {
@@ -1232,7 +1277,7 @@
     const job = res && res.job;
     if (!job || !job.jobId) { state.phase = 'inactive'; return state; }
     listen();
-    return run(job, res.mode, res.hops);
+    return run(job, res.mode, res.hops, res.submit);
   }
 
   // Batch tabs only: the panel's Open button asks for a fill again.
@@ -1244,7 +1289,7 @@
       if (!msg || msg.type !== 'LIT_BATCH_ASSIST' || !state.job || msg.jobId !== state.job.jobId) return false;
       try { sendResponse({ ok: true }); } catch (e) { /* the asker went away */ }
       const job = state.job;
-      Promise.resolve(current).then(() => run(job, 'assist', true)).catch(() => {});
+      Promise.resolve(current).then(() => run(job, 'assist', true, msg.submit === true)).catch(() => {});
       return false;
     });
   }

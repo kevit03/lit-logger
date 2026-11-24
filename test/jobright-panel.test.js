@@ -877,7 +877,7 @@ async function testLiveView() {
     assert.strictEqual(row(doc, hex(43)).querySelector('.open-job').textContent, 'Open tab');
     assert.strictEqual(row(doc, hex(43)).querySelector('.open-job').getAttribute('aria-label'), 'Open the tab for Role 2b');
     // One line up top for the jobs waiting on you, with the next a click away.
-    assert.strictEqual(q(doc, '.callout-text').textContent, '3 jobs need you. Open each one to finish, then press Submit yourself.');
+    assert.strictEqual(q(doc, '.callout-text').textContent, '3 jobs need you. Open each one: LIT fills the rest and submits if nothing is missing.');
     assert.strictEqual(q(doc, '.open-next').textContent, 'Open next');
     // An obvious Stop, saying what it does.
     assert.strictEqual(q(doc, '.stop').textContent, 'Stop batch');

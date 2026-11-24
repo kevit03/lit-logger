@@ -22,7 +22,9 @@
 // button) shows that one tab beside the Jobright page, leaving the batch window
 // behind, and also makes sure the form gets filled, reopening the tab if it is
 // gone, and a page that says hello for such a job is told to `assist`: fill
-// the form, never submit (LIT_BATCH_ASSISTED reports back).
+// the form (LIT_BATCH_ASSISTED reports back). With Submit automatically on,
+// Open also sends a form that has nothing missing, at most once per job (see
+// maySubmit); a later reload never does.
 const LitBatch = (() => {
   const KEY = 'lit_batch';
   const DONE_KEY = 'lit_batch_done';
@@ -209,6 +211,7 @@ const LitBatch = (() => {
     job.updatedAt = ctx.now;
     ctx.dirty = true;
     if (status === 'submitted') {
+      job.missing = [];
       ctx.submitted.push(job.jobId);
       ctx.timers.push(CLOSE_DELAY_MS + 50);
     }
@@ -234,7 +237,8 @@ const LitBatch = (() => {
           ctx.dirty = true;
         }
       } else if (job.status === 'submitted' && typeof job.tabId === 'number' && now - (job.updatedAt || 0) >= CLOSE_DELAY_MS) {
-        ctx.closes.push(job.tabId);
+        // A tab the user opened stays, so they see the confirmation.
+        if (!job.assistAt) ctx.closes.push(job.tabId);
         job.tabId = null;
         ctx.dirty = true;
       }
@@ -479,7 +483,7 @@ const LitBatch = (() => {
           const windowId = tab && typeof tab.windowId === 'number' ? tab.windowId : ctx.state.windowId;
           if (typeof windowId === 'number') await chrome.windows.update(windowId, { focused: true });
           if (unfinished) { job.assistAt = ctx.now; ctx.dirty = true; }
-          return { ok: true, tabId: job.tabId, assist: unfinished, first, hadDriver: !!job.helloAt };
+          return { ok: true, tabId: job.tabId, assist: unfinished, submit: maySubmit(ctx, job), first, hadDriver: !!job.helloAt };
         } catch (e) {
           job.tabId = null;
           ctx.dirty = true;
@@ -503,7 +507,7 @@ const LitBatch = (() => {
     });
     if (!opened.ok || !opened.assist) return opened.ok ? { ok: true } : { ok: false, error: opened.error };
 
-    if (await askToAssist(opened.tabId, msg.jobId)) return { ok: true };
+    if (await askToAssist(opened.tabId, msg.jobId, opened.submit)) return { ok: true };
     // Nobody home. Add the scripts where LIT may; where only the manifest
     // puts them (a job board after the extension was updated), load the page
     // again, but only on the first Open so nothing typed since is lost.
@@ -514,11 +518,18 @@ const LitBatch = (() => {
     return { ok: true, noAccess: true };
   }
 
+  // Open may send this job's form: the batch was started to submit and not
+  // stopped, the user opened the job just now, and Submit was never pressed.
+  function maySubmit(ctx, job) {
+    return ctx.state.mode === 'submit' && ctx.state.status !== 'stopped' && UNFINISHED.includes(job.status) &&
+      !job.submitAt && !!job.assistAt && ctx.now - job.assistAt < ASSIST_MS;
+  }
+
   // True when a driver in that tab answered.
-  async function askToAssist(tabId, jobId) {
+  async function askToAssist(tabId, jobId, submit) {
     if (typeof chrome.tabs.sendMessage !== 'function') return false;
     try {
-      const res = await chrome.tabs.sendMessage(tabId, { type: 'LIT_BATCH_ASSIST', jobId });
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'LIT_BATCH_ASSIST', jobId, submit: !!submit });
       return !!(res && res.ok);
     } catch (e) {
       return false;
@@ -563,7 +574,7 @@ const LitBatch = (() => {
     if (!recent && (!host || (host !== job.host && !(job.hosts || []).includes(host)))) return null;
     rememberHost(ctx, job, host);
     markHello(ctx, job);
-    return { job: { jobId: job.jobId, title: job.title, company: job.company, url: job.url, status: job.status }, mode: 'assist', hops: recent };
+    return { job: { jobId: job.jobId, title: job.title, company: job.company, url: job.url, status: job.status }, mode: 'assist', hops: recent, submit: maySubmit(ctx, job) };
   }
 
   // What the driver found after filling an unfinished job's form.
@@ -593,16 +604,24 @@ const LitBatch = (() => {
     });
   }
 
+  // The job whose Open may submit from this tab, or null.
+  function openedJob(ctx, sender) {
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    const job = ctx.state && typeof tabId === 'number' && ctx.state.jobs.find(j => j.tabId === tabId);
+    return job && maySubmit(ctx, job) ? job : null;
+  }
+
   function update(msg, sender) {
     return step(ctx => {
-      const job = jobForTab(ctx.state, sender);
-      if (!job) return { ok: false };
       const next = msg.status;
-      if (!(TRANSITIONS[job.status] || []).includes(next)) return { ok: false };
+      const opened = next === 'submitting' ? openedJob(ctx, sender) : null;
+      const job = opened || jobForTab(ctx.state, sender);
+      if (!job) return { ok: false };
+      if (!opened && !(TRANSITIONS[job.status] || []).includes(next)) return { ok: false };
       const frameId = sender && typeof sender.frameId === 'number' ? sender.frameId : 0;
       // The first frame to start filling owns the job; any other frame of the
       // same tab (a second form, an ad iframe) is told to stand down.
-      if (next === 'filling') job.frameId = frameId;
+      if (next === 'filling' || opened) job.frameId = frameId;
       else if (job.frameId !== frameId) return { ok: false };
 
       if (Number.isFinite(msg.filled)) job.filled = Math.max(0, Math.floor(msg.filled));
@@ -616,6 +635,8 @@ const LitBatch = (() => {
       } else {
         job.status = next;
         if (next === 'submitting') job.submitAt = ctx.now;
+        // The time limits count from here, not from when the batch began.
+        if (opened) job.startedAt = ctx.now;
         job.reason = text(msg.reason, MAX_REASON);
         job.updatedAt = ctx.now;
         ctx.dirty = true;

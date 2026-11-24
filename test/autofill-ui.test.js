@@ -891,6 +891,44 @@ async function run() {
     cleanup({ api });
   }
 
+  // Two installs at once: the newer copy stays, the older one is hidden, and
+  // a live newer copy makes this one step aside.
+  {
+    const other = (doc, rank) => {
+      const el = doc.createElement('lit-autofill');
+      if (rank) el.setAttribute('data-lit-rank', rank);
+      el.style = { set: {}, setProperty(k, v) { this.set[k] = v; }, getPropertyValue(k) { return this.set[k] || ''; } };
+      doc.body.appendChild(el);
+      return el;
+    };
+    const doc = dom.installDom();
+    dom.FakeMutationObserver.reset();
+    const m = installMockChrome();
+    m.runtime.getManifest = () => ({ version: '1.7.0' });
+    global.chrome.runtime.getManifest = m.runtime.getManifest;
+    global.document = doc;
+    global.window = mock.createWindow();
+    global.location = new URL('https://' + HOST + '/x');
+    global.AutofillStore = mock.createStore({ profile: PROFILE });
+    global.AutofillCore = mock.createCore();
+    Object.values(threeTextFields(doc)).forEach(f => doc.body.appendChild(f));
+    const api = load();
+    await settle();
+    const mine = doc.getElementById('lit-autofill-host');
+    assert.ok(/^000001\.000007\.000000\.000000:1:/.test(mine.getAttribute('data-lit-rank')), 'ranked by version, unpacked first');
+    const old = other(doc);
+    const store = other(doc, '000001.000007.000000.000000:0:storeid');
+    api.check();
+    assert.strictEqual(old.style.set.display, 'none', 'a build from before ranks gives way');
+    assert.strictEqual(store.style.set.display, 'none', 'same version: the Web Store copy gives way');
+    other(doc, '000001.000008.000000.000000:0:newer');
+    const shown = {};
+    mine.style = { setProperty(k, v) { shown[k] = v; }, getPropertyValue(k) { return shown[k] || ''; } };
+    api.check();
+    assert.strictEqual(shown.display, 'none', 'a newer copy wins');
+    cleanup({ api });
+  }
+
   // -------------------------------------------------------------------------
   // 10. Teardown: pagehide, bfcache restore, context invalidation
   // -------------------------------------------------------------------------

@@ -73,7 +73,7 @@ test('registration: one adapter per site with the contract shape', () => {
     if (a.fill !== undefined) assert.strictEqual(typeof a.fill, 'function', a.id + '.fill');
     if (a.scanRoot !== undefined) assert.strictEqual(typeof a.scanRoot, 'function', a.id + '.scanRoot');
   }
-  assert.strictEqual(by.lever.fill, undefined, 'Lever leaves custom questions to the core');
+  assert.strictEqual(by.lever.fill({ el: { matches: () => false } }, 'x'), undefined, 'Lever leaves custom questions to the core');
 });
 
 test('matches: hosts mirror content/adapters/ats', () => {
