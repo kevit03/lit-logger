@@ -219,6 +219,9 @@
 }
 /* Collapsed, it stays in the accessibility tree so the live region still speaks. */
 .buddy.roam[data-bubble="hide"] .buddy-bubble,
+.buddy.roam[data-action="tumble"] .buddy-bubble,
+.buddy.roam[data-action="rock"] .buddy-bubble,
+.buddy.roam[data-action="leap"] .buddy-bubble,
 .buddy.roam[data-dragging] .buddy-bubble { opacity: 0; transform: scale(0.85); pointer-events: none; }
 
 :root[data-motion="reduce"] .buddy.roam *, :root[data-motion="reduce"] .buddy-dust { animation: none !important; transition: none !important; }
