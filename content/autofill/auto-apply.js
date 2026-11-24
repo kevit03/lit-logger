@@ -46,6 +46,9 @@
     composeBudget: 40000 // per LIT_COMPOSE_ANSWER request
   };
 
+  // Opened by the user: the form may sit behind a sign-in they have to do.
+  timing.assistWait = 3 * 60 * 1000;
+
   const MIN_FORM = 3;
   const MAX_MISSING = 10;
   const MAX_LABEL = 80;
@@ -742,12 +745,18 @@
   // Resolves 'form', 'navigated' (this page is going away; the next page's
   // driver carries on from HELLO), or null when no form showed up. Each hop
   // restarts the wait, and hops are capped per job across reloads.
-  async function waitForForm(job) {
+  // opts.noHops: only wait, press nothing. opts.signIn: a visible password box
+  // is a sign-in to wait out (up to opts.wait), not the form.
+  async function waitForForm(job, opts) {
+    const o = opts || {};
     const clicked = new Set();
     for (;;) {
       const start = Date.now();
       const res = await waitUntil(() => {
-        if (formPresent(document)) return 'form';
+        const signIn = !!o.signIn && passwordVisible();
+        if (!signIn && formPresent(document)) return 'form';
+        if (o.signIn && isSuccess(document, currentUrl())) return 'finished';
+        if (o.noHops || signIn) return null;
         if (Date.now() - start < timing.applyGrace || hopCount(job.jobId) >= MAX_HOPS) return null;
         const target = findApplyTarget(document, clicked);
         if (!target) return null;
@@ -761,9 +770,13 @@
         }
         try { target.el.click(); } catch (e) { /* page handler threw */ }
         return 'clicked';
-      }, timing.formWait);
+      }, o.wait || timing.formWait);
       if (res !== 'clicked') return res;
     }
+  }
+
+  function passwordVisible() {
+    return qsa(document, 'input[type="password"]').some(isVisible);
   }
 
   // --- filling -------------------------------------------------------------------
@@ -1045,6 +1058,93 @@
     return end(res.status, res.reason, counts(res.missing ? { missing: res.missing } : {}));
   }
 
+  // Both fill passes and the answer pass, with the counts kept in state.
+  // False when the extension went away underneath.
+  async function fillForm(job) {
+    state.phase = 'filling';
+    let filled = filledCount(await fillOnce());
+    await sleep(timing.refillDelay);
+    if (!alive()) { state.phase = 'dead'; return false; }
+    filled += filledCount(await fillOnce());
+    state.filled = filled;
+    await sleep(timing.settle);
+    if (!alive()) { state.phase = 'dead'; return false; }
+
+    // Fields the passes below set, so a later pass leaves them alone.
+    const handled = new Set();
+    state.phase = 'composing';
+    state.composed = await composePass(job, handled);
+    if (!alive()) { state.phase = 'dead'; return false; }
+    state.filled = filled + state.composed;
+    if (state.composed) await sleep(timing.settle);
+    return true;
+  }
+
+  function missingReason(missing) {
+    return missing.length === 1 ? '1 required field needs you' : missing.length + ' required fields need you';
+  }
+
+  // How many fields hold a value right now.
+  function fieldsHoldingValues() {
+    const c = core();
+    if (!c || typeof c.scanFields !== 'function') return 0;
+    try { return c.scanFields(formRoot(), { includeFilled: true }).filter(d => d && d.el && isFilledLoose(d, c)).length; } catch (e) { return 0; }
+  }
+
+  // The batch is done with this job and the user is looking at it (or its
+  // page was reloaded): fill what can be filled and leave the rest, and
+  // Submit, to them. Presses apply buttons only right after Open.
+  async function assist(job, hops) {
+    state.job = job;
+    state.mode = 'assist';
+    if (flag('clicked', job.jobId)) { state.phase = 'done'; return state; }
+    // This page's earlier run is still on the form: nothing to redo.
+    if (state.filled > 0 && fieldsHoldingValues() > 0) { state.phase = 'done'; return state; }
+    const url = currentUrl();
+    const workday = !!url && HOSTS.workday.test(url.hostname.toLowerCase());
+    const fix = hops ? formUrlFix(url) : null;
+    if (fix && !flag('nav', job.jobId)) {
+      flag('nav', job.jobId, 1);
+      state.phase = 'navigating';
+      navigate(fix);
+      return state;
+    }
+    state.phase = 'waiting-form';
+    const found = await waitForForm(job, {
+      noHops: !hops || workday,
+      signIn: true,
+      wait: workday || passwordVisible() ? timing.assistWait : timing.formWait
+    });
+    if (found === 'navigated') { state.phase = 'navigating'; return state; }
+    if (!alive()) { state.phase = 'dead'; return state; }
+    if (found !== 'form') { state.phase = found === 'finished' ? 'done' : 'no-form'; return state; }
+    if (!await fillForm(job)) return state;
+    state.phase = 'verifying';
+    const missing = missingRequired(document);
+    state.missing = missing;
+    const captcha = detectCaptcha(document);
+    state.reason = !state.filled && !fieldsHoldingValues() ? await nothingFilledReason()
+      : missing.length ? missingReason(missing)
+        : captcha ? 'CAPTCHA' : 'Filled. Review and submit.';
+    // Chrome may have restored some of the form itself; count what is there.
+    const holding = fieldsHoldingValues();
+    await send({
+      type: 'LIT_BATCH_ASSISTED',
+      ready: !missing.length && !captcha && holding > 0,
+      reason: state.reason,
+      filled: Math.max(state.filled, holding),
+      composed: state.composed,
+      missing: missing.slice(0, MAX_MISSING).map(m => clip(m))
+    });
+    state.phase = 'done';
+    return state;
+  }
+
+  async function nothingFilledReason() {
+    const caps = await send({ type: 'LIT_BATCH_CAPS' });
+    return caps && caps.profile === false ? 'Autofill profile is empty' : 'Nothing on this form matched your profile';
+  }
+
   async function drive(job, mode) {
     state.job = job;
     state.mode = mode === 'fill-only' ? 'fill-only' : 'submit';
@@ -1076,38 +1176,21 @@
     if (!found) {
       // A login wall in this frame is worth saying; otherwise another frame
       // may own the form and the background timeout covers the rest.
-      const pw = qsa(document, 'input[type="password"]').some(isVisible);
-      if (pw && await claim()) return end('needs-you', 'Sign-in required');
+      if (passwordVisible() && await claim()) return end('needs-you', 'Sign-in required');
       state.phase = 'no-form';
       return state;
     }
 
     if (!await claim()) return state;
 
-    state.phase = 'filling';
-    let filled = filledCount(await fillOnce());
-    await sleep(timing.refillDelay);
-    if (!alive()) { state.phase = 'dead'; return state; }
-    filled += filledCount(await fillOnce());
-    state.filled = filled;
-    await sleep(timing.settle);
-    if (!alive()) { state.phase = 'dead'; return state; }
-
-    // Fields the passes below set, so a later pass leaves them alone.
-    const handled = new Set();
-    state.phase = 'composing';
-    state.composed = await composePass(job, handled);
-    if (!alive()) { state.phase = 'dead'; return state; }
-    state.filled = filled + state.composed;
-    if (state.composed) await sleep(timing.settle);
+    if (!await fillForm(job)) return state;
 
     state.phase = 'verifying';
     const missing = missingRequired(document);
     state.missing = missing;
     if (detectCaptcha(document)) return end('needs-you', 'CAPTCHA', counts({ missing }));
     if (missing.length) {
-      const reason = missing.length === 1 ? '1 required field needs you' : missing.length + ' required fields need you';
-      return end('needs-you', reason, counts({ missing }));
+      return end('needs-you', !state.filled && !fieldsHoldingValues() ? await nothingFilledReason() : missingReason(missing), counts({ missing }));
     }
     if (state.mode === 'fill-only') return end('ready', 'Filled. Review and submit.', counts({ missing: [] }));
 
@@ -1125,14 +1208,14 @@
     return afterClick(baseline);
   }
 
-  function run(job, mode) {
+  function run(job, mode, hops) {
     if (current) return current;
     if (!job || !job.jobId) return Promise.resolve(state);
     current = (async () => {
       try {
-        return await drive(job, mode);
+        return mode === 'assist' ? await assist(job, !!hops) : await drive(job, mode);
       } catch (e) {
-        if (claimed) await end('failed', clip('Error: ' + ((e && e.message) || 'unknown'), 80));
+        if (claimed && mode !== 'assist') await end('failed', clip('Error: ' + ((e && e.message) || 'unknown'), 80));
         else state.phase = 'stopped';
         return state;
       } finally {
@@ -1148,7 +1231,22 @@
     const res = await send({ type: 'LIT_BATCH_HELLO' });
     const job = res && res.job;
     if (!job || !job.jobId) { state.phase = 'inactive'; return state; }
-    return run(job, res.mode);
+    listen();
+    return run(job, res.mode, res.hops);
+  }
+
+  // Batch tabs only: the panel's Open button asks for a fill again.
+  let listening = false;
+  function listen() {
+    if (listening || !chrome.runtime.onMessage) return;
+    listening = true;
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (!msg || msg.type !== 'LIT_BATCH_ASSIST' || !state.job || msg.jobId !== state.job.jobId) return false;
+      try { sendResponse({ ok: true }); } catch (e) { /* the asker went away */ }
+      const job = state.job;
+      Promise.resolve(current).then(() => run(job, 'assist', true)).catch(() => {});
+      return false;
+    });
   }
 
   let started = null;

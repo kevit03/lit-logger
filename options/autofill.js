@@ -54,8 +54,8 @@
     {
       title: 'Links',
       fields: [
-        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'https://www.linkedin.com/in/your-name', check: 'url', site: 'linkedin.com' },
-        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'Work samples, a Behance or Dribbble page', check: 'url' },
+        { key: 'linkedin', label: 'LinkedIn', type: 'url', placeholder: 'linkedin.com/in/your-name', check: 'url', site: 'linkedin.com' },
+        { key: 'portfolio', label: 'Portfolio', type: 'url', placeholder: 'Work samples or a Behance page', check: 'url' },
         { key: 'website', label: 'Website', type: 'url', placeholder: 'Personal site or blog', check: 'url' },
         // Only some roles ask for it, so it sits last and is not counted.
         { key: 'github', label: 'GitHub', type: 'url', placeholder: 'https://github.com/your-name', optional: true, check: 'url', site: 'github.com' }
@@ -1234,7 +1234,36 @@
     }
   });
 
+  // Company career sites: an optional permission, asked for from the button.
+  const ALL_SITES = { origins: ['*://*/*'] };
+
+  function showSites(granted) {
+    el('sites-allow').classList.toggle('hidden', granted);
+    el('sites-status').textContent = granted
+      ? 'On. LIT can fill applications on any site you open.'
+      : 'The big job boards always work. Chrome will ask before LIT can work on other sites.';
+  }
+
+  function setupSites() {
+    const row = el('sites-row');
+    if (!row) return;
+    const api = typeof chrome !== 'undefined' && chrome.permissions;
+    if (!api || typeof api.contains !== 'function' || typeof api.request !== 'function') {
+      row.classList.add('hidden');
+      return;
+    }
+    const check = () => Promise.resolve(api.contains(ALL_SITES)).then(showSites, () => showSites(false));
+    // permissions.request has to run straight from the click.
+    el('sites-allow').addEventListener('click', () => {
+      let asked;
+      try { asked = api.request(ALL_SITES); } catch (e) { asked = Promise.resolve(false); }
+      Promise.resolve(asked).then(check, check);
+    });
+    check();
+  }
+
   buildProfileForm();
+  setupSites();
   loadTheme();
   selectTab(location.hash.slice(1));
   loadAll().catch(reportError);

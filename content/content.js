@@ -513,21 +513,29 @@
       node.style.top = Math.round(r.top + 6) + 'px';
       node.style.right = Math.round(vw - r.right + 8) + 'px';
       node.style.height = Math.max(0, Math.round(r.height - 14)) + 'px';
-      node.style.maxWidth = Math.max(0, Math.round(r.width - 16)) + 'px';
+      node.style.maxWidth = Math.max(0, Math.round(r.width / 2 - 22)) + 'px';
     } else {
       // The right part of the date line only, clear of the centred number.
       node.style.top = Math.round(r.top + 4) + 'px';
       node.style.right = Math.round(vw - r.right + 4) + 'px';
       node.style.height = '';
-      node.style.maxWidth = Math.max(0, Math.round(r.width * 0.6)) + 'px';
+      node.style.maxWidth = Math.max(0, Math.round(r.width / 2 - 16)) + 'px';
     }
     // Words when they fit, counts alone when any pill would be cut short.
-    node.classList.remove('pt-compact');
+    node.classList.remove('pt-compact', 'pt-tiny');
     const texts = node.querySelectorAll('.pt-badge-text');
     for (let i = 0; i < texts.length; i++) {
       if (texts[i].scrollWidth > texts[i].clientWidth + 1) {
         node.classList.add('pt-compact');
         break;
+      }
+    }
+    // Still too many for the space beside the date: numbers only.
+    const row = node.querySelector('.pt-cell-overlay');
+    if (row && row.scrollWidth > row.clientWidth + 1) node.classList.add('pt-compact', 'pt-tiny');
+    else if (node.classList.contains('pt-compact')) {
+      for (let i = 0; i < texts.length; i++) {
+        if (texts[i].scrollWidth > texts[i].clientWidth + 1) { node.classList.add('pt-tiny'); break; }
       }
     }
   }

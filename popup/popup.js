@@ -1845,9 +1845,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const CHECK_SVG = '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.2 2.3L9.5 3.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   // A 1-3 sentence story about a week, never reporting a decline.
-  function weekStoryFor(m, lastWeekTotal) {
+  function weekStoryFor(m, lastWeekTotal, past) {
     const unit = m ? displayUnit(m, 2) : 'applications';
-    const args = { total: m ? m.total : 0, bestDay: m ? m.bestDay : null, activeDays: m ? m.activeDays : 0, lastWeekTotal: lastWeekTotal || 0, unit };
+    const args = { total: m ? m.total : 0, bestDay: m ? m.bestDay : null, activeDays: m ? m.activeDays : 0, lastWeekTotal: lastWeekTotal || 0, unit, past: !!past };
     return coach('weekStory', [args], () => {
       if (!args.total) return 'A quiet week, and that is allowed. A fresh week starts whenever you do.';
       return args.total + ' ' + unit + ' across ' + args.activeDays + (args.activeDays === 1 ? ' day' : ' days') + '. Steady work adds up.';
@@ -1883,7 +1883,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       || summary.metrics.slice().sort((x, y) => y.total - x.total)[0];
     const prior = before && before.metrics ? before.metrics.find(m => m.id === pick.id) : null;
     el('digest-title').textContent = shortDate(summary.weekStart) + ' to ' + shortDate(summary.weekEnd);
-    el('digest-story').textContent = weekStoryFor(pick, prior ? prior.total : 0);
+    el('digest-story').textContent = weekStoryFor(pick, prior ? prior.total : 0, true);
     const metric = metricById(pick.id);
     digestShare = {
       bigNumber: pick.total,
@@ -2303,7 +2303,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         : (metric.id === 'leetcode' ? ['Problem', 'Topic or tag', 'Notes or link'] : ['Title', 'Tag', 'Notes or link']);
       // Placeholders show an example rather than repeating the label.
       const hints = metric.id === 'jobs'
-        ? ['e.g. Stripe', 'e.g. Software Engineer', 'Posting URL or a note']
+        ? ['e.g. Stripe', 'e.g. Data Analyst', 'Posting URL or a note']
         : (metric.id === 'leetcode' ? ['e.g. Two Sum', 'e.g. Arrays', 'Problem URL or a note'] : ['What you did', 'e.g. Reading', 'URL or a note']);
       el('detail-company-label').textContent = labels[0];
       el('detail-role-label').textContent = labels[1];
@@ -2992,8 +2992,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     return bars;
   }
 
+  // Room for the chart inside its card, also before it has been laid out.
+  function chartWidth(chart) {
+    if (chart.clientWidth > 0) return chart.clientWidth;
+    const card = chart.closest('.widget');
+    return card && card.classList.contains('size-compact') && !card.classList.contains('solo') ? 134 : 314;
+  }
+
+  // One bar per day while they fit; past that, one per week (or a few),
+  // counted back from today.
   function renderBars(chart, history) {
-    chart.appendChild(hoverColumns(history, true));
+    const width = chartWidth(chart);
+    const n = history.days.length;
+    let days = history.days;
+    if (n * 3 > width) {
+      const per = 7 * Math.max(1, Math.ceil((n / 7) * 3 / width));
+      days = [];
+      for (let end = n; end > 0; end -= per) {
+        const part = history.days.slice(Math.max(0, end - per), end);
+        days.unshift({
+          label: part.length > 1 ? part[0].label + ' to ' + part[part.length - 1].label : part[0].label,
+          count: part.reduce((sum, d) => sum + d.count, 0)
+        });
+      }
+    }
+    const bars = hoverColumns({ days }, true);
+    bars.classList.toggle('dense', days.length * 5 > width);
+    // Week labels are wide: open them toward the middle of the card.
+    if (days.length !== n) {
+      Array.from(bars.children).forEach((col, i) => col.classList.add(i < days.length / 2 ? 'tip-start' : 'tip-end'));
+    }
+    chart.appendChild(bars);
   }
 
   // Continuous sparkline with a soft fill, plus invisible columns for the
@@ -3051,7 +3080,31 @@ document.addEventListener('DOMContentLoaded', async () => {
       cell.appendChild(make('span', 'tip', day.label + ': ' + day.count));
       grid.appendChild(cell);
     });
+    // Shrink the cells until every week fits; past the smallest readable size
+    // the grid scrolls instead, starting at today.
+    const weeks = Math.ceil((pad + history.days.length) / 7);
+    const width = chartWidth(chart);
+    let cellSize = 13;
+    let gap = 3;
+    if (weeks * 16 - 3 > width) {
+      gap = width / weeks >= 9 ? 2 : 1;
+      cellSize = Math.max(4.5, Math.floor(((width - gap * (weeks - 1)) / weeks) * 10) / 10);
+      grid.style.setProperty('--heat', cellSize + 'px');
+      grid.style.setProperty('--heat-gap', gap + 'px');
+      grid.classList.toggle('small', cellSize < 9);
+    }
+    const scrolls = weeks * (cellSize + gap) - gap > width + 0.5;
+    if (scrolls) {
+      grid.style.setProperty('--heat', '9px');
+      grid.style.setProperty('--heat-gap', '2px');
+      grid.classList.add('scrolls');
+      Array.from(grid.children).forEach(c => { if (c.firstChild) c.title = c.firstChild.textContent; });
+    }
     chart.appendChild(grid);
+    if (scrolls) {
+      grid.scrollLeft = grid.scrollWidth;
+      requestAnimationFrame(() => { grid.scrollLeft = grid.scrollWidth; });
+    }
     const legend = make('div', 'heat-legend');
     legend.appendChild(make('span', '', 'Less'));
     [0, 1, 2, 3, 4].forEach(level => {
@@ -3820,7 +3873,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('widget-settings-title').textContent = spec.name;
     renderWidgetTokens();
     const remove = el('remove-widget-btn');
-    remove.querySelector('span').textContent = 'Remove card';
+    remove.querySelector('span').textContent = 'Remove';
     remove.classList.remove('armed');
     remove.title = 'Removing a card never deletes anything you logged. Add it back any time.';
     openModal(el('widget-settings-modal'), 'metricId' in spec.defaults ? 'widget-metric-btn' : 'widget-size-btn');
@@ -4004,7 +4057,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = el('remove-widget-btn');
     if (!widgetRemoveArmed) {
       widgetRemoveArmed = true;
-      btn.querySelector('span').textContent = 'Yes, remove card';
+      btn.querySelector('span').textContent = 'Sure?';
       btn.classList.add('armed');
       return;
     }

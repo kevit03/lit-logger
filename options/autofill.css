@@ -139,7 +139,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 .topbar-inner {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-areas: "brand tabs status";
   align-items: center;
   gap: 16px;
@@ -723,17 +723,19 @@ body.pt-dark .switch:checked::after { background: var(--on-accent); }
 .undo-btn:hover { background: color-mix(in srgb, var(--bg) 22%, transparent); }
 .undo-btn:focus-visible { outline-color: var(--bg); }
 
-/* ===== Narrow: tabs on their own scrolling row, groups stack ===== */
-@media (max-width: 760px) {
+/* ===== Narrow: tabs on their own scrolling row, then groups stack ===== */
+@media (max-width: 980px) {
   .topbar-inner {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas: "brand status" "tabs tabs";
     gap: 10px 16px;
-    padding: 12px 16px;
   }
   .tabs { overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs [role="tab"] { flex: 1 0 auto; justify-content: center; }
+}
+@media (max-width: 760px) {
+  .topbar-inner { padding: 12px 16px; }
   .page { padding: 24px 16px 96px; }
   .card { padding: 20px 16px; }
   .rows { padding: 0 16px; }
@@ -753,6 +755,7 @@ body.pt-dark .switch:checked::after { background: var(--on-accent); }
   .row-field .row-actions .input-key { flex: 1; width: auto; min-width: 0; }
   .meter { width: 96px; }
   .progress { flex-wrap: wrap; border-radius: var(--radius-md); }
+  .tabs [role="tab"] { padding: 0 6px; gap: 4px; }
   .top-link { font-size: var(--fs-xs); }
   .dropzone:not(.is-empty) { flex-wrap: wrap; }
   .dropzone:not(.is-empty) .resume-actions { width: 100%; justify-content: flex-end; }
@@ -762,3 +765,6 @@ body.pt-dark .switch:checked::after { background: var(--on-accent); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Examples and values longer than their box end in an ellipsis. */
+input:placeholder-shown, input:not(:focus) { text-overflow: ellipsis; }

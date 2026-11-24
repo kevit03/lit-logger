@@ -164,3 +164,7 @@ summary svg { width: 16px; height: 16px; color: var(--accent); }
   .lock, .lock .lock-shackle, .btn, summary::after { transition: none; }
   .btn.pulse { animation: none; }
 }
+
+.video-link { margin: 8px 0 0; font-size: 0.85em; text-align: center; }
+.video-link a { color: var(--muted); }
+.video-link a:hover { color: var(--ink); }

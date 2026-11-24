@@ -3,7 +3,8 @@
    the module sets only while the buddy lives in #buddy-layer; the seated
    buddy beside the counter keeps popup.css's look and mood styles.
    The module sets on #buddy: data-action (a pose), data-gaze (front | side |
-   down), data-facing, data-bubble (show | hide), data-bubble-side (left |
+   down | up), data-spin and data-swing (what the drawing turns around),
+   data-facing, data-bubble (show | hide), data-bubble-side (left |
    right), data-bubble-vert (above | below), data-dragging, data-away. */
 
 /* Clip to the board so a roaming or flung buddy never adds a scrollbar. */
@@ -29,6 +30,10 @@
 .buddy.roam .buddy-btn:focus-visible { outline-offset: 1px; }
 /* The module mirrors (facing) and rotates (laps, tumbles) the drawing around its feet. */
 .buddy.roam .buddy-svg { transform-origin: 50% 97%; }
+/* Thrown it turns around its middle; held it swings from the shackle. */
+.buddy.roam[data-spin] .buddy-svg { transform-origin: 50% 50%; }
+.buddy.roam[data-swing] .buddy-svg { transform-origin: 50% 10%; }
+.buddy.roam[data-spin] .buddy-rig, .buddy.roam[data-swing] .buddy-rig { transition: none; }
 
 /* ----- The rig: legs, arms, face ----------------------------------------- */
 .buddy.roam .buddy-legs, .buddy.roam .buddy-arms { display: inline; }
@@ -49,6 +54,7 @@
    when it faces left, so one direction covers both). */
 .buddy.roam .buddy-face { transition: transform 0.18s var(--ease); }
 .buddy.roam[data-gaze="side"] .buddy-face { transform: translateX(1.8px); }
+.buddy.roam[data-gaze="up"] .buddy-face { transform: translate(0.8px, -1.8px); }
 .buddy.roam[data-gaze="down"] .buddy-face { transform: translate(1.8px, 1.4px); }
 
 /* ----- Walk: a waddling stride, arms swinging, a bob on every step ------- */
@@ -76,6 +82,15 @@
 .buddy.roam[data-action="hop"] .buddy-leg-r { transform: rotate(-12deg); }
 .buddy.roam[data-action="hop"] .buddy-arm-l { transform: rotate(60deg); }
 .buddy.roam[data-action="hop"] .buddy-arm-r { transform: rotate(-60deg); }
+/* A climb: look up at it, then reach as it springs. */
+.buddy.roam[data-action="ready"] .buddy-rig { transform: scale(0.98, 1.03); }
+.buddy.roam[data-action="ready"] .buddy-arm-l { transform: rotate(14deg); }
+.buddy.roam[data-action="ready"] .buddy-arm-r { transform: rotate(-14deg); }
+.buddy.roam[data-action="leap"] .buddy-rig { transform: scale(0.84, 1.2); }
+.buddy.roam[data-action="leap"] .buddy-leg-l { transform: rotate(10deg); }
+.buddy.roam[data-action="leap"] .buddy-leg-r { transform: rotate(-10deg); }
+.buddy.roam[data-action="leap"] .buddy-arm-l { transform: rotate(118deg); }
+.buddy.roam[data-action="leap"] .buddy-arm-r { transform: rotate(-118deg); }
 .buddy.roam[data-action="land"] .buddy-rig { animation: roam-land 0.16s ease-out; }
 
 /* ----- Sit, and nap (sitting, eyes shut, breathing slowly) --------------- */
@@ -128,6 +143,11 @@
 .buddy.roam[data-action="tumble"] .buddy-arm-r { transform: rotate(-80deg); }
 .buddy.roam[data-action="tumble"] .buddy-leg-l { transform: rotate(35deg); }
 .buddy.roam[data-action="tumble"] .buddy-leg-r { transform: rotate(-35deg); }
+/* Down, and rocking back onto its feet. */
+.buddy.roam[data-action="rock"] .buddy-arm-l { transform: rotate(55deg); }
+.buddy.roam[data-action="rock"] .buddy-arm-r { transform: rotate(-55deg); }
+.buddy.roam[data-action="rock"] .buddy-leg-l { transform: rotate(14deg); }
+.buddy.roam[data-action="rock"] .buddy-leg-r { transform: rotate(-14deg); }
 .buddy.roam[data-action="dizzy"] .buddy-rig { animation: roam-wobble 0.9s ease-in-out; }
 
 @keyframes roam-stride {
@@ -217,6 +237,7 @@
   top: 0; bottom: 0; margin: auto 0; height: max-content;
   left: calc(100% + 4px); border-radius: 4px 12px 12px 12px; transform-origin: 0 50%;
   max-width: var(--bubble-beside-w, 188px);
+  translate: 0 var(--bubble-beside-dy, 0px);
 }
 .buddy.roam[data-bubble-vert="beside"][data-bubble-side="left"] .buddy-bubble {
   left: auto; right: calc(100% + 4px); border-radius: 12px 4px 12px 12px; transform-origin: 100% 50%;

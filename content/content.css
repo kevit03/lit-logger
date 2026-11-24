@@ -102,6 +102,12 @@
   display: none;
 }
 
+/* Narrow cells: the number and its color carry the pill. */
+.pt-day.pt-tiny .pt-cell-overlay { gap: 2px; }
+.pt-day.pt-tiny .pt-badge { padding: 0 4px; gap: 0; flex: none; }
+.pt-day.pt-tiny .pt-badge-dot { display: none; }
+.pt-day.pt-tiny:not(.pt-hover):not(:hover) .pt-quick-add-cell { display: none; }
+
 .pt-badge-dot {
   width: 6px;
   height: 6px;

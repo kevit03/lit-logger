@@ -501,7 +501,8 @@ body.pt-dark .mc-root {
 @container mc (max-width: 220px) {
   .mc-q { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
   .mc-q-icon { display: none; }
-  .mc-q-btn { min-width: 44px; padding: 0 8px; }
+  .mc-q-btn { min-width: 40px; padding: 0 6px; }
+  .mc-q-title, .mc-q-sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 }
 
 /* ----- High contrast: no text over gradients, heavier outlines ----- */
