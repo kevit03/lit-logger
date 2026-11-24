@@ -63,6 +63,18 @@ function extendChrome(mock) {
       Object.assign(tabs.get(id), opts);
       return Object.assign({}, tabs.get(id));
     },
+    async get(id) {
+      if (!tabs.has(id)) throw new Error('No tab with id: ' + id + '.');
+      return Object.assign({}, tabs.get(id));
+    },
+    movedCalls: [],
+    async move(id, opts) {
+      this.movedCalls.push({ id, opts });
+      if (!tabs.has(id)) throw new Error('No tab with id: ' + id + '.');
+      if (!windows.has(opts.windowId)) throw new Error('No window with id: ' + opts.windowId + '.');
+      mock.windows.take(id, opts.windowId);
+      return Object.assign({}, tabs.get(id));
+    },
     async remove(id) {
       this.removedCalls.push(id);
       if (!tabs.has(id)) throw new Error('No tab with id: ' + id + '.');
@@ -82,6 +94,10 @@ function extendChrome(mock) {
       this.createdCalls.push(opts);
       const win = { id: nextWin++, focused: !!opts.focused };
       windows.set(win.id, win);
+      if (typeof opts.tabId === 'number') {
+        this.take(opts.tabId, win.id);
+        return { id: win.id, focused: win.focused, tabs: [Object.assign({}, tabs.get(opts.tabId))] };
+      }
       const tab = { id: nextTab++, windowId: win.id, url: opts.url, active: true };
       tabs.set(tab.id, tab);
       return { id: win.id, focused: win.focused, tabs: [Object.assign({}, tab)] };
@@ -96,6 +112,13 @@ function extendChrome(mock) {
       this.removedCalls.push(id);
       if (!windows.has(id)) throw new Error('No window with id: ' + id + '.');
       this.close(id);
+    },
+    // A tab changes windows; like Chrome, a window closes with its last tab
+    // and onRemoved does not fire for a moved tab.
+    take(tabId, windowId) {
+      const from = tabs.get(tabId).windowId;
+      tabs.get(tabId).windowId = windowId;
+      if (!Array.from(tabs.values()).some(t => t.windowId === from)) windows.delete(from);
     },
     // Test helper: the user closes the whole window.
     close(id) {
@@ -269,10 +292,12 @@ async function run() {
     assert.strictEqual(j2.tabId, t2);
     assert.strictEqual(env.job('job5').status, 'opening');
 
-    // Focus brings a needs-you tab forward.
+    // Open shows a needs-you tab on its own, outside the batch window (beside
+    // the Jobright tab when there is one; see the last block).
     assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job2' }), { ok: true });
     assert.deepStrictEqual(mock.tabs.updatedCalls.pop(), { id: t2, opts: { active: true } });
-    assert.deepStrictEqual(mock.windows.updatedCalls.pop(), { id: env.batch().windowId, opts: { focused: true } });
+    assert.deepStrictEqual(mock.windows.updatedCalls.pop(), { id: mock.tabs.store.get(t2).windowId, opts: { focused: true } });
+    assert.deepStrictEqual(Array.from(mock.tabs.store.values()).filter(t => t.windowId === mock.tabs.store.get(t2).windowId).map(t => t.id), [t2], 'only that page');
     assert.strictEqual((await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' })).ok, false, 'a closed tab cannot be focused');
     assert.strictEqual((await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'nope' })).ok, false);
 
@@ -605,12 +630,12 @@ async function run() {
     assert.strictEqual(env.LB.HARD_TIMEOUT_MS, 6 * 60 * 1000);
 
     let caps = await env.send({ type: 'LIT_BATCH_CAPS' });
-    assert.deepStrictEqual(caps, { allSites: false, ai: true });
+    assert.deepStrictEqual(caps, { allSites: false, ai: true, profile: false });
     assert.deepStrictEqual(asked[0], { origins: ['*://*/*'] });
     assert.ok(!JSON.stringify(caps).includes('sk-ant'), 'the key never leaves the worker');
     granted = true;
     mock.storage.local.store.af_settings = { aiEnabled: true, aiKey: '   ' };
-    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_CAPS' }), { allSites: true, ai: false }, 'a blank key is no key');
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_CAPS' }), { allSites: true, ai: false, profile: false }, 'a blank key is no key');
     mock.storage.local.store.af_settings = { aiEnabled: false, aiKey: 'sk-ant-x' };
     assert.strictEqual((await env.send({ type: 'LIT_BATCH_CAPS' })).ai, false, 'switched off');
     delete mock.storage.local.store.af_settings;
@@ -674,6 +699,153 @@ async function run() {
     await settle();
     uninstallMockChrome();
     console.log('[PASS] LIT_BATCH_APPLIED matches logged applications by company + role or link');
+  }
+
+  {
+    // Open on an unfinished job fills its form: an answering driver is asked,
+    // a lost tab is reopened, a reloaded page is told to assist.
+    const env = setup();
+    const { mock } = env;
+    mock.tabs.onReplaced = bus();
+    mock.tabs.onUpdated = bus();
+    const asked = [];
+    let answers = true;
+    mock.tabs.sendMessage = async (id, msg) => {
+      asked.push({ id, msg });
+      if (!answers) throw new Error('Could not establish connection. Receiving end does not exist.');
+      return { ok: true };
+    };
+    const reloads = [];
+    mock.tabs.reload = async id => { reloads.push(id); };
+    const create = mock.tabs.create;
+    mock.tabs.create = async opts => create.call(mock.tabs, Object.assign({ windowId: env.batch() && env.batch().windowId }, opts));
+    const from = (id, url) => Object.assign(env.fromTab(id), { url });
+    const GH = 'https://job-boards.greenhouse.io/embed/job_app?for=co&token=1';
+    await env.boot();
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 2, jobs: jobs(2) });
+    await env.settle();
+    let t1 = env.job('job1').tabId;
+    const t2 = env.job('job2').tabId;
+    assert.ok(mock.tabs.updatedCalls.some(c => c.id === t1 && c.opts.autoDiscardable === false), 'batch tabs are kept in memory');
+    await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, GH));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, from(t1, GH));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'needs-you', reason: 'x', filled: 2 }, from(t1, GH));
+
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, from(t2, GH));
+
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' }), { ok: true });
+    assert.deepStrictEqual(asked.pop(), { id: t1, msg: { type: 'LIT_BATCH_ASSIST', jobId: 'job1' } });
+
+    // A new page in that tab (reload, discard) is told to fill, never submit.
+    mock.tabs.onReplaced.emit(9001, t1);
+    await env.settle();
+    t1 = 9001;
+    assert.strictEqual(env.job('job1').tabId, 9001, 'a discarded tab keeps its job under the new id');
+    let hi = await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, GH));
+    assert.strictEqual(hi.mode, 'assist');
+    assert.strictEqual(hi.hops, true, 'just opened');
+    env.now += env.LB.ASSIST_MS + 1;
+    hi = await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, GH));
+    assert.deepStrictEqual([hi.mode, hi.hops], ['assist', false], 'a later reload fills but presses nothing');
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_HELLO' }, from(t1, 'https://elsewhere.example.com/form')), { job: null }, 'a tab taken elsewhere is left alone');
+    assert.strictEqual((await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, from(t1, GH))).ok, false, 'an assisting page can never submit');
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_ASSISTED', filled: 6, missing: [], ready: true, reason: 'Filled. Review and submit.' }, from(t1, GH)), { ok: true });
+    assert.deepStrictEqual([env.job('job1').status, env.job('job1').filled], ['ready', 6]);
+
+    // Nobody answers on a job board after the extension was updated: one reload.
+    answers = false;
+    mock.tabs.store.set(9001, { id: 9001, windowId: env.batch().windowId });
+    env.job('job1').assistAt = null;
+    env.LB.install({ now: () => env.now, setTimeout: () => {}, injectAutofill: async () => { throw new Error('no access'); } });
+    await env.settle();
+    env.batch().jobs[0].lastHelloAt = 0;
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' }), { ok: true });
+    assert.deepStrictEqual(reloads, [9001]);
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' }), { ok: true, noAccess: true }, 'never reloads twice');
+    assert.strictEqual(reloads.length, 1);
+
+    // The user closed it: opened again.
+    mock.tabs.store.delete(9001);
+    mock.tabs.onRemoved.emit(9001, {});
+    await env.settle();
+    assert.strictEqual(env.job('job1').tabId, null);
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_FOCUS', jobId: 'job1' }), { ok: true });
+    assert.strictEqual(mock.tabs.createdCalls.slice(-1)[0].url, GH);
+    assert.ok(typeof env.job('job1').tabId === 'number');
+
+    // After Submit was pressed nothing refills the form.
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'submitting' }, from(t2, GH));
+    await env.send({ type: 'LIT_BATCH_UPDATE', status: 'needs-you', reason: 'Submitted but no confirmation seen' }, from(t2, GH));
+    assert.deepStrictEqual(await env.send({ type: 'LIT_BATCH_HELLO' }, from(t2, GH)), { job: null });
+    await env.settle();
+    uninstallMockChrome();
+    console.log('[PASS] Open fills unfinished jobs: asks the driver, survives discards, reloads and closed tabs, never submits');
+  }
+
+  {
+    // A company site LIT may not touch says so, without the 90 s wait.
+    const env = setup();
+    await env.boot();
+    env.LB.install({ now: () => env.now, setTimeout: () => {}, injectAutofill: async () => { throw new Error('no access'); } });
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 1, jobs: jobs(1, { url: 'https://careers.example.com/apply' }) });
+    await env.settle();
+    await env.advance(21 * 1000);
+    await env.settle();
+    assert.strictEqual(env.job('job1').noAccess, true);
+    await env.advance(10 * 1000);
+    assert.deepStrictEqual([env.job('job1').status, env.job('job1').reason], ['needs-you', env.LB.NO_ACCESS]);
+    await env.settle();
+    uninstallMockChrome();
+    console.log('[PASS] A site without access is reported as such');
+  }
+
+  // Open shows one page: that tab alone moves beside the Jobright tab.
+  {
+    const env = setup();
+    const { mock } = env;
+    await env.boot();
+    mock.windows.store.set(7, { id: 7, focused: true });
+    mock.tabs.store.set(70, { id: 70, windowId: 7, url: 'https://jobright.ai/jobs/recommend', active: true });
+    const panel = { id: mock.runtime.id, tab: { id: 70, windowId: 7, index: 2 }, frameId: 0 };
+    const inWindow = id => Array.from(mock.tabs.store.values()).filter(t => t.windowId === id).map(t => t.id);
+    await env.send({ type: 'LIT_BATCH_START', concurrency: 4, jobs: jobs(4) });
+    await env.settle();
+    const batchWin = env.batch().windowId;
+    const ids = env.batch().jobs.map(j => j.tabId);
+    for (const id of ids) {
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'filling' }, env.fromTab(id));
+      await env.send({ type: 'LIT_BATCH_UPDATE', status: 'needs-you', reason: 'x' }, env.fromTab(id));
+    }
+    const open = jobId => env.send({ type: 'LIT_BATCH_FOCUS', jobId }, panel);
+
+    mock.windows.updatedCalls.length = 0;
+    assert.strictEqual((await open('job2')).ok, true);
+    assert.deepStrictEqual(mock.tabs.movedCalls, [{ id: ids[1], opts: { windowId: 7, index: 3 } }]);
+    assert.deepStrictEqual(inWindow(7), [70, ids[1]].sort((a, b) => a - b), 'one company page joins the Jobright window');
+    assert.deepStrictEqual(inWindow(batchWin), [ids[0], ids[2], ids[3]], 'the rest stay behind');
+    assert.ok(mock.windows.updatedCalls.every(c => c.id === 7), 'the batch window is never brought forward');
+    assert.strictEqual(mock.windows.createdCalls.length, 1, 'no extra window');
+    assert.strictEqual(env.job('job2').tabId, ids[1], 'still the same tab');
+
+    // Opening it again shows it where it is.
+    assert.strictEqual((await open('job2')).ok, true);
+    assert.strictEqual(mock.tabs.movedCalls.length, 1, 'not moved twice');
+
+    // A closed one reopens beside Jobright, never in the batch window.
+    await mock.tabs.remove(ids[2]);
+    await env.settle();
+    assert.strictEqual((await open('job3')).ok, true);
+    assert.deepStrictEqual(mock.tabs.createdCalls.slice(-1)[0], { url: jobs(3)[2].url, active: true, windowId: 7, index: 3 });
+
+    // Chrome refuses the move: a window of its own, not the batch window.
+    mock.tabs.move = async () => { throw new Error('Tabs cannot be moved'); };
+    assert.strictEqual((await open('job1')).ok, true);
+    const own = mock.tabs.store.get(ids[0]).windowId;
+    assert.ok(own !== batchWin && own !== 7);
+    assert.deepStrictEqual(inWindow(own), [ids[0]]);
+    assert.deepStrictEqual(inWindow(batchWin), [ids[3]]);
+    uninstallMockChrome();
+    console.log('[PASS] Open shows one company page, beside the Jobright tab');
   }
 
   console.log('--- test/batch-runner.test.js COMPLETED SUCCESSFULLY ---');

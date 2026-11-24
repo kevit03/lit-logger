@@ -197,15 +197,15 @@ async function run() {
     const rand = seeded(7);
     for (let i = 0; i < 200; i++) {
       const d = R.idleDelay({ now: 1000, lastInteraction: 1000, rand });
-      assert.ok(d >= 8000 && d <= 15000, 'delay in range: ' + d);
+      assert.ok(d >= 5000 && d <= 10000, 'delay in range: ' + d);
     }
     assert.strictEqual(R.idleDelay({ now: 55000, lastInteraction: 0, rand: () => 0.99 }), 5050, 'never sleeps past the nap point');
     assert.strictEqual(R.idleDelay({ now: 90000, lastInteraction: 0, rand: () => 0.5 }), 1200, 'nap due: soon');
     assert.strictEqual(R.idleDecision({ now: 61000, lastInteraction: 0, rand }), 'nap');
     assert.strictEqual(R.idleDecision({ now: 30000, lastInteraction: 0, rand: () => 0.1 }), 'wander', 'not quiet long enough to nap');
     assert.strictEqual(R.idleDecision({ now: 61000, lastInteraction: 0, nudge: true }), 'wave', 'a nudge outranks a nap');
-    assert.strictEqual(R.idleDecision({ now: 0, lastInteraction: 0, rand: () => 0.5 }), 'look');
-    assert.strictEqual(R.idleDecision({ now: 0, lastInteraction: 0, rand: () => 0.5, last: 'look' }), 'wander', 'no pose twice in a row');
+    assert.strictEqual(R.idleDecision({ now: 0, lastInteraction: 0, rand: () => 0.6 }), 'look');
+    assert.strictEqual(R.idleDecision({ now: 0, lastInteraction: 0, rand: () => 0.6, last: 'look' }), 'wander', 'no pose twice in a row');
     const seen = new Set();
     const r2 = seeded(3);
     for (let i = 0; i < 400; i++) seen.add(R.idleDecision({ now: 0, lastInteraction: 0, rand: r2 }));
@@ -276,6 +276,105 @@ async function run() {
   }
 
   // A victory lap around the ring keeps the feet on the circle.
+  // Thrown: a rigid body. Bounces lose the right share of speed, friction
+  // trades spin for speed and never adds energy, and it ends upright and still.
+  {
+    const B = R.BODY;
+    const bounds = { left: 19, right: 361, top: 39, bottom: 560 };
+    const energy = b => 0.5 * (b.vx * b.vx + b.vy * b.vy) + 0.5 * B.inertia * b.w * b.w;
+    let b = { vx: 600, vy: 0, w: 0 };
+    near(R.collide(b, -1, 0, B.wall), 600, 1e-9, 'impact speed');
+    near(b.vx, -600 * B.wall, 1e-9, 'a wall gives back its share');
+    assert.strictEqual(R.collide({ vx: -5, vy: 0, w: 0 }, -1, 0, B.wall), 0, 'moving away is no contact');
+
+    // Sliding down the right wall: friction slows the slide and spins it.
+    b = { vx: 500, vy: 400, w: 0 };
+    R.collide(b, -1, 0, B.wall);
+    assert.ok(b.vy < 400 && b.vy > 0, 'the wall drags on it');
+    assert.ok(b.w !== 0, 'and sets it spinning');
+    const right = Math.sign(b.w);
+    b = { vx: -500, vy: 400, w: 0 };
+    R.collide(b, 1, 0, B.wall);
+    assert.strictEqual(Math.sign(b.w), -right, 'the other wall spins it the other way');
+
+    // Backspin on the ground kicks it back; topspin sends it on.
+    b = { vx: 0, vy: 500, w: 20 };
+    R.collide(b, 0, -1, B.ground);
+    assert.ok(b.vx > 0 && b.w < 20, 'clockwise spin drives it right and slows');
+
+    const rand = seeded(11);
+    for (let i = 0; i < 400; i++) {
+      const a = rand() * Math.PI * 2;
+      const c = { vx: (rand() - 0.5) * 3000, vy: (rand() - 0.5) * 3000, w: (rand() - 0.5) * 40 };
+      const before = energy(c);
+      R.collide(c, Math.cos(a), Math.sin(a), 0.74);
+      assert.ok(energy(c) <= before + 1e-6, 'a bounce never adds energy');
+    }
+
+    // Whole throws, from every direction.
+    for (let i = 0; i < 60; i++) {
+      const sides = new Set();
+      const t = { x: 40 + rand() * 280, y: 100 + rand() * 300, vx: (rand() - 0.5) * 3600, vy: (rand() - 0.5) * 3600, a: (rand() - 0.5) * 6, w: (rand() - 0.5) * 30, on: null };
+      const perches = [{ key: 'p', kind: 'card', x1: 26, x2: 354, lo: 44, hi: 336, y: 300 }];
+      let steps = 0;
+      while (!(t.on && t.still) && steps++ < 9 * 240) {
+        R.stepThrown(t, B.step, bounds, perches, side => sides.add(side));
+        assert.ok(t.x >= bounds.left - 1e-9 && t.x <= bounds.right + 1e-9 && t.y >= bounds.top - 1e-9 && t.y <= bounds.bottom + 1e-9, 'stays inside the walls');
+        assert.ok([t.x, t.y, t.vx, t.vy, t.a, t.w].every(Number.isFinite), 'no blow-ups');
+      }
+      assert.ok(t.on && t.still, 'comes to rest, throw ' + i);
+      assert.ok(Math.abs(R.wrapAngle(t.a)) < 0.05, 'on its feet');
+      assert.ok(sides.has('ground'));
+    }
+    // A hard sideways throw rattles between both walls.
+    const hits = [];
+    const t = { x: 190, y: 120, vx: 2000, vy: -300, a: 0, w: 0, on: null };
+    for (let i = 0; i < 2 * 240 && !t.on; i++) R.stepThrown(t, B.step, bounds, [], side => hits.push(side));
+    assert.ok(hits.filter(h => h === 'left' || h === 'right').length >= 3, 'several wall bounces: ' + hits);
+    assert.deepStrictEqual(hits.filter(h => h === 'left' || h === 'right').slice(0, 2), ['right', 'left']);
+
+    near(R.wrapAngle(Math.PI * 4 + 0.3), 0.3, 1e-9);
+    near(R.wrapAngle(-Math.PI * 2 - 0.2), -0.2, 1e-9);
+    console.log('[PASS] A thrown buddy bounces, spins and settles like a rigid body');
+  }
+
+  // Held: it lags behind the pointer, swings past, and hangs still again.
+  {
+    let st = { t: 0, w: 0 };
+    for (let i = 0; i < 30; i++) st = R.stepSwing(st.t, st.w, 4000, 0, 0.004);
+    assert.ok(st.t > 0.2, 'speeding right swings the feet left');
+    let least = 0;
+    for (let i = 0; i < 1500; i++) { st = R.stepSwing(st.t, st.w, 0, 0, 0.004); least = Math.min(least, st.t); }
+    assert.ok(least < -0.05, 'swings past the middle');
+    assert.ok(Math.abs(st.t) < 0.02 && Math.abs(st.w) < 0.1, 'and comes to hang straight');
+    console.log('[PASS] A held buddy swings like a pendulum');
+  }
+
+  // Jumping up: the nearest edge above, and climbs as likely as drops.
+  {
+    const perches = R.buildPerches([
+      { key: 'a', kind: 'card', rect: { left: 16, top: 100, right: 364, bottom: 200 } },
+      { key: 'b', kind: 'card', rect: { left: 16, top: 250, right: 364, bottom: 300 } },
+      { key: 'c', kind: 'card', rect: { left: 16, top: 400, right: 364, bottom: 450 } },
+      { key: 'floor', kind: 'floor', rect: { left: 8, top: 540, right: 372, bottom: 541 } }
+    ], [], SIZE);
+    assert.strictEqual(R.climbTarget(perches, { x: 100, y: 401, key: 'c' }).key, 'b');
+    assert.strictEqual(R.climbTarget(perches, { x: 100, y: 541, key: 'floor' }).key, 'c', 'off the floor too');
+    assert.strictEqual(R.climbTarget(perches, { x: 100, y: 101, key: 'a' }), null, 'nothing above the top');
+    const rand = seeded(5);
+    const tally = { up: 0, down: 0 };
+    for (let i = 0; i < 600; i++) {
+      const spot = R.pickWander(perches, { x: 100, y: 251, key: 'b', last: i % 2 ? 'up' : 'down' }, rand);
+      if (spot.key === 'a') tally.up++;
+      if (spot.key === 'c') tally.down++;
+    }
+    assert.ok(tally.up > 150 && tally.down > 100, 'goes both ways: ' + JSON.stringify(tally));
+    let up = 0;
+    for (let i = 0; i < 200; i++) if (R.pickWander(perches, { x: 100, y: 251, key: 'b', last: 'down' }, rand).key === 'a') up++;
+    assert.ok(up > 80, 'after a drop it usually climbs: ' + up);
+    console.log('[PASS] The buddy jumps up as readily as down');
+  }
+
   {
     const top = R.orbitPoint(100, 100, 50, 0);
     near(top.x, 100); near(top.y, 50); assert.strictEqual(top.rot, 0);
