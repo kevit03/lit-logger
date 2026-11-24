@@ -11,8 +11,18 @@
 // Only this file writes lit_batch and lit_batch_done. The Jobright panel
 // reads them; the driver in each job tab (content/autofill/auto-apply.js)
 // reports progress with LIT_BATCH_UPDATE. It also answers LIT_BATCH_CAPS
-// (what the panel and driver may count on: all-sites access, Claude answers)
-// and LIT_OPEN_OPTIONS (the panel's link to the Autofill profile page).
+// (what the panel and driver may count on: all-sites access, Claude answers,
+// a filled-in profile) and LIT_OPEN_OPTIONS (the panel's link to the Autofill
+// profile page).
+//
+// A job that ended as needs-you, ready or failed stays the user's to finish.
+// Its page can lose what LIT typed at any time: the tab is reloaded, Chrome
+// discards it to save memory, the extension is updated, or the form only
+// shows up once someone is looking. So LIT_BATCH_FOCUS (the panel's Open
+// button) shows that one tab beside the Jobright page, leaving the batch window
+// behind, and also makes sure the form gets filled, reopening the tab if it is
+// gone, and a page that says hello for such a job is told to `assist`: fill
+// the form, never submit (LIT_BATCH_ASSISTED reports back).
 const LitBatch = (() => {
   const KEY = 'lit_batch';
   const DONE_KEY = 'lit_batch_done';
@@ -24,6 +34,7 @@ const LitBatch = (() => {
   const OPEN_TIMEOUT_MS = 90 * 1000;
   const HARD_TIMEOUT_MS = 6 * 60 * 1000;
   const INJECT_AFTER_MS = 20 * 1000;
+  const NO_ACCESS_WAIT_MS = 30 * 1000;
   const CLOSE_DELAY_MS = 1500;
   const DONE_CAP = 2000;
   const MAX_CONCURRENCY = 10;
@@ -33,9 +44,21 @@ const LitBatch = (() => {
   const MAX_REASON = 160;
   const MAX_TEXT = 200;
   const SETTINGS_KEY = 'af_settings';
+  const PROFILE_KEY = 'af_profile';
   const ALL_SITES = ['*://*/*'];
 
   const ACTIVE = ['opening', 'filling', 'submitting'];
+  // Ended, but with a form the user still has to finish.
+  const UNFINISHED = ['needs-you', 'ready', 'failed'];
+  // How long after Open a job's tab may wander to a new site (an apply link,
+  // a sign-in) and still count as that job's.
+  const ASSIST_MS = 2 * 60 * 1000;
+  // After a page finishes loading, give the manifest's own scripts time to
+  // run before adding them.
+  const INJECT_SETTLE_MS = 1500;
+  const RECENT_HELLO_MS = 15 * 1000;
+  const MAX_HOSTS = 8;
+  const NO_ACCESS = 'No access to this site';
   const TERMINAL = ['submitted', 'ready', 'needs-you', 'failed', 'skipped'];
   // The only moves a driver may make. Anything else is a stale or confused
   // driver and is refused, so it stops.
@@ -150,13 +173,31 @@ const LitBatch = (() => {
         if (r && typeof r.catch === 'function') r.catch(() => {});
       } catch (e) { /* already closed */ }
     }
-    ctx.injects.forEach(tabId => {
-      if (typeof hooks.injectAutofill !== 'function') return;
-      Promise.resolve().then(() => hooks.injectAutofill(tabId)).catch(() => {});
-    });
+    ctx.injects.forEach(tabId => { inject(tabId); });
     // Best-effort wake-ups for deadlines shorter than the alarm period. If the
     // worker dies first, the alarm or the next event catches up.
     Array.from(new Set(ctx.timers)).forEach(ms => later(() => { tick(); }, ms));
+  }
+
+  // Adds the autofill scripts to a tab that has none. Resolves false when
+  // Chrome refuses: LIT has no access to that site, which is recorded on the
+  // job so the panel can say so.
+  async function inject(tabId) {
+    if (typeof hooks.injectAutofill !== 'function') return true;
+    try {
+      await hooks.injectAutofill(tabId);
+      return true;
+    } catch (e) {
+      await step(ctx => {
+        const job = ctx.state && ctx.state.jobs.find(j => j.tabId === tabId);
+        // The manifest's own script answered from this page: not a refusal.
+        if (!job || job.noAccess || ctx.now - (job.lastHelloAt || 0) < RECENT_HELLO_MS) return;
+        job.noAccess = true;
+        if (UNFINISHED.includes(job.status) && !job.filled) job.reason = NO_ACCESS;
+        ctx.dirty = true;
+      });
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -178,8 +219,11 @@ const LitBatch = (() => {
     state.jobs.forEach(job => {
       if (isActive(job)) {
         const age = now - (Number.isFinite(job.startedAt) ? job.startedAt : now);
-        if (job.status === 'opening' && age >= OPEN_TIMEOUT_MS) {
-          finish(ctx, job, 'needs-you', 'No application form found');
+        if (job.status === 'opening' && job.noAccess && age >= NO_ACCESS_WAIT_MS) {
+          // Long enough for a redirect to a site LIT does cover.
+          finish(ctx, job, 'needs-you', NO_ACCESS);
+        } else if (job.status === 'opening' && age >= OPEN_TIMEOUT_MS) {
+          finish(ctx, job, 'needs-you', job.noAccess ? NO_ACCESS : 'No application form found');
         } else if (age >= HARD_TIMEOUT_MS) {
           finish(ctx, job, 'needs-you', 'Timed out');
         } else if (job.status === 'opening' && age >= INJECT_AFTER_MS && !job.helloAt && !job.injectedAt && typeof job.tabId === 'number') {
@@ -210,6 +254,15 @@ const LitBatch = (() => {
     ctx.dirty = true;
   }
 
+  // Chrome discards background tabs to save memory, and a discarded form
+  // comes back empty. Best effort; Open refills the form either way.
+  function keepInMemory(tabId) {
+    try {
+      const r = chrome.tabs.update(tabId, { autoDiscardable: false });
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch (e) { /* not supported here */ }
+  }
+
   async function openTab(state, url) {
     if (typeof state.windowId === 'number') {
       try {
@@ -229,11 +282,12 @@ const LitBatch = (() => {
   }
 
   async function launch(ctx, job) {
-    Object.assign(job, { status: 'opening', startedAt: ctx.now, updatedAt: ctx.now, reason: '', tabId: null, frameId: null, helloAt: null, injectedAt: null });
+    Object.assign(job, { status: 'opening', startedAt: ctx.now, updatedAt: ctx.now, reason: '', tabId: null, frameId: null, helloAt: null, injectedAt: null, noAccess: false });
     ctx.dirty = true;
     try {
       job.tabId = await openTab(ctx.state, job.url);
-      ctx.timers.push(INJECT_AFTER_MS + 50, OPEN_TIMEOUT_MS + 50);
+      keepInMemory(job.tabId);
+      ctx.timers.push(INJECT_AFTER_MS + 50, NO_ACCESS_WAIT_MS + 50, OPEN_TIMEOUT_MS + 50);
     } catch (e) {
       finish(ctx, job, 'failed', 'Could not open a tab');
     }
@@ -376,17 +430,98 @@ const LitBatch = (() => {
     });
   }
 
-  async function focus(msg) {
-    const state = await step(ctx => ctx.state);
-    const job = state && state.jobs.find(j => j.jobId === msg.jobId);
-    if (!job || typeof job.tabId !== 'number') return { ok: false, error: 'That tab is closed' };
+  // Takes one job's tab out of the batch window, so Open shows that page and
+  // not every company's. It lands beside the tab Open was clicked in, else in
+  // a window of its own. Moving a tab keeps its page and anything typed in it.
+  async function bringOut(state, tabId, home) {
+    const tab = await chrome.tabs.get(tabId);
+    // Already out of the batch window, or the panel itself is in there.
+    if (tab.windowId !== state.windowId || (home && home.windowId === tab.windowId)) return;
+    if (home) {
+      // -1 (the end) covers spots Chrome refuses.
+      for (const index of [home.index, -1]) {
+        try { await chrome.tabs.move(tabId, { windowId: home.windowId, index }); return; } catch (e) { /* next */ }
+      }
+    }
+    try { await chrome.windows.create({ tabId, focused: true }); } catch (e) { /* shown where it is */ }
+  }
+
+  // The last focused window (the default) could be the batch window.
+  async function createBeside(url, home) {
+    if (home) {
+      const spot = { url, active: true, windowId: home.windowId };
+      if (home.index >= 0) spot.index = home.index;
+      try { return await chrome.tabs.create(spot); } catch (e) { /* that window is gone */ }
+    }
+    return chrome.tabs.create({ url, active: true });
+  }
+
+  // Where Open was clicked: the window, and the spot right after that tab.
+  function homeOf(sender) {
+    const tab = sender && sender.tab;
+    if (!tab || typeof tab.windowId !== 'number') return null;
+    return { windowId: tab.windowId, index: typeof tab.index === 'number' && tab.index >= 0 ? tab.index + 1 : -1 };
+  }
+
+  // Shows one job's tab and makes sure its form is filled. A tab that is gone
+  // is opened again.
+  async function focus(msg, sender) {
+    const home = homeOf(sender);
+    const opened = await step(async ctx => {
+      const job = ctx.state && ctx.state.jobs.find(j => j.jobId === msg.jobId);
+      if (!job) return { ok: false, error: 'That job is not in this batch' };
+      const unfinished = UNFINISHED.includes(job.status);
+      const first = !job.assistAt;
+      if (typeof job.tabId === 'number') {
+        try {
+          await bringOut(ctx.state, job.tabId, home);
+          const tab = await chrome.tabs.update(job.tabId, { active: true });
+          const windowId = tab && typeof tab.windowId === 'number' ? tab.windowId : ctx.state.windowId;
+          if (typeof windowId === 'number') await chrome.windows.update(windowId, { focused: true });
+          if (unfinished) { job.assistAt = ctx.now; ctx.dirty = true; }
+          return { ok: true, tabId: job.tabId, assist: unfinished, first, hadDriver: !!job.helloAt };
+        } catch (e) {
+          job.tabId = null;
+          ctx.dirty = true;
+        }
+      }
+      if (!unfinished) return { ok: false, error: 'That tab is closed' };
+      try {
+        const tab = await createBeside(job.url, home);
+        job.tabId = tab.id;
+        job.assistAt = ctx.now;
+        job.noAccess = false;
+        ctx.dirty = true;
+        keepInMemory(job.tabId);
+        if (typeof tab.windowId === 'number') chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+        // Its driver says hello when the page loads; see onTabUpdated for
+        // sites the manifest does not cover.
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: 'Could not open a tab' };
+      }
+    });
+    if (!opened.ok || !opened.assist) return opened.ok ? { ok: true } : { ok: false, error: opened.error };
+
+    if (await askToAssist(opened.tabId, msg.jobId)) return { ok: true };
+    // Nobody home. Add the scripts where LIT may; where only the manifest
+    // puts them (a job board after the extension was updated), load the page
+    // again, but only on the first Open so nothing typed since is lost.
+    if (await inject(opened.tabId)) return { ok: true };
+    if (opened.hadDriver && opened.first && typeof chrome.tabs.reload === 'function') {
+      try { await chrome.tabs.reload(opened.tabId); return { ok: true }; } catch (e) { /* gone */ }
+    }
+    return { ok: true, noAccess: true };
+  }
+
+  // True when a driver in that tab answered.
+  async function askToAssist(tabId, jobId) {
+    if (typeof chrome.tabs.sendMessage !== 'function') return false;
     try {
-      const tab = await chrome.tabs.update(job.tabId, { active: true });
-      const windowId = tab && typeof tab.windowId === 'number' ? tab.windowId : state.windowId;
-      if (typeof windowId === 'number') await chrome.windows.update(windowId, { focused: true });
-      return { ok: true };
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'LIT_BATCH_ASSIST', jobId });
+      return !!(res && res.ok);
     } catch (e) {
-      return { ok: false, error: 'That tab is closed' };
+      return false;
     }
   }
 
@@ -396,11 +531,61 @@ const LitBatch = (() => {
     return state.jobs.find(j => j.tabId === tabId && !isTerminal(j) && j.status !== 'queued') || null;
   }
 
+  function senderHost(sender) {
+    return hostOf((sender && sender.url) || (sender && sender.tab && sender.tab.url) || '');
+  }
+
+  // Sites this job's tab has been on, so a tab the user later takes somewhere
+  // else is left alone.
+  function rememberHost(ctx, job, host) {
+    const hosts = Array.isArray(job.hosts) ? job.hosts : [];
+    if (!host || hosts.includes(host) || hosts.length >= MAX_HOSTS) return;
+    job.hosts = hosts.concat(host);
+    ctx.dirty = true;
+  }
+
+  function markHello(ctx, job) {
+    if (!job.helloAt) job.helloAt = ctx.now;
+    job.lastHelloAt = ctx.now;
+    job.noAccess = false;
+    ctx.dirty = true;
+  }
+
+  // The unfinished job a page belongs to, when LIT should fill it for the user.
+  function assistFor(ctx, sender) {
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    if (!ctx.state || typeof tabId !== 'number') return null;
+    const job = ctx.state.jobs.find(j => j.tabId === tabId && UNFINISHED.includes(j.status));
+    // Submit was pressed: the form is no longer ours to fill.
+    if (!job || job.submitAt) return null;
+    const host = senderHost(sender);
+    const recent = !!job.assistAt && ctx.now - job.assistAt < ASSIST_MS;
+    if (!recent && (!host || (host !== job.host && !(job.hosts || []).includes(host)))) return null;
+    rememberHost(ctx, job, host);
+    markHello(ctx, job);
+    return { job: { jobId: job.jobId, title: job.title, company: job.company, url: job.url, status: job.status }, mode: 'assist', hops: recent };
+  }
+
+  // What the driver found after filling an unfinished job's form.
+  function assisted(msg, sender) {
+    return step(ctx => {
+      const tabId = sender && sender.tab ? sender.tab.id : null;
+      const job = ctx.state && typeof tabId === 'number' && ctx.state.jobs.find(j => j.tabId === tabId && UNFINISHED.includes(j.status));
+      if (!job || job.submitAt) return { ok: false };
+      if (Number.isFinite(msg.filled)) job.filled = Math.max(0, Math.floor(msg.filled));
+      if (Number.isFinite(msg.composed)) job.composed = Math.max(0, Math.floor(msg.composed));
+      if (Array.isArray(msg.missing)) job.missing = msg.missing.map(m => text(m, MAX_LABEL)).filter(Boolean).slice(0, MAX_MISSING);
+      finish(ctx, job, msg.ready === true ? 'ready' : 'needs-you', msg.reason);
+      return { ok: true };
+    });
+  }
+
   function hello(sender) {
     return step(ctx => {
       const job = jobForTab(ctx.state, sender);
-      if (!job) return { job: null };
-      if (!job.helloAt) { job.helloAt = ctx.now; ctx.dirty = true; }
+      if (!job) return assistFor(ctx, sender) || { job: null };
+      markHello(ctx, job);
+      rememberHost(ctx, job, senderHost(sender));
       return {
         job: { jobId: job.jobId, title: job.title, company: job.company, url: job.url, status: job.status },
         mode: ctx.state.mode
@@ -430,6 +615,7 @@ const LitBatch = (() => {
         finish(ctx, job, next, msg.reason);
       } else {
         job.status = next;
+        if (next === 'submitting') job.submitAt = ctx.now;
         job.reason = text(msg.reason, MAX_REASON);
         job.updatedAt = ctx.now;
         ctx.dirty = true;
@@ -449,6 +635,46 @@ const LitBatch = (() => {
         job.tabId = null;
         ctx.dirty = true;
       });
+    });
+  }
+
+  // Discarding a tab can give it a new id.
+  function onTabReplaced(addedId, removedId) {
+    return step(ctx => {
+      if (!ctx.state) return;
+      ctx.state.jobs.forEach(job => {
+        if (job.tabId !== removedId) return;
+        job.tabId = addedId;
+        ctx.dirty = true;
+      });
+    });
+  }
+
+  // A page outside the manifest's matches has no scripts of ours, and each
+  // page load (an apply link, a reload) starts without them again.
+  function onTabUpdated(tabId, info) {
+    if (!info || info.status !== 'complete') return Promise.resolve();
+    return step(ctx => {
+      const job = ctx.state && ctx.state.jobs.find(j => j.tabId === tabId);
+      if (!job) return;
+      const opening = job.status === 'opening' && (!job.helloAt || job.injectedAt);
+      const assisting = UNFINISHED.includes(job.status) && !job.submitAt && !!job.assistAt && ctx.now - job.assistAt < ASSIST_MS;
+      if (!opening && !assisting) return;
+      if (opening && !job.injectedAt) { job.injectedAt = ctx.now; ctx.dirty = true; }
+      later(() => { inject(tabId); }, INJECT_SETTLE_MS);
+    });
+  }
+
+  // Tab and window ids mean nothing after a browser restart.
+  function onBrowserStart() {
+    return step(ctx => {
+      if (!ctx.state) return;
+      ctx.state.windowId = null;
+      ctx.state.jobs.forEach(job => {
+        if (isActive(job)) finish(ctx, job, 'needs-you', 'Chrome was restarted');
+        job.tabId = null;
+      });
+      ctx.dirty = true;
     });
   }
 
@@ -473,11 +699,14 @@ const LitBatch = (() => {
     });
   }
 
-  // Never returns the key itself, only whether answers can be written.
+  // Never returns the key or the profile itself, only whether answers can be
+  // written and whether there is anything to fill forms with.
   async function caps() {
-    const [allSites, settings] = await Promise.all([hasAllSites(), getKey(SETTINGS_KEY)]);
+    const [allSites, settings, stored] = await Promise.all([hasAllSites(), getKey(SETTINGS_KEY), getKey(PROFILE_KEY)]);
     const s = settings && typeof settings === 'object' ? settings : {};
-    return { allSites, ai: !!(s.aiEnabled && typeof s.aiKey === 'string' && s.aiKey.trim()) };
+    const p = stored && typeof stored === 'object' ? stored : {};
+    const profile = ['firstName', 'lastName', 'email', 'phone'].some(k => typeof p[k] === 'string' && !!p[k].trim());
+    return { allSites, ai: !!(s.aiEnabled && typeof s.aiKey === 'string' && s.aiKey.trim()), profile };
   }
 
   // --- jobs already applied to (LIT_BATCH_APPLIED) ---------------------------
@@ -547,8 +776,12 @@ const LitBatch = (() => {
     return { ok: true, jobIds: matchApplied(jobs, Array.isArray(logs) ? logs : []) };
   }
 
-  async function openOptions() {
+  async function openOptions(msg) {
     try {
+      if (msg && msg.section === 'settings') {
+        await chrome.tabs.create({ url: chrome.runtime.getURL('options/autofill.html#settings') });
+        return { ok: true };
+      }
       await chrome.runtime.openOptionsPage();
       return { ok: true };
     } catch (e) {
@@ -567,18 +800,19 @@ const LitBatch = (() => {
   function handleMessage(msg, sender, sendResponse) {
     if (!msg || typeof msg.type !== 'string') return false;
     const failed = { ok: false, error: 'Something went wrong' };
-    if (msg.type === 'LIT_OPEN_OPTIONS') return respond(openOptions(), sendResponse, failed);
+    if (msg.type === 'LIT_OPEN_OPTIONS') return respond(openOptions(msg), sendResponse, failed);
     if (msg.type.indexOf('LIT_BATCH_') !== 0) return false;
     switch (msg.type) {
-      case 'LIT_BATCH_CAPS': return respond(caps(), sendResponse, { allSites: false, ai: false });
+      case 'LIT_BATCH_CAPS': return respond(caps(), sendResponse, { allSites: false, ai: false, profile: true });
       case 'LIT_BATCH_APPLIED': return respond(applied(msg), sendResponse, { ok: false, jobIds: [] });
       case 'LIT_BATCH_START': return respond(start(msg), sendResponse, failed);
       case 'LIT_BATCH_STOP': return respond(stop(), sendResponse, failed);
       case 'LIT_BATCH_CLEAR': return respond(clear(), sendResponse, failed);
       case 'LIT_BATCH_REMOVE': return respond(removeJob(msg), sendResponse, failed);
-      case 'LIT_BATCH_FOCUS': return respond(focus(msg), sendResponse, failed);
+      case 'LIT_BATCH_FOCUS': return respond(focus(msg, sender), sendResponse, failed);
       case 'LIT_BATCH_HELLO': return respond(hello(sender), sendResponse, { job: null });
       case 'LIT_BATCH_UPDATE': return respond(update(msg, sender), sendResponse, { ok: false });
+      case 'LIT_BATCH_ASSISTED': return respond(assisted(msg, sender), sendResponse, { ok: false });
       default: return false;
     }
   }
@@ -589,6 +823,15 @@ const LitBatch = (() => {
     hooks = Object.assign({}, h || {});
     if (chrome.tabs && chrome.tabs.onRemoved) {
       chrome.tabs.onRemoved.addListener(tabId => { onTabRemoved(tabId); });
+    }
+    if (chrome.tabs && chrome.tabs.onReplaced) {
+      chrome.tabs.onReplaced.addListener((added, removed) => { onTabReplaced(added, removed); });
+    }
+    if (chrome.tabs && chrome.tabs.onUpdated) {
+      chrome.tabs.onUpdated.addListener((tabId, info) => { onTabUpdated(tabId, info); });
+    }
+    if (chrome.runtime && chrome.runtime.onStartup) {
+      chrome.runtime.onStartup.addListener(() => { onBrowserStart(); });
     }
     if (chrome.alarms && chrome.alarms.onAlarm) {
       chrome.alarms.onAlarm.addListener(alarm => { if (alarm && alarm.name === ALARM) tick(); });
@@ -610,6 +853,8 @@ const LitBatch = (() => {
     HARD_TIMEOUT_MS,
     INJECT_AFTER_MS,
     CLOSE_DELAY_MS,
+    ASSIST_MS,
+    NO_ACCESS,
     DONE_CAP
   };
 })();
