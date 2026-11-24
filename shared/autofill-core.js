@@ -366,12 +366,14 @@ const AutofillCore = (() => {
   const MULTI_RE = /\b(all|any|each) (that|which) appl(y|ies)\b|\b(select|check|choose|pick|mark|tick) (all|any|multiple|one or more|as many|up to \w+)\b/;
   const ACTION_RE = new RegExp('^(submit( application)?|apply( now)?|next( step| page)?|continue|back|go back|previous|prev|' +
     'save( and continue| draft| changes)?|cancel|close|done|finish|review|upload( file| resume| cv)?|attach( file| resume)?|' +
-    'browse|add( another| more| new| item)?|remove|delete|edit|clear|reset|sign in|log in|login|sign up|register|share|' +
+    'browse|add( another| more| new| item)?|remove|delete|edit|clear( all| selections?)?|toggle( flyout| menu| dropdown)?|reset|sign in|log in|login|sign up|register|share|' +
     'print|download|copy( link)?|show (more|less)|learn more|view( more| all| job)?|search|enter manually|skip|' +
     'accept( all| cookies)?|reject( all)?|ok|okay|got it|dismiss|help|menu|x|autofill|fill again|' +
     'dropbox|google drive|one ?drive|locate me|use (my|current) location|(upload|import|apply) (from|with) .+)$');
   const NOT_CHOICE_SCOPE = 'nav, header, footer, [role="navigation"], [role="listbox"], [role="menu"], [role="menubar"], ' +
-    '[role="toolbar"], [role="tablist"], [data-lit-autofill-ignore]';
+    '[role="toolbar"], [role="tablist"], [data-lit-autofill-ignore], ' +
+    // react-select's clear and open buttons, once a value is chosen.
+    '.select__control, .select__indicators';
   const STATE_ATTRS = ['aria-pressed', 'aria-checked', 'aria-selected'];
   const STATE_CLASS_RE = /(^|[\s_-])(selected|checked|pressed|active|chosen)($|[\s_-])/i;
   // Groups found during one scan; label extraction asks about the same
@@ -1061,7 +1063,7 @@ const AutofillCore = (() => {
       exact: [/\b(salary|compensation|pay|wage)\b.*\b(expectation|expected|requirement|desired|range|target)/, /\b(expected|desired|target)\b.*\b(salary|compensation|pay)\b/, /^(salary|compensation)$/],
       loose: [/\bsalary\b/, /\bcompensation\b/], maxWords: 10 },
     { key: 'howDidYouHear', kinds: TEXTISH.concat(['radio']),
-      exact: [/\bhow did you (hear|find|learn|come across|discover)\b/, /\bwhere did you (hear|find|see|learn)\b/, /^(referral |application |lead |candidate |job )?source$/, /\bhear about (us|this)\b/],
+      exact: [/\bhow did you (hear|find|learn|come across|discover)\b/, /\bwhere did you (hear|find|see|learn)\b/, /^(referral |application |lead |candidate |job )?source$/, /\bhear about (us|this)\b/, /\bhow you (first )?(heard|learned|found out)\b/],
       loose: [/\bsource\b/], maxWords: 4 },
     { key: 'yearsExperience', kinds: TEXTISH,
       exact: [/\byears? of (professional |relevant |work |industry |total )?experience\b/, /\bhow many years\b/, /^experience( years)?$/],
@@ -1101,7 +1103,8 @@ const AutofillCore = (() => {
     { key: 'addressLine2', kinds: TEXTISH,
       exact: [/\baddress (line )?2\b/, /^(apt|apartment|suite|unit)\b/, /\bstreet address 2\b/] },
     { key: 'location', kinds: TEXTISH,
-      exact: [/^((current|your|home) )?location$/, /^(current )?city (and|or)? ?state( country)?$/, /^where are you (currently )?(located|based)$/, /^(current )?city state$/],
+      exact: [/^((current|your|home) )?location$/, /^(current )?city (and|or)? ?state( country)?$/, /^where are you (currently )?(located|based)$/, /^(current )?city state$/,
+        /^where do you (currently )?(live|reside)$/, /\b(in|which|what) (city and state|city state)\b.*\b(reside|live|located|based)\b/],
       loose: [/\blocation\b/], maxWords: 3 },
     { key: 'addressLine1', kinds: TEXTISH,
       not: [/\b(e ?mail|web|url|ip|line 2|2)\b/],
@@ -1119,7 +1122,8 @@ const AutofillCore = (() => {
       loose: [/\bzip\b/, /\bpostal\b/, /\bpost ?code\b/] },
     { key: 'country', kinds: TEXTISH,
       not: [/\b(code|citizenship|citizen|passport)\b/],
-      exact: [/^((current|home|your) )?country( region| territory| of residence)?$/],
+      exact: [/^((current|home|your) )?country( region| territory| of residence)?$/,
+        /^((please )?(select|choose|enter) )?(what|which|the|your) country\b.{0,24}\b(reside|residing|live|living|located|based)( in)?$/],
       loose: [/\bcountry\b/], maxWords: 5 },
     { key: 'gpa', kinds: TEXTISH, exact: [/\bgpa\b/, /\bgrade point average\b/, /\bcumulative grade\b/] },
     { key: 'gradMonth', kinds: TEXTISH, exact: [/\bgraduation month\b/, /\bmonth of graduation\b/, /\bgrad month\b/] },
@@ -1140,10 +1144,12 @@ const AutofillCore = (() => {
         /\b(school|university|college)\b.*\battend(ing|ed)?\b/],
       loose: [/\b(school|university|college|institution)\b/], maxWords: 6 },
     { key: 'currentCompany', kinds: TEXTISH,
-      exact: [/^((current|most recent|present|latest) )?(company|employer|organization|organisation|org)( name)?$/],
+      exact: [/^((current|most recent|present|latest) )?(company|employer|organization|organisation|org)( name)?$/,
+        /^(who|what) is your (current|most recent|present|latest)( or (previous|last|former|most recent))? (company|employer|organi[sz]ation)( name)?$/],
       loose: [/\b(current|present|most recent|latest) (company|employer|organization)\b/], maxWords: 6 },
     { key: 'currentTitle', kinds: TEXTISH,
-      exact: [/^((current|most recent|present|latest) )?(job )?(title|position|role)$/],
+      exact: [/^((current|most recent|present|latest) )?(job )?(title|position|role)$/,
+        /^what is your (current|most recent|present|latest)( or (previous|last|former|most recent))? (job )?(title|position|role)$/],
       loose: [/\b(current|present|most recent|latest) (job )?(title|position|role)\b/], maxWords: 6 },
     { key: 'resume', kinds: ['file'],
       not: [/\bcover\b/, /\btranscript\b/],

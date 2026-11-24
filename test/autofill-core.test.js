@@ -228,6 +228,15 @@ async function run() {
     assert.strictEqual(C.matchField(d('Favorite color'), PROFILE, [], 'x.com'), null);
     assert.strictEqual(C.matchField(d('First Name'), Object.assign({}, PROFILE, { firstName: '' }), [], 'x.com'), null, 'empty profile value is no match');
     assert.strictEqual(C.matchField(d('Anything', { kind: 'email' }), PROFILE, [], 'x.com').profileKey, 'email', 'type=email fallback');
+    // Wordings seen on live Greenhouse, Ashby and Lever forms.
+    [['Please select the country where you currently reside.', 'country'], ['What country are you based in?', 'country'],
+      ['If located in the US, in what city and state do you reside?', 'location'],
+      ['Who is your current or previous employer?', 'currentCompany'],
+      ['What is your current or previous job title?', 'currentTitle'],
+      ['Please tell us how you heard about this opportunity.', 'howDidYouHear']
+    ].forEach(([label, key]) => assert.strictEqual(hit(label), key, label));
+    ['Are you currently based in the country where this job is located?', 'Which country would you be based in if you relocate?',
+      'Have you ever worked for our company?'].forEach(label => assert.notStrictEqual(hit(label), 'country', label));
     console.log('[PASS] Synonym dictionary covers the profile with exact 0.9 / loose 0.6 and rejects near misses');
   }
 

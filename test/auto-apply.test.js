@@ -286,7 +286,7 @@ test('reload with status submitting: checks for success only, never clicks', asy
   assertNoObservers('reload');
 });
 
-test('assist: fills an unfinished job, reports back, never submits', async () => {
+test('assist: without Open, fills an unfinished job, reports back, never submits', async () => {
   let bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist' });
   let p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg, plan: fillGreenhouse });
   let clicks = m.counter(submitButton(p.doc));
@@ -311,6 +311,30 @@ test('assist: fills an unfinished job, reports back, never submits', async () =>
   await p.api.whenDone();
   assert.strictEqual(bg.messages.find(x => x.type === 'LIT_BATCH_ASSISTED').reason, 'Autofill profile is empty');
   assertNoObservers('assist');
+});
+
+test('assist after Open: submits a complete form once, leaves an incomplete one', async () => {
+  let bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist', submit: true });
+  let p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg, plan: fillGreenhouse });
+  let submit = submitButton(p.doc);
+  let clicks = m.counter(submit);
+  submit.addEventListener('click', () => {
+    m.replaceBody(p.doc, '<h1>Thank you for applying</h1>');
+  });
+  await p.api.whenDone();
+  assert.strictEqual(clicks.n, 1);
+  assert.deepStrictEqual(bg.statuses(), ['submitting', 'submitted']);
+
+  // Nothing filled, so required fields are missing: reported, not sent.
+  bg = m.fakeBackground({ url: GH_EMBED, job: { status: 'needs-you' }, mode: 'assist', submit: true });
+  p = m.page({ fixture: 'greenhouse-embed.html', url: GH_EMBED, bg });
+  submit = submitButton(p.doc);
+  clicks = m.counter(submit);
+  await p.api.whenDone();
+  assert.strictEqual(clicks.n, 0);
+  assert.deepStrictEqual(bg.statuses(), []);
+  assert.strictEqual(bg.messages.find(x => x.type === 'LIT_BATCH_ASSISTED').ready, false);
+  assertNoObservers('assist submit');
 });
 
 test('validation error after the click -> needs-you, one click', async () => {
@@ -449,6 +473,28 @@ test('detectCaptcha: visible challenges only', () => {
   assert.strictEqual(p.api.detectCaptcha(p.doc), null);
   p = m.page({ html: '<div><iframe src="https://www.google.com/recaptcha/api2/anchor?k=x&amp;size=normal"></iframe></div>', bg });
   assert.strictEqual(p.api.detectCaptcha(p.doc), 'reCAPTCHA');
+});
+
+test('false blanks: react-select buttons, choices inside a titled phone entry, flat hCaptcha', () => {
+  const bg = m.fakeBackground({ job: null });
+  let p = m.page({ bg, url: GH_EMBED, html: '<form><div class="field-wrapper"><label for="q1">Authorized to work? *</label>' +
+    '<div class="select__control"><div class="select__value-container"><div class="select__single-value">Yes</div>' +
+    '<input id="q1" class="select__input" role="combobox" aria-required="true" value="Yes"></div><div class="select__indicators">' +
+    '<button type="button" aria-label="Clear selections"></button><button type="button" aria-label="Toggle flyout"></button></div></div></div></form>' });
+  assert.deepStrictEqual(p.api.missingRequired(p.doc), [], 'an answered dropdown is not missing');
+  assert.deepStrictEqual(m.CORE.scanFields(p.doc, { includeFilled: true }).map(d => d.kind), ['combobox'], 'its buttons are not a question');
+
+  p = m.page({ bg, url: 'https://jobs.ashbyhq.com/example/x/application', html: '<form><div class="ashby-application-form-field-entry">' +
+    '<label class="ashby-application-form-question-title required" for="ph">Phone</label><input id="ph" type="tel" value="2065550123">' +
+    '<div><label><input type="radio" name="sms" value="y">Yes</label><label><input type="radio" name="sms" value="n">No</label></div></div></form>' });
+  assert.deepStrictEqual(p.api.missingRequired(p.doc), [], 'SMS consent does not inherit the phone title');
+
+  p = m.page({ bg, html: '<div><div class="h-captcha" id="hc"></div></div>' });
+  const hc = p.doc.querySelector('#hc');
+  hc.getBoundingClientRect = () => ({ top: 10, left: 0, right: 740, bottom: 10, width: 740, height: 0 });
+  assert.strictEqual(p.api.detectCaptcha(p.doc), null, 'Lever\'s invisible holder');
+  hc.getBoundingClientRect = () => ({ top: 10, left: 0, right: 303, bottom: 88, width: 303, height: 78 });
+  assert.strictEqual(p.api.detectCaptcha(p.doc), 'hCaptcha');
 });
 
 test('isSuccess: URL, selector, and text only once the form is gone', () => {
